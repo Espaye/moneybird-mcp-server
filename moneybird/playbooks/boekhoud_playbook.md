@@ -32,6 +32,31 @@ dit document geeft de verdieping.
 
 ---
 
+## 1b. Sync-index (lees dit vóór je begint)
+
+`search` werkt het best op een **lokale sync-index**. Zonder index valt `search` terug op een
+live-scan die (a) onvolledig is en (b) stukloopt zodra er veel data is — `financial_mutations`
+geeft dan HTTP 400 ("too many ... use sync API"). De sync-index lost dat op.
+
+Wanneer bouw/ververs je de index met `sync_search_index`:
+
+- **Vóór** elke achterstand-, categorisatie- of heel-jaar-taak. Doe dit als eerste stap.
+- Zodra een `search`-resultaat `"source": "live_fallback"` of een `"warnings"`-veld bevat →
+  draai `sync_search_index` en zoek opnieuw.
+- **Na** wijzigingen of bij recente data: opnieuw draaien. Het is goedkoop, want het haalt
+  alleen gewijzigde records op (versioned sync).
+
+Belangrijk om te weten:
+
+- De index is **per administratie** (elke tenant z'n eigen cachebestand) en een **momentopname**
+  (`updated_at` staat in het resultaat). Het is geen live spiegel.
+- De index respecteert de filters waarmee je 'm bouwt (standaard `period:this_year`). Voor oudere
+  jaren geef je een ruimer `*_filter` mee, anders mist `search` die records.
+- `sync_search_index` schrijft alleen een **lokaal cachebestand** — het wijzigt niets in
+  Moneybird. Je mag het dus altijd veilig draaien, ook tijdens een "alleen-lezen" taak.
+
+---
+
 ## 2. De standaard-werkwijze voor elke schrijfactie
 
 1. **Lezen** — haal de relevante documenten/regels op (`list_*`, `search`, `fetch`,

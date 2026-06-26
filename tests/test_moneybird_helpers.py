@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -365,6 +367,97 @@ class GuidanceTests(unittest.TestCase):
             {"verwerk_achterstand", "categoriseer_heel_jaar", "leg_cijfers_uit"},
         )
         self.assertIn(guidance.PLAYBOOK_URI, resource_uris)
+
+
+class CredentialsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from moneybird import credentials as cr
+        import fastmcp.server.dependencies as dep
+
+        self.cr = cr
+        self.dep = dep
+        self._orig_headers = dep.get_http_headers
+        # default: behave as if there is no active HTTP request
+        dep.get_http_headers = lambda include_all=False, include=None: {}
+        self._orig_env = {
+            key: os.environ.get(key)
+            for key in ("MONEYBIRD_ACCESS_TOKEN", "MONEYBIRD_ADMINISTRATION_ID")
+        }
+
+    def tearDown(self) -> None:
+        self.dep.get_http_headers = self._orig_headers
+        for key, value in self._orig_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_request_headers_take_precedence_over_env(self) -> None:
+        self.dep.get_http_headers = lambda include_all=False, include=None: {
+            "X-Moneybird-Token": "tenant-token",
+            "X-Moneybird-Administration-Id": "42",
+        }
+        os.environ["MONEYBIRD_ACCESS_TOKEN"] = "env-token"
+        creds = self.cr.resolve_credentials()
+        self.assertEqual(creds.source, "request")
+        self.assertEqual(creds.token, "tenant-token")
+        self.assertEqual(creds.administration_id, "42")
+
+    def test_environment_is_the_fallback(self) -> None:
+        os.environ["MONEYBIRD_ACCESS_TOKEN"] = "env-token"
+        os.environ["MONEYBIRD_ADMINISTRATION_ID"] = "7"
+        creds = self.cr.resolve_credentials()
+        self.assertEqual(creds.source, "environment")
+        self.assertEqual(creds.token, "env-token")
+        self.assertEqual(creds.administration_id, "7")
+
+    def test_missing_credentials_raise(self) -> None:
+        os.environ.pop("MONEYBIRD_ACCESS_TOKEN", None)
+        os.environ.pop("MONEYBIRD_ADMINISTRATION_ID", None)
+        with self.assertRaises(server.MoneybirdError):
+            self.cr.resolve_credentials()
+
+
+class SyncIndexPathTests(unittest.TestCase):
+    def test_path_is_per_administration_and_sanitized(self) -> None:
+        from moneybird import sync
+
+        self.assertEqual(sync.sync_index_path(None), sync.LEGACY_SYNC_INDEX_PATH)
+        per_admin = sync.sync_index_path("ab/cd")  # path-unsafe chars are sanitized
+        self.assertEqual(per_admin.name, ".moneybird_sync_index_ab_cd.json")
+        self.assertNotEqual(per_admin, sync.LEGACY_SYNC_INDEX_PATH)
+
+    def test_round_trip_and_legacy_migration(self) -> None:
+        from moneybird import sync
+
+        orig_base = sync.SYNC_INDEX_BASENAME
+        orig_legacy = sync.LEGACY_SYNC_INDEX_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                sync.SYNC_INDEX_BASENAME = str(Path(tmp) / ".idx")
+                sync.LEGACY_SYNC_INDEX_PATH = Path(tmp) / ".idx.json"
+                admin = "555"
+
+                # round trip to the per-admin file
+                sync.save_sync_index({"administration_id": admin}, admin)
+                self.assertTrue(sync.sync_index_path(admin).exists())
+                self.assertEqual(sync.load_sync_index(admin)["administration_id"], admin)
+
+                # migration: a legacy file for the same admin is read when no per-admin file
+                other = "777"
+                sync.LEGACY_SYNC_INDEX_PATH.write_text(
+                    '{"administration_id": "777"}', encoding="utf-8"
+                )
+                self.assertFalse(sync.sync_index_path(other).exists())
+                self.assertEqual(sync.load_sync_index(other)["administration_id"], other)
+
+                # saving for that admin writes the per-admin file and drops the legacy one
+                sync.save_sync_index({"administration_id": other}, other)
+                self.assertTrue(sync.sync_index_path(other).exists())
+                self.assertFalse(sync.LEGACY_SYNC_INDEX_PATH.exists())
+            finally:
+                sync.SYNC_INDEX_BASENAME = orig_base
+                sync.LEGACY_SYNC_INDEX_PATH = orig_legacy
 
 
 if __name__ == "__main__":

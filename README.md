@@ -87,6 +87,31 @@ MCP_AUTH_TOKEN=
 - **`MCP_AUTH_TOKEN`** is an optional shared secret. When set, every request to the SSE endpoint must present it as either `Authorization: Bearer <token>` or `X-MCP-Token: <token>`; anything else gets `401 Unauthorized`. When unset, the endpoint is unauthenticated (acceptable only on loopback).
 - **Safety guard:** the server *refuses to start* if `MCP_HOST` is non-loopback while `MCP_AUTH_TOKEN` is unset — so you can't accidentally expose unauthenticated bookkeeping data to the network.
 
+### Multi-tenant: serving more than one administration
+
+The server resolves Moneybird credentials **per request**, so one running instance can serve
+several users/administrations:
+
+1. **Per-request headers (multi-tenant):** a caller sends its own token on each request:
+   - `X-Moneybird-Token: <that user's Moneybird token>`
+   - `X-Moneybird-Administration-Id: <that user's administration id>` (optional; omit if the
+     token sees only one administration)
+2. **Environment (single-user / local):** if no token header is present, the server falls back
+   to `MONEYBIRD_ACCESS_TOKEN` / `MONEYBIRD_ADMINISTRATION_ID`. Existing single-user setups keep
+   working unchanged.
+
+Notes and limits:
+
+- **The Moneybird token is the tenant boundary.** Send it only over TLS (the cloudflared tunnel
+  provides it). `MCP_AUTH_TOKEN`, if set, is a coarse gate in front of the whole server; the
+  per-request Moneybird token is what scopes data to a tenant. The token is never logged.
+- **The sync cache is per administration** (`.moneybird_sync_index_<administration_id>.json`), so
+  tenants never overwrite each other's cache. A pre-existing single-file cache is migrated
+  automatically on first use.
+- **Not yet included:** a full OAuth flow and a server-side per-user token store. This header
+  model fits a small, trusted group; a public multi-user product would add OAuth + token storage
+  on top. The audit log is currently a single shared file (append-only, fingerprinted).
+
 ## 3. Install and run
 
 ```powershell
@@ -109,6 +134,7 @@ is just the entrypoint you run.
 moneybird_mcp_server.py   # entrypoint: env-driven host/port/auth, runs the SSE app
 moneybird/
   config.py               # constants, MoneybirdError, .env loading
+  credentials.py          # per-request tenant credentials (headers) + env fallback
   client.py               # Moneybird REST client (HTTP, retry/backoff)
   formatting.py           # pure helpers: titles, money, search-record shaping
   safety.py               # write guards: approval tokens (TTL) + audit log
@@ -121,8 +147,8 @@ moneybird/
   auth.py                 # optional shared-secret SSE auth middleware
 ```
 
-Dependencies flow one way: `config → client → formatting → safety → sync →
-invoicing → tools`. Nothing below `tools` imports from `tools`. `guidance.py`
+Dependencies flow one way: `config → credentials → client → formatting → safety →
+sync → invoicing → tools`. Nothing below `tools` imports from `tools`. `guidance.py`
 imports nothing from the package and is registered imperatively at the end of
 `tools.py`, so it cannot create an import cycle.
 

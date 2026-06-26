@@ -87,6 +87,16 @@ HOW TO WORK:
 - For named tasks, the prompts (verwerk_achterstand, categoriseer_heel_jaar, leg_cijfers_uit)
   give step-by-step scenarios. Read the resource moneybird://playbook/bookkeeping at the
   start of a bookkeeping task for btw rules, categorization, and the consistency checklist.
+
+SYNC INDEX (read this):
+- search uses a local sync index when present and falls back to a live scan otherwise.
+  The live scan is partial and breaks on large data (financial_mutations returns HTTP 400
+  once there are many). Before any backlog/categorize/whole-year task, and whenever a search
+  result has "source": "live_fallback" or a "warnings" field, run sync_search_index once,
+  then search again.
+- The index is per administration and a point-in-time snapshot. Refresh it (run
+  sync_search_index again) after you make changes or when working with recent data; it is
+  cheap because it only fetches changed records.
 """
 
 mcp = FastMCP(name="Moneybird MCP", instructions=SERVER_INSTRUCTIONS)
@@ -206,7 +216,7 @@ def search(query: str, limit: int = 8) -> dict[str, Any]:
     """Use this when you want ChatGPT to search Moneybird records in a connector-friendly way."""
     client = get_client()
     results: list[dict[str, Any]] = []
-    index = load_sync_index()
+    index = load_sync_index(client.administration_id)
     indexed_buckets = (
         "contacts",
         "sales_invoices",

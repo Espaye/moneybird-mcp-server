@@ -1,5 +1,7 @@
 .env
-.moneybird_sync_index.json
+# Per-administration sync caches (financial data): .moneybird_sync_index.json and
+# .moneybird_sync_index_<administration_id>.json
+.moneybird_sync_index*.json
 .moneybird_audit_log.jsonl
 __pycache__/
 *.pyc

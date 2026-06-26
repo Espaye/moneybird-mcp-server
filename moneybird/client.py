@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import time
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,6 +17,7 @@ from .config import (
     REPORT_ENDPOINTS,
     RETRYABLE_HTTP_STATUS_CODES,
 )
+from .credentials import resolve_credentials
 from .formatting import (
     build_filter_string,
     document_kind_config,
@@ -596,8 +596,11 @@ class MoneybirdClient:
 
 
 def get_client(*, require_administration: bool = True) -> MoneybirdClient:
+    # Credentials are resolved per request: an X-Moneybird-Token header (multi-tenant)
+    # takes precedence, falling back to the environment for single-user / local use.
+    credentials = resolve_credentials()
     return MoneybirdClient(
-        token=os.environ.get("MONEYBIRD_ACCESS_TOKEN", "").strip(),
-        administration_id=os.environ.get("MONEYBIRD_ADMINISTRATION_ID", "").strip() or None,
+        token=credentials.token,
+        administration_id=credentials.administration_id,
         require_administration=require_administration,
     )

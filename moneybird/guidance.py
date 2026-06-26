@@ -57,15 +57,17 @@ Help me mijn achterstallige boekhouding wegwerken voor periode "{period}" \
 {GUARDRAILS}
 
 Werkwijze:
-1. Inventariseer de documenten met de list_*-tools (en moneybird_request voor bronnen zonder
+1. Bouw/ververs eerst de sync-index met sync_search_index, zodat search compleet en snel is
+   (zonder index valt search terug op een onvolledige live-scan die op grote data stukloopt).
+2. Inventariseer de documenten met de list_*-tools (en moneybird_request voor bronnen zonder
    eigen tool) over deze periode; zoek ongecategoriseerde of inconsistente regels.
-2. Groepeer per leverancier/soort en stel per groep een categorisering voor: grootboek
+3. Groepeer per leverancier/soort en stel per groep een categorisering voor: grootboek
    (list_ledger_accounts geeft geldige id's), btw-behandeling en een uniforme omschrijving —
    telkens met korte onderbouwing.
-3. Toon het voorstel als tabel (van → naar, effect op totaal = ongewijzigd).
-4. Voer na mijn akkoord batchgewijs door via prepare_reclassify_document_lines →
+4. Toon het voorstel als tabel (van → naar, effect op totaal = ongewijzigd).
+5. Voer na mijn akkoord batchgewijs door via prepare_reclassify_document_lines →
    reclassify_document_lines_from_approval.
-5. Verifieer de totalen en geef een eerlijke samenvatting: wat is verwerkt, wat is
+6. Verifieer de totalen en geef een eerlijke samenvatting: wat is verwerkt, wat is
    overgeslagen en waarom."""
 
 
@@ -78,7 +80,8 @@ Categoriseer mijn boekhouding voor {target}, kwartaal voor kwartaal en onderling
 {GUARDRAILS}
 
 Werkwijze:
-1. Bouw zo nodig eerst de zoekindex met sync_search_index.
+1. Bouw eerst de zoekindex met sync_search_index. Voor een ouder jaar geef je een ruimer
+   filter mee (bijv. period:20250101..20251231) zodat search dat jaar ook dekt.
 2. Behandel het jaar per kwartaal om overzicht te houden.
 3. Houd een lopende lijst van gehanteerde mappings bij (zelfde soort uitgave → zelfde
    grootboek, btw en omschrijvingsstijl) zodat het hele jaar uniform is. Volg de

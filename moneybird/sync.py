@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,17 @@ from .formatting import (
     sales_invoice_search_record,
 )
 
-SYNC_INDEX_PATH = Path(".moneybird_sync_index.json")
+# The cache is per administration so multiple tenants on one server never overwrite
+# each other. The legacy single-file path is migrated transparently on first use.
+SYNC_INDEX_BASENAME = ".moneybird_sync_index"
+LEGACY_SYNC_INDEX_PATH = Path(f"{SYNC_INDEX_BASENAME}.json")
+
+
+def sync_index_path(administration_id: str | None) -> Path:
+    if not administration_id:
+        return LEGACY_SYNC_INDEX_PATH
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(administration_id))
+    return Path(f"{SYNC_INDEX_BASENAME}_{safe}.json")
 
 
 
@@ -59,21 +70,44 @@ def document_sync_record(
 
 
 
-def load_sync_index() -> dict[str, Any]:
-    if not SYNC_INDEX_PATH.exists():
-        return ensure_sync_index_shape({})
+def load_sync_index(administration_id: str | None = None) -> dict[str, Any]:
+    path = sync_index_path(administration_id)
+    if path.exists():
+        return ensure_sync_index_shape(json.loads(path.read_text(encoding="utf-8")))
 
-    return ensure_sync_index_shape(json.loads(SYNC_INDEX_PATH.read_text(encoding="utf-8")))
+    # Migrate transparently: if a legacy single-file cache exists and belongs to this
+    # administration, use it until the next sync rewrites it at the per-admin path.
+    if administration_id and LEGACY_SYNC_INDEX_PATH.exists():
+        legacy = ensure_sync_index_shape(
+            json.loads(LEGACY_SYNC_INDEX_PATH.read_text(encoding="utf-8"))
+        )
+        if str(legacy.get("administration_id")) == str(administration_id):
+            return legacy
+
+    return ensure_sync_index_shape({})
 
 
 
 
-def save_sync_index(index: dict[str, Any]) -> None:
+def save_sync_index(index: dict[str, Any], administration_id: str | None = None) -> None:
     index = ensure_sync_index_shape(index)
-    SYNC_INDEX_PATH.write_text(
+    administration_id = administration_id or index.get("administration_id")
+    path = sync_index_path(administration_id)
+    path.write_text(
         json.dumps(index, indent=2, ensure_ascii=True, sort_keys=True),
         encoding="utf-8",
     )
+
+    # One-time cleanup: once this administration has a per-admin file, drop the legacy
+    # single-file cache if it belonged to the same administration, so search never reads
+    # a stale legacy snapshot. Only removes the file we just migrated from.
+    if administration_id and path != LEGACY_SYNC_INDEX_PATH and LEGACY_SYNC_INDEX_PATH.exists():
+        try:
+            legacy = json.loads(LEGACY_SYNC_INDEX_PATH.read_text(encoding="utf-8"))
+            if str(legacy.get("administration_id")) == str(administration_id):
+                LEGACY_SYNC_INDEX_PATH.unlink()
+        except (OSError, ValueError):
+            pass
 
 
 
@@ -226,7 +260,7 @@ def sync_search_index_data(
     financial_mutation_filter: str = "period:this_year",
     force_full: bool = False,
 ) -> dict[str, Any]:
-    index = load_sync_index()
+    index = load_sync_index(client.administration_id)
     if force_full or index.get("administration_id") != client.administration_id:
         index = ensure_sync_index_shape({"administration_id": client.administration_id})
 
@@ -263,7 +297,7 @@ def sync_search_index_data(
     index["updated_at"] = iso_now()
     index["document_filter"] = document_filter
     index["financial_mutation_filter"] = financial_mutation_filter
-    save_sync_index(index)
+    save_sync_index(index, client.administration_id)
 
     return {
         "updated_at": index["updated_at"],
@@ -276,5 +310,5 @@ def sync_search_index_data(
         "invoice_filter": invoice_filter,
         "document_filter": document_filter,
         "financial_mutation_filter": financial_mutation_filter,
-        "path": str(SYNC_INDEX_PATH.resolve()),
+        "path": str(sync_index_path(client.administration_id).resolve()),
     }
