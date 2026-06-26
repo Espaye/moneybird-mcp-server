@@ -1,0 +1,1 @@
+"""Moneybird MCP server package."""

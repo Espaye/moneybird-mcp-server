@@ -1,0 +1,8 @@
+.env
+.moneybird_sync_index.json
+.moneybird_audit_log.jsonl
+__pycache__/
+*.pyc
+
+# Generated bookkeeping data dumps (financial data, not source code)
+outputs/
