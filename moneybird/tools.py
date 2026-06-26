@@ -243,30 +243,39 @@ def search(query: str, limit: int = 8) -> dict[str, Any]:
                 "financial_mutation_filter": index.get("financial_mutation_filter"),
             }
 
-    contacts = client.list_contacts(limit=100, page=1)
-    invoices = client.list_sales_invoices(limit=100, page=1, state="all")
-    purchase_invoices = client.list_documents(
-        "purchase_invoice",
-        limit=100,
-        page=1,
-        period="this_year",
+    # Live fallback: scan each source independently so one failing endpoint cannot
+    # break the whole search. Notably financial_mutations returns HTTP 400
+    # ("too many ... use sync API") once an administration has many bank mutations;
+    # in that case we skip it and tell the caller to build the sync index.
+    scan_warnings: list[str] = []
+
+    def _safe_scan(label: str, fetch) -> list[dict[str, Any]]:
+        try:
+            return fetch()
+        except MoneybirdError as exc:
+            scan_warnings.append(f"{label} skipped: {exc}")
+            return []
+
+    contacts = _safe_scan("contacts", lambda: client.list_contacts(limit=100, page=1))
+    invoices = _safe_scan(
+        "sales_invoices",
+        lambda: client.list_sales_invoices(limit=100, page=1, state="all"),
     )
-    receipts = client.list_documents(
-        "receipt",
-        limit=100,
-        page=1,
-        period="this_year",
+    purchase_invoices = _safe_scan(
+        "purchase_invoices",
+        lambda: client.list_documents("purchase_invoice", limit=100, page=1, period="this_year"),
     )
-    journal_documents = client.list_documents(
-        "general_journal_document",
-        limit=100,
-        page=1,
-        period="this_year",
+    receipts = _safe_scan(
+        "receipts",
+        lambda: client.list_documents("receipt", limit=100, page=1, period="this_year"),
     )
-    financial_mutations = client.list_financial_mutations(
-        limit=100,
-        page=1,
-        period="this_year",
+    journal_documents = _safe_scan(
+        "general_journal_documents",
+        lambda: client.list_documents("general_journal_document", limit=100, page=1, period="this_year"),
+    )
+    financial_mutations = _safe_scan(
+        "financial_mutations",
+        lambda: client.list_financial_mutations(limit=100, page=1, period="this_year"),
     )
 
     for contact in contacts:
@@ -336,10 +345,17 @@ def search(query: str, limit: int = 8) -> dict[str, Any]:
                 {"id": record["id"], "title": record["title"], "url": record["url"]}
             )
 
-    return {
+    response: dict[str, Any] = {
         "results": results[: max(1, min(limit, 20))],
         "source": "live_fallback",
     }
+    if scan_warnings:
+        response["warnings"] = scan_warnings
+        response["hint"] = (
+            "Some live sources were skipped. Run sync_search_index to build the local "
+            "cache; search then uses the sync index instead of live scans."
+        )
+    return response
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
