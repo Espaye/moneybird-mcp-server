@@ -16,12 +16,28 @@ there is no active HTTP request, so the environment path is used automatically o
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from .config import MoneybirdError
 
 TOKEN_HEADER = "x-moneybird-token"
 ADMIN_HEADER = "x-moneybird-administration-id"
+
+# The administration in scope for the current request, set by get_client() once the
+# (possibly auto-selected) administration is known. Lets lower layers such as the audit
+# log scope themselves to the active tenant without threading the id through every call.
+_active_administration_id: ContextVar[str | None] = ContextVar(
+    "active_administration_id", default=None
+)
+
+
+def set_active_administration_id(administration_id: str | None) -> None:
+    _active_administration_id.set(administration_id)
+
+
+def get_active_administration_id() -> str | None:
+    return _active_administration_id.get()
 
 
 @dataclass(frozen=True)

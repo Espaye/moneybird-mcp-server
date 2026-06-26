@@ -17,7 +17,7 @@ from .config import (
     REPORT_ENDPOINTS,
     RETRYABLE_HTTP_STATUS_CODES,
 )
-from .credentials import resolve_credentials
+from .credentials import resolve_credentials, set_active_administration_id
 from .formatting import (
     build_filter_string,
     document_kind_config,
@@ -599,8 +599,12 @@ def get_client(*, require_administration: bool = True) -> MoneybirdClient:
     # Credentials are resolved per request: an X-Moneybird-Token header (multi-tenant)
     # takes precedence, falling back to the environment for single-user / local use.
     credentials = resolve_credentials()
-    return MoneybirdClient(
+    client = MoneybirdClient(
         token=credentials.token,
         administration_id=credentials.administration_id,
         require_administration=require_administration,
     )
+    # Publish the (possibly auto-selected) administration so lower layers such as the
+    # audit log scope themselves to this tenant.
+    set_active_administration_id(client.administration_id)
+    return client

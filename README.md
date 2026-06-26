@@ -108,9 +108,13 @@ Notes and limits:
 - **The sync cache is per administration** (`.moneybird_sync_index_<administration_id>.json`), so
   tenants never overwrite each other's cache. A pre-existing single-file cache is migrated
   automatically on first use.
+- **The audit log is also per administration** (`.moneybird_audit_log_<administration_id>.jsonl`),
+  and each entry records its `administration_id`. The duplicate-suppression check reads the
+  tenant's own log (and the legacy shared log for back-compat), so tenants never share a write
+  history.
 - **Not yet included:** a full OAuth flow and a server-side per-user token store. This header
   model fits a small, trusted group; a public multi-user product would add OAuth + token storage
-  on top. The audit log is currently a single shared file (append-only, fingerprinted).
+  on top.
 
 ## 3. Install and run
 
@@ -279,6 +283,6 @@ Relevant OpenAI docs:
 - The sync cache now covers contacts, sales invoices, purchase invoices, receipts, general journal documents, and financial mutations.
 - The HTTP client retries transient `429` and `5xx` responses with backoff, which makes multi-step bookkeeping runs much less fragile.
 - The sync cache is stored locally and should not be committed.
-- Successful write actions are appended to a local JSONL audit log at `.moneybird_audit_log.jsonl`.
+- Successful write actions are appended to a per-administration JSONL audit log at `.moneybird_audit_log_<administration_id>.jsonl` (falling back to `.moneybird_audit_log.jsonl` when no administration is set).
 - Failed multi-step writes now also append a failure entry with partial progress, which helps with recovery after interrupted bookkeeping runs.
 - OpenAI’s current MCP docs explicitly warn that prompt injection and accidental writes are real risks. Do not disable approvals for destructive tools unless you truly trust the full prompt chain and the server.

@@ -291,31 +291,41 @@ class MoneybirdHelperTests(unittest.TestCase):
         self.assertIn("Example Customer", table)
 
     def test_audit_log_contains_success(self) -> None:
-        # Patch the audit-log path on the module that actually reads it.
-        original_path = safety.AUDIT_LOG_PATH
-        test_path = Path("tests") / "tmp_audit_log.jsonl"
-        try:
-            if test_path.exists():
-                test_path.unlink()
-            safety.AUDIT_LOG_PATH = test_path
-            fingerprint = "abc123"
-            safety.append_audit_log(
-                {
-                    "action": "batch_create_sales_invoices",
-                    "fingerprint": fingerprint,
-                    "result": "success",
-                }
-            )
-            self.assertTrue(
-                safety.audit_log_contains_success(
-                    "batch_create_sales_invoices",
-                    fingerprint,
+        # Redirect the per-administration audit log into a temp dir.
+        orig_base = safety.AUDIT_LOG_BASENAME
+        orig_legacy = safety.LEGACY_AUDIT_LOG_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                safety.AUDIT_LOG_BASENAME = str(Path(tmp) / ".audit")
+                safety.LEGACY_AUDIT_LOG_PATH = Path(tmp) / ".audit.jsonl"
+                admin = "admin-1"
+                fingerprint = "abc123"
+                safety.append_audit_log(
+                    {
+                        "action": "batch_create_sales_invoices",
+                        "fingerprint": fingerprint,
+                        "result": "success",
+                    },
+                    administration_id=admin,
                 )
-            )
-        finally:
-            safety.AUDIT_LOG_PATH = original_path
-            if test_path.exists():
-                test_path.unlink()
+                self.assertTrue(
+                    safety.audit_log_contains_success(
+                        "batch_create_sales_invoices",
+                        fingerprint,
+                        administration_id=admin,
+                    )
+                )
+                # A different tenant must not see this administration's audit entry.
+                self.assertFalse(
+                    safety.audit_log_contains_success(
+                        "batch_create_sales_invoices",
+                        fingerprint,
+                        administration_id="admin-2",
+                    )
+                )
+            finally:
+                safety.AUDIT_LOG_BASENAME = orig_base
+                safety.LEGACY_AUDIT_LOG_PATH = orig_legacy
 
 
 class GuidanceTests(unittest.TestCase):
