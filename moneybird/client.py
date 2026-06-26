@@ -346,6 +346,75 @@ class MoneybirdClient:
             f"/{self.administration_id}/financial_accounts/{financial_account_id}.json",
         )
 
+    def list_projects(
+        self,
+        *,
+        limit: int = 25,
+        page: int = 1,
+        state: str = "",
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {
+            "per_page": max(1, min(limit, 100)),
+            "page": max(1, page),
+        }
+        if state:
+            query["filter"] = f"state:{state}"
+        return self._request(
+            "GET",
+            f"/{self.administration_id}/projects.json",
+            query,
+        )
+
+    def list_time_entries(
+        self,
+        *,
+        limit: int = 25,
+        page: int = 1,
+        filter: str = "",
+        period: str = "",
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {
+            "per_page": max(1, min(limit, 100)),
+            "page": max(1, page),
+        }
+        filter_string = build_filter_string(filter=filter, period=period)
+        if filter_string:
+            query["filter"] = filter_string
+        return self._request(
+            "GET",
+            f"/{self.administration_id}/time_entries.json",
+            query,
+        )
+
+    def raw_get(self, path: str, query: dict[str, Any] | None = None) -> Any:
+        """Perform a read-only GET against an arbitrary Moneybird endpoint.
+
+        ``path`` is treated as relative to the configured administration
+        (e.g. ``"estimates"`` or ``"time_entries/123"``). Paths targeting
+        ``administrations`` are served from the API root. A ``?query`` suffix in
+        ``path`` is merged into the ``query`` mapping. Only GET is performed, so
+        this can never mutate data.
+        """
+        raw = str(path).strip()
+        if "?" in raw:
+            raw, _, query_string = raw.partition("?")
+            merged = dict(urllib.parse.parse_qsl(query_string))
+            if query:
+                merged.update(query)
+            query = merged
+        raw = raw.strip("/")
+        if not raw:
+            raise MoneybirdError("raw_get requires a non-empty path.")
+        if raw == "administrations" or raw.startswith("administrations/"):
+            endpoint = f"/{raw}"
+        elif self.administration_id and raw.startswith(f"{self.administration_id}/"):
+            endpoint = f"/{raw}"
+        else:
+            endpoint = f"/{self.administration_id}/{raw}"
+        if not endpoint.endswith(".json"):
+            endpoint = f"{endpoint}.json"
+        return self._request("GET", endpoint, query=query)
+
     def list_contact_versions(self) -> list[dict[str, Any]]:
         return self._request(
             "GET",

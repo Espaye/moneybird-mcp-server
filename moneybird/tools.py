@@ -68,12 +68,25 @@ from .invoicing import (
 )
 
 SERVER_INSTRUCTIONS = """
-This Moneybird MCP server supports Moneybird read and write actions for ChatGPT.
-Use search to find contacts, invoices, purchase documents, journals, and bank mutations.
-Use fetch to retrieve full records, list_* tools for compact overviews,
-and the report tools to inspect profit and loss, balance sheet, or general ledger output.
-For writes, always call a prepare_* tool first, show the summary to the user,
-and only call the matching *_from_approval tool after the user explicitly confirms.
+This Moneybird MCP server helps a user process, categorize, and understand their
+bookkeeping. The tools are the hands; follow these rules for the craft.
+
+HARD RULES (never break):
+1. Never write without explicit confirmation. Every change goes: prepare_* tool ->
+   show the preview -> wait for a clear "yes" -> only then the matching *_from_approval tool.
+2. Never invent data (invoice numbers, references, amounts, dates, counterparties). If it
+   is missing, ask or leave it blank.
+3. After any change, verify the document total is unchanged (to the cent) and say so.
+4. When unsure, propose with reasoning and ask for approval; never guess silently.
+5. You are not an accountant or tax advisor. Defer fiscal judgment calls to the bookkeeper.
+
+HOW TO WORK:
+- Use search/fetch and the list_* tools to read; the report tools for profit and loss,
+  balance sheet, and general ledger. For read-only endpoints without a dedicated tool
+  (estimates, subscriptions, projects, time entries, etc.), use moneybird_request (GET only).
+- For named tasks, the prompts (verwerk_achterstand, categoriseer_heel_jaar, leg_cijfers_uit)
+  give step-by-step scenarios. Read the resource moneybird://playbook/bookkeeping at the
+  start of a bookkeeping task for btw rules, categorization, and the consistency checklist.
 """
 
 mcp = FastMCP(name="Moneybird MCP", instructions=SERVER_INSTRUCTIONS)
@@ -528,6 +541,89 @@ def list_financial_accounts(limit: int = 25, page: int = 1) -> dict[str, Any]:
         ],
         "page": page,
         "count": len(financial_accounts),
+    }
+
+
+@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
+def list_projects(limit: int = 25, page: int = 1, state: str = "") -> dict[str, Any]:
+    """Use this to list Moneybird projects. Optional state filter: active, archived, or all."""
+    client = get_client()
+    projects = client.list_projects(limit=limit, page=page, state=state)
+    return {
+        "projects": [
+            {
+                "id": str(item.get("id")),
+                "name": item.get("name"),
+                "state": item.get("state"),
+                "budget": item.get("budget"),
+            }
+            for item in projects
+        ],
+        "page": page,
+        "count": len(projects),
+    }
+
+
+@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
+def list_time_entries(
+    limit: int = 25,
+    page: int = 1,
+    filter: str = "",
+    period: str = "",
+) -> dict[str, Any]:
+    """Use this to list Moneybird time entries (logged hours).
+
+    Optional `filter` accepts Moneybird query syntax (e.g. 'contact_id:123',
+    'project_id:456', 'state:open', 'user_id:789'); combine with commas.
+    Optional `period` accepts e.g. '202506' or '20250101..20250331'.
+    """
+    client = get_client()
+    entries = client.list_time_entries(limit=limit, page=page, filter=filter, period=period)
+
+    def _party_name(obj: Any) -> str | None:
+        if not isinstance(obj, dict):
+            return None
+        full = " ".join(p for p in (obj.get("firstname"), obj.get("lastname")) if p)
+        return obj.get("name") or (full or None) or obj.get("company_name")
+
+    return {
+        "time_entries": [
+            {
+                "id": str(item.get("id")),
+                "started_at": item.get("started_at"),
+                "ended_at": item.get("ended_at"),
+                "description": item.get("description"),
+                "billable": item.get("billable"),
+                "paused_duration": item.get("paused_duration"),
+                "contact": _party_name(item.get("contact")),
+                "project": _party_name(item.get("project")),
+                "user_id": str(item.get("user_id")) if item.get("user_id") is not None else None,
+            }
+            for item in entries
+        ],
+        "page": page,
+        "count": len(entries),
+    }
+
+
+@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
+def moneybird_request(path: str, query: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Read-only escape hatch for any Moneybird endpoint this server does not wrap explicitly.
+
+    Performs a single GET within the configured administration. `path` is relative to the
+    administration, e.g. 'estimates', 'subscriptions', 'time_entries/123',
+    'documents/purchase_invoices', or 'projects'. Use 'administrations' to hit the API root.
+    `query` is an optional dict of query-string params, e.g. {'filter': 'state:open', 'per_page': 50}.
+
+    This can ONLY read. To change anything, use the matching prepare_* / *_from_approval tools.
+    """
+    cleaned = str(path).strip().lstrip("/")
+    need_admin = not (cleaned == "administrations" or cleaned.startswith("administrations/"))
+    client = get_client(require_administration=need_admin)
+    data = client.raw_get(path, query=query)
+    return {
+        "path": str(path),
+        "result": data,
     }
 
 
@@ -1859,3 +1955,11 @@ def archive_contact_from_approval(approval_id: str) -> dict[str, Any]:
             "url": api_url("contacts", record_id, client.administration_id),
         },
     }
+
+
+# Register the guidance layer (playbook resource + scenario prompts) on this server.
+# Imported last so `mcp` and all tools are already defined; guidance.py does not import
+# this module, so there is no circular import.
+from .guidance import register_guidance
+
+register_guidance(mcp)

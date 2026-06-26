@@ -1,0 +1,142 @@
+"""User-facing guidance for the model: a reference resource and scenario prompts.
+
+This is the "skill" layer. The MCP tools are the hands; this module is the craft.
+It exposes:
+
+* a read-only **resource** (``moneybird://playbook/bookkeeping``) holding the deep
+  bookkeeping playbook, loaded on demand; and
+* a small set of **prompts** (the named scenarios a user can invoke), each of which
+  carries the hard guard-rails inline and points at the playbook for depth.
+
+Registration is imperative via :func:`register_guidance` so this module does not need
+to import the ``mcp`` instance (avoiding a circular import with ``tools``).
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+PLAYBOOK_PATH = Path(__file__).with_name("playbooks") / "boekhoud_playbook.md"
+PLAYBOOK_URI = "moneybird://playbook/bookkeeping"
+
+# The non-negotiable rails, repeated inline in every prompt so they hold even when a
+# client does not auto-attach resources.
+GUARDRAILS = """\
+Werk volgens deze vaste regels:
+1. Schrijf NOOIT zonder expliciete bevestiging: gebruik een prepare_*-tool, toon de
+   preview, wacht op een duidelijk "ja", en pas dan de bijbehorende *_from_approval-tool toe.
+2. Verzin NOOIT gegevens (factuurnummers, referenties, bedragen, data, tegenpartijen).
+   Ontbreekt iets, vraag het of laat het leeg.
+3. Verifieer na elke wijziging dat het documenttotaal ongewijzigd is (tot op de cent) en
+   meld dat expliciet.
+4. Bij twijfel: stel voor met onderbouwing en vraag akkoord; gok nooit stilzwijgend.
+5. Je bent geen registeraccountant of fiscalist. Verwijs fiscale keuzes naar de boekhouder.
+Lees voor de diepere werkwijze, btw-regels en categorisatie de resource %s.""" % PLAYBOOK_URI
+
+
+def load_playbook() -> str:
+    """Return the bookkeeping playbook markdown (read fresh so edits need no restart)."""
+    try:
+        return PLAYBOOK_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return (
+            "# Boekhoud-playbook ontbreekt\n\n"
+            f"Verwacht bestand niet gevonden: {PLAYBOOK_PATH}.\n"
+            "Val terug op de gouden regels in de server-instructie."
+        )
+
+
+def prompt_verwerk_achterstand(
+    period: str = "this_year",
+    document_kind: str = "purchase_invoice",
+) -> str:
+    """Werk een achterstand aan in- en uitgaande documenten weg, gecategoriseerd en consistent."""
+    return f"""\
+Help me mijn achterstallige boekhouding wegwerken voor periode "{period}" \
+(documenttype: {document_kind}).
+
+{GUARDRAILS}
+
+Werkwijze:
+1. Inventariseer de documenten met de list_*-tools (en moneybird_request voor bronnen zonder
+   eigen tool) over deze periode; zoek ongecategoriseerde of inconsistente regels.
+2. Groepeer per leverancier/soort en stel per groep een categorisering voor: grootboek
+   (list_ledger_accounts geeft geldige id's), btw-behandeling en een uniforme omschrijving —
+   telkens met korte onderbouwing.
+3. Toon het voorstel als tabel (van → naar, effect op totaal = ongewijzigd).
+4. Voer na mijn akkoord batchgewijs door via prepare_reclassify_document_lines →
+   reclassify_document_lines_from_approval.
+5. Verifieer de totalen en geef een eerlijke samenvatting: wat is verwerkt, wat is
+   overgeslagen en waarom."""
+
+
+def prompt_categoriseer_heel_jaar(year: str = "") -> str:
+    """Categoriseer een volledig boekjaar, kwartaal voor kwartaal en onderling consistent."""
+    target = year.strip() or "het lopende boekjaar"
+    return f"""\
+Categoriseer mijn boekhouding voor {target}, kwartaal voor kwartaal en onderling consistent.
+
+{GUARDRAILS}
+
+Werkwijze:
+1. Bouw zo nodig eerst de zoekindex met sync_search_index.
+2. Behandel het jaar per kwartaal om overzicht te houden.
+3. Houd een lopende lijst van gehanteerde mappings bij (zelfde soort uitgave → zelfde
+   grootboek, btw en omschrijvingsstijl) zodat het hele jaar uniform is. Volg de
+   consistentie-checklist uit het playbook (grootboek, btw, incl/excl, omschrijving,
+   aantal-notatie, periode, referentie).
+4. Stel per kwartaal de wijzigingen voor, wacht op akkoord en voer ze door via de
+   prepare_*/​*_from_approval-flow.
+5. Lever aan het eind een samenvatting per grootboek en een lijst van posten die nog
+   menselijke/boekhouderscontrole verdienen."""
+
+
+def prompt_leg_cijfers_uit(period: str = "this_year") -> str:
+    """Leg de winst-en-verlies en balans voor een periode uit in begrijpelijke taal."""
+    return f"""\
+Leg mijn cijfers voor periode "{period}" uit in begrijpelijke taal.
+
+Dit is een leesopdracht — wijzig niets.
+
+Werkwijze:
+1. Haal get_profit_loss en get_balance_sheet op (en zo nodig get_general_ledger) voor deze
+   periode.
+2. Vat samen in mensentaal: omzet, de grootste kostenposten, het resultaat en opvallende
+   verschuivingen. Noem de paar cijfers die er echt toe doen; vermijd een muur van getallen.
+3. Wijs op posten die controle verdienen (bijv. een ongewoon grote "diversen" of
+   ongecategoriseerde uitgaven) en stel concrete vervolgstappen voor.
+4. Je bent geen fiscalist: presenteer dit als inzicht, niet als belastingadvies.
+
+Zie voor context en vervolgacties (zoals categoriseren) de resource {PLAYBOOK_URI}."""
+
+
+def register_guidance(mcp) -> None:
+    """Register the playbook resource and scenario prompts on the given FastMCP instance."""
+    mcp.resource(
+        PLAYBOOK_URI,
+        name="boekhoud_playbook",
+        description=(
+            "Diep naslagwerk voor boekhoudtaken: gouden regels, btw, privé/zakelijk, "
+            "categoriseren, consistentie-checklist en scenario-recepten. Lees dit bij de "
+            "start van een boekhoudtaak."
+        ),
+        mime_type="text/markdown",
+        tags={"boekhouding"},
+    )(load_playbook)
+
+    mcp.prompt(
+        name="verwerk_achterstand",
+        description="Werk achterstallige boekhouding weg: inventariseer, categoriseer en verwerk consistent (met akkoord per batch).",
+        tags={"boekhouding"},
+    )(prompt_verwerk_achterstand)
+
+    mcp.prompt(
+        name="categoriseer_heel_jaar",
+        description="Categoriseer een volledig boekjaar, kwartaal voor kwartaal en onderling consistent.",
+        tags={"boekhouding"},
+    )(prompt_categoriseer_heel_jaar)
+
+    mcp.prompt(
+        name="leg_cijfers_uit",
+        description="Lees de winst-en-verlies en balans en leg de cijfers uit in begrijpelijke taal (read-only).",
+        tags={"boekhouding"},
+    )(prompt_leg_cijfers_uit)

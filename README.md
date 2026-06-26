@@ -20,6 +20,9 @@ It exposes these tools:
 - `list_tax_rates`
 - `list_ledger_accounts`
 - `list_financial_accounts`
+- `list_projects`
+- `list_time_entries`
+- `moneybird_request`
 - `get_profit_loss`
 - `get_balance_sheet`
 - `get_general_ledger`
@@ -111,12 +114,17 @@ moneybird/
   safety.py               # write guards: approval tokens (TTL) + audit log
   sync.py                 # local search-index sync (cached on disk)
   invoicing.py            # bookkeeping logic: journals, invoices, merge/reclassify
-  tools.py                # the ~48 MCP tools exposed to ChatGPT
+  tools.py                # the ~51 MCP tools exposed to ChatGPT
+  guidance.py             # the "skill" layer: playbook resource + scenario prompts
+  playbooks/
+    boekhoud_playbook.md  # deep bookkeeping reference (loaded on demand)
   auth.py                 # optional shared-secret SSE auth middleware
 ```
 
 Dependencies flow one way: `config → client → formatting → safety → sync →
-invoicing → tools`. Nothing below `tools` imports from `tools`.
+invoicing → tools`. Nothing below `tools` imports from `tools`. `guidance.py`
+imports nothing from the package and is registered imperatively at the end of
+`tools.py`, so it cannot create an import cycle.
 
 ## 4. Connect it to ChatGPT
 
@@ -159,6 +167,9 @@ Then use the public URL ending in `/sse`.
 - `list_tax_rates()`: reads valid `tax_rate_id` values for invoice lines.
 - `list_ledger_accounts()`: reads valid `ledger_account_id` values for invoice lines.
 - `list_financial_accounts(limit=25, page=1)`: reads available bank, cash, and intermediary accounts.
+- `list_projects(limit=25, page=1, state="")`: lists projects; optional `state` is `active`, `archived`, or `all`.
+- `list_time_entries(limit=25, page=1, filter="", period="")`: lists logged hours; `filter` accepts Moneybird query syntax (e.g. `contact_id:123`, `project_id:456`, `state:open`), `period` accepts e.g. `202506` or `20250101..20250331`.
+- `moneybird_request(path, query=None)`: read-only escape hatch that performs a single GET against any Moneybird endpoint this server does not wrap explicitly (e.g. `estimates`, `subscriptions`, `time_entries/123`, `documents/purchase_invoices`). `path` is relative to the administration; use `administrations` for the API root. It can only read — use the `prepare_*` / `*_from_approval` tools to change anything.
 - `get_profit_loss(period)`: reads the Moneybird profit and loss report for the requested period.
 - `get_balance_sheet(period)`: reads the Moneybird balance sheet report for the requested period.
 - `get_general_ledger(period)`: reads the Moneybird general ledger report for the requested period.
@@ -191,6 +202,28 @@ Then use the public URL ending in `/sse`.
 - `update_contact_from_approval(approval_id)`: executes the staged contact update.
 - `prepare_archive_contact(contact_id)`: stages archiving a contact.
 - `archive_contact_from_approval(approval_id)`: executes the staged archive.
+
+## 5b. Prompts and the playbook (the "skill" layer)
+
+The tools are the hands; this layer is the craft, so someone else's AI client can process
+overdue bookkeeping, categorize a year, or read the reports without re-deriving the rules.
+It uses progressive disclosure rather than one giant always-on instruction:
+
+- **Always-on, thin** — the hard rails live in the server `instructions` (no write without
+  explicit approval, never invent data, verify totals, propose when unsure, you are not a
+  tax advisor).
+- **Scenarios (MCP prompts)** — invokable, parameterized playbooks that carry the rails
+  inline and point at the reference:
+  - `verwerk_achterstand(period, document_kind)` — work through a backlog: inventory,
+    categorize, and apply consistently, with approval per batch.
+  - `categoriseer_heel_jaar(year)` — categorize a full year, quarter by quarter and
+    internally consistent.
+  - `leg_cijfers_uit(period)` — read the profit-and-loss and balance sheet and explain the
+    numbers in plain language (read-only).
+- **Reference (MCP resource)** — `moneybird://playbook/bookkeeping` serves
+  `moneybird/playbooks/boekhoud_playbook.md` on demand: golden rules, btw, private vs.
+  business / drawings, categorization, a consistency checklist, and scenario recipes. Edit
+  the markdown to tune behavior; no restart-time codegen is involved (it is read fresh).
 
 ## 6. Approval behavior
 

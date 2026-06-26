@@ -316,5 +316,56 @@ class MoneybirdHelperTests(unittest.TestCase):
                 test_path.unlink()
 
 
+class GuidanceTests(unittest.TestCase):
+    def test_playbook_file_exists_and_has_key_sections(self) -> None:
+        from moneybird import guidance
+
+        self.assertTrue(guidance.PLAYBOOK_PATH.exists())
+        text = guidance.load_playbook()
+        self.assertGreater(len(text), 1000)
+        self.assertIn("Gouden regels", text)
+        self.assertIn("Consistentie-checklist", text)
+        self.assertIn("Scenario-recepten", text)
+
+    def test_every_prompt_carries_hard_rails_inline(self) -> None:
+        from moneybird import guidance
+
+        renderers = [
+            guidance.prompt_verwerk_achterstand(period="2025"),
+            guidance.prompt_categoriseer_heel_jaar(year="2025"),
+            guidance.prompt_leg_cijfers_uit(period="2025"),
+        ]
+        # The two writing scenarios must spell out the approval discipline and the
+        # never-invent rule; all three must point at the playbook resource.
+        for text in renderers:
+            self.assertIn(guidance.PLAYBOOK_URI, text)
+        for text in renderers[:2]:
+            self.assertIn("prepare_", text)
+            self.assertIn("_from_approval", text)
+            self.assertIn("Verzin NOOIT", text)
+
+    def test_register_guidance_registers_prompts_and_resource(self) -> None:
+        import asyncio
+
+        from fastmcp import FastMCP
+
+        from moneybird import guidance
+
+        scratch = FastMCP(name="guidance-test")
+        guidance.register_guidance(scratch)
+
+        async def _collect():
+            prompts = await scratch.list_prompts()
+            resources = await scratch.list_resources()
+            return ({p.name for p in prompts}, {str(r.uri) for r in resources})
+
+        prompt_names, resource_uris = asyncio.run(_collect())
+        self.assertEqual(
+            prompt_names,
+            {"verwerk_achterstand", "categoriseer_heel_jaar", "leg_cijfers_uit"},
+        )
+        self.assertIn(guidance.PLAYBOOK_URI, resource_uris)
+
+
 if __name__ == "__main__":
     unittest.main()
