@@ -23,6 +23,12 @@ DEFAULT_RETRY_ATTEMPTS = 4
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.5
 
 
+# Upper bound on any single retry sleep. Moneybird's Retry-After header is
+# sometimes an absolute epoch timestamp rather than delta-seconds; without a cap
+# that would make the client sleep for decades. 60s is plenty for a 429/503.
+MAX_RETRY_DELAY_SECONDS = 60.0
+
+
 RETRYABLE_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 

@@ -6,6 +6,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from .config import (
@@ -13,6 +15,7 @@ from .config import (
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
+    MAX_RETRY_DELAY_SECONDS,
     MoneybirdError,
     REPORT_ENDPOINTS,
     RETRYABLE_HTTP_STATUS_CODES,
@@ -31,14 +34,40 @@ def retry_delay_seconds(
     attempt: int,
     retry_after_header: str | None = None,
 ) -> float:
+    delay = DEFAULT_RETRY_BACKOFF_SECONDS * (2**attempt)
     if retry_after_header:
+        hint = _parse_retry_after(retry_after_header)
+        if hint is not None and hint > 0:
+            delay = hint
+    # Always cap: Retry-After is per the HTTP spec either delta-seconds or an
+    # HTTP-date, but servers sometimes send an absolute epoch timestamp, which as
+    # a raw delay would block the client for decades.
+    return min(delay, MAX_RETRY_DELAY_SECONDS)
+
+
+def _parse_retry_after(value: str) -> float | None:
+    """Interpret a Retry-After header as a number of seconds to wait, or None.
+
+    Handles delta-seconds, an HTTP-date, and the malformed-but-seen case of an
+    absolute epoch timestamp (treated as seconds-from-now). The caller caps the
+    result, so even an unexpected value can never cause a runaway sleep.
+    """
+    text = value.strip()
+    try:
+        parsed = float(text)
+    except (TypeError, ValueError):
         try:
-            parsed = float(retry_after_header)
-            if parsed > 0:
-                return parsed
+            dt = parsedate_to_datetime(text)
         except (TypeError, ValueError):
-            pass
-    return DEFAULT_RETRY_BACKOFF_SECONDS * (2**attempt)
+            return None
+        if dt is None:
+            return None
+        return (dt - datetime.now(dt.tzinfo)).total_seconds()
+    # A "delay" larger than a day is almost certainly an absolute epoch
+    # timestamp rather than delta-seconds; convert it to a relative delay.
+    if parsed > 86400:
+        return parsed - time.time()
+    return parsed
 
 
 
