@@ -374,7 +374,12 @@ class GuidanceTests(unittest.TestCase):
         prompt_names, resource_uris = asyncio.run(_collect())
         self.assertEqual(
             prompt_names,
-            {"verwerk_achterstand", "categoriseer_heel_jaar", "leg_cijfers_uit"},
+            {
+                "verwerk_achterstand",
+                "categoriseer_heel_jaar",
+                "leg_cijfers_uit",
+                "diagnose_bankmutatie",
+            },
         )
         self.assertIn(guidance.PLAYBOOK_URI, resource_uris)
 

@@ -119,11 +119,7 @@ class MoneybirdError(RuntimeError):
 
 
 
-def load_local_env() -> None:
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-
+def _apply_env_file(env_path: Path) -> None:
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -133,6 +129,29 @@ def load_local_env() -> None:
         key = key.strip()
         value = value.strip().strip('"').strip("'")
         os.environ.setdefault(key, value)
+
+
+def load_local_env() -> None:
+    """Load .env into the environment so scripts/tests work without manual export.
+
+    Looks first in the current working directory, then alongside the package
+    (the project root). This makes the loader independent of where Python is
+    invoked from: a one-off script no longer has to be run from the repo root,
+    and importing ``moneybird`` is enough to pick up credentials. Existing
+    environment variables (e.g. per-request headers, CI secrets) always win
+    because values are applied with ``setdefault``.
+    """
+    seen: set[Path] = set()
+    candidates = [
+        Path(".env"),
+        Path(__file__).resolve().parent.parent / ".env",
+    ]
+    for env_path in candidates:
+        resolved = env_path.resolve()
+        if resolved in seen or not env_path.exists():
+            continue
+        seen.add(resolved)
+        _apply_env_file(env_path)
 
 
 load_local_env()
