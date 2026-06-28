@@ -93,6 +93,40 @@ Werkwijze:
    menselijke/boekhouderscontrole verdienen."""
 
 
+def prompt_diagnose_bankmutatie(zoekterm: str = "", period: str = "") -> str:
+    """Zoek uit waarom een bankmutatie niet automatisch is gekoppeld aan een categorie of document."""
+    wie = zoekterm.strip() or "de betreffende tegenpartij/mutatie"
+    wanneer = period.strip() or "de relevante maand"
+    return f"""\
+Zoek uit waarom een bankmutatie niet automatisch is verwerkt (gekoppeld aan een categorie of
+document). Het gaat om: {wie} (periode: {wanneer}).
+
+Dit is in principe een leesopdracht — wijzig niets zonder expliciet akkoord (de guard-rails
+hieronder blijven gelden mocht de oplossing een schrijfactie vergen).
+
+{GUARDRAILS}
+
+Werkwijze (zie playbook §7-recept E voor de details):
+1. Haal de mutatie op met list_financial_mutations (filter per maand:
+   period:"JJJJMM01..JJJJMMnn"; een te ruime periode geeft HTTP 400). Lees state, payments
+   (= documentkoppeling), ledger_account_bookings (= categorieboeking), contra_account_number,
+   amount en sepa_fields.remi.
+2. Vergelijk met de historie van dezelfde tegenpartij (zelfde contra_account_number, meerdere
+   maanden) om het normale patroon te zien: gaat dit normaal naar een categorie of een factuur,
+   en wat is nu anders?
+3. Inkomend en geen match? Controleer of bedrag + IBAN + referentie kloppen, en of de
+   openstaande factuur niet op een ander contact staat dan de betalende IBAN. Uitgaand en geen
+   match? Controleer of er een openstaande inkoopfactuur is die past.
+4. Vermoed je een boekingsregel: zeg er eerlijk bij dat de API boekingsregels NIET toont. Leid
+   het gedrag af uit created_at vs processed_at (zelfde minuut = automatisch; uren/dagen later
+   na een nachtelijke import = slechts een voorstel dat handmatig is bevestigd; processed_at
+   null op een verse import = wacht nog op bevestiging).
+5. Formuleer een eerlijke conclusie: wat staat vast uit het gedrag, wat kun je niet zien (de
+   regelinstelling), en verwijs voor die instelling naar Moneybird → Instellingen → Boekhouding
+   → Boekingsregels. Stel zo nodig een concrete vervolgactie voor (handmatig koppelen,
+   IBAN/contacten gelijktrekken, ontbrekende factuur inboeken) en vraag akkoord."""
+
+
 def prompt_leg_cijfers_uit(period: str = "this_year") -> str:
     """Leg de winst-en-verlies en balans voor een periode uit in begrijpelijke taal."""
     return f"""\
@@ -143,3 +177,9 @@ def register_guidance(mcp) -> None:
         description="Lees de winst-en-verlies en balans en leg de cijfers uit in begrijpelijke taal (read-only).",
         tags={"boekhouding"},
     )(prompt_leg_cijfers_uit)
+
+    mcp.prompt(
+        name="diagnose_bankmutatie",
+        description="Zoek uit waarom een bankmutatie niet automatisch is gekoppeld aan een categorie of document (let op: boekingsregels zijn niet via de API te lezen).",
+        tags={"boekhouding"},
+    )(prompt_diagnose_bankmutatie)

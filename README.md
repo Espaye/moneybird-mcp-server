@@ -250,6 +250,9 @@ It uses progressive disclosure rather than one giant always-on instruction:
     internally consistent.
   - `leg_cijfers_uit(period)` — read the profit-and-loss and balance sheet and explain the
     numbers in plain language (read-only).
+  - `diagnose_bankmutatie(zoekterm, period)` — work out why a bank mutation was not
+    automatically linked to a category or document, inferring rule behavior from the mutation
+    fields and `created_at`/`processed_at` timing (boekingsregels themselves are not in the API).
 - **Reference (MCP resource)** — `moneybird://playbook/bookkeeping` serves
   `moneybird/playbooks/boekhoud_playbook.md` on demand: golden rules, btw, private vs.
   business / drawings, categorization, a consistency checklist, and scenario recipes. Edit
@@ -286,3 +289,5 @@ Relevant OpenAI docs:
 - Successful write actions are appended to a per-administration JSONL audit log at `.moneybird_audit_log_<administration_id>.jsonl` (falling back to `.moneybird_audit_log.jsonl` when no administration is set).
 - Failed multi-step writes now also append a failure entry with partial progress, which helps with recovery after interrupted bookkeeping runs.
 - OpenAI’s current MCP docs explicitly warn that prompt injection and accidental writes are real risks. Do not disable approvals for destructive tools unless you truly trust the full prompt chain and the server.
+- **Boekingsregels (bank/transaction rules) are not exposed by the Moneybird API**, so the server cannot read or change them. To explain why a bank mutation was not auto-processed, the `diagnose_bankmutatie` prompt and playbook recipe E infer rule behavior from the financial-mutation fields and `created_at`/`processed_at` timing, and point the user to Moneybird's own Boekingsregels settings.
+- `list_financial_mutations` returns HTTP 400 ("too many ... use sync API") for a wide period; query per month (`period:"JJJJMM01..JJJJMMnn"`) or use the sync index.

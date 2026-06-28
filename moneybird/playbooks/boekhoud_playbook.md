@@ -178,6 +178,48 @@ vergelijkbare facturen (bijv. één leverancier, één heel jaar):
 - Check bankmutaties (`list_financial_mutations`) op niet-gekoppelde posten.
 - Signaleer afwijkingen; voer niets door zonder akkoord.
 
+### E. "Waarom is deze bankmutatie niet automatisch verwerkt?"
+Een veelgestelde vraag. Een bankmutatie is "verwerkt" als hij gekoppeld is aan een **document**
+(factuur/bon) of aan een **grootboekcategorie**. Werk zo:
+
+1. **Haal de mutatie op** en lees de sleutelvelden:
+   - `state`: `processed` of `unprocessed`.
+   - `payments`: gevuld → gekoppeld aan een **document** (factuur/bon).
+   - `ledger_account_bookings`: gevuld → geboekt op een **categorie** (grootboek).
+   - leeg op beide + `unprocessed` → nog **niet verwerkt**.
+   - `contra_account_name` / `contra_account_number` (IBAN tegenpartij), `amount` (negatief =
+     uitgaand), `sepa_fields.remi` (omschrijving/mededeling).
+2. **Vergelijk met de historie van dezelfde tegenpartij** (filter op `contra_account_number`
+   over meerdere maanden). Zo zie je het normale patroon: gaat deze tegenpartij normaal naar een
+   **categorie** of naar een **factuur**? Wat is dan deze keer anders?
+3. **Inkomende betaling die niet matcht?** Auto-matching aan een verkoopfactuur lukt alleen bij
+   overeenkomst op **bedrag + IBAN-tegenrekening + referentie/factuurnummer**. Veelvoorkomende
+   oorzaak: het bedrag past bij een openstaande factuur, maar die staat op een **ander contact**
+   dan waar de betalende IBAN aan hangt (bijv. een handelsnaam vs. de persoon), of de mededeling
+   is niet gelijk aan het Moneybird-factuurnummer. Dan durft Moneybird niet automatisch te
+   koppelen. Oplossing: handmatig koppelen, of de IBAN/contacten gelijktrekken.
+4. **Uitgaande betaling die niet matcht?** Auto-koppeling aan een inkoopfactuur lukt alleen als
+   er een **openstaande** inkoopfactuur is die past. Is de bijbehorende factuur er nog niet
+   (bijv. de maandfactuur is nog niet ingeboekt) of al betaald, dan blijft de mutatie staan.
+5. **Boekingsregel vermoed? Let op de grens (zie §8): de API toont boekingsregels niet.** Je kunt
+   niet uitlezen óf er een regel is of hoe die staat ingesteld. Leid het gedrag af uit de
+   tijdstempels: vergelijk `created_at` (import) met `processed_at`.
+   - Verwerkt **in dezelfde minuut** als import → wijst op automatisch boeken (of directe
+     handmatige actie op dat moment).
+   - Verwerkt **uren/dagen ná** een nachtelijke bankimport (import rond 00:50) → de regel doet
+     hooguit een **voorstel** en iemand bevestigt het later handmatig; er boekt niets vanzelf.
+   - `processed_at` = `null` op een net (vannacht) geïmporteerde mutatie → wacht simpelweg nog
+     op handmatige bevestiging; dit is geen storing.
+6. **Conclusie eerlijk formuleren.** Zeg wat je wél kunt vaststellen (uit het gedrag) en wat je
+   **niet** kunt (de letterlijke regelinstelling). Verwijs de gebruiker voor de regelinstelling
+   naar Moneybird zelf: **Instellingen → Boekhouding → Boekingsregels** (staat de regel op
+   "automatisch verwerken" of op "voorstel doen"?).
+
+> Periode-valkuil: `list_financial_mutations` met een ruime `period` geeft HTTP 400
+> ("Too many financial mutations ... use sync API"). Vraag per **maand** op
+> (`period:"JJJJMM01..JJJJMMnn"`) of gebruik de sync-index. Een enkele maand met
+> `period:"JJJJMM"` kan ook 400 geven ("Period is invalid"); gebruik dan het datumbereik.
+
 ---
 
 ## 8. Bij twijfel / grenzen
@@ -185,6 +227,11 @@ vergelijkbare facturen (bijv. één leverancier, één heel jaar):
 - Onzeker over een fiscale keuze (aftrekbaarheid, privé/zakelijk, btw-tarief)? → **voorstellen +
   uitleggen + naar de boekhouder verwijzen**, niet zelf beslissen.
 - Endpoint niet als tool beschikbaar? → `moneybird_request` (alleen lezen).
+- **Boekingsregels (bankregels) zitten niet in de API.** Je kunt ze niet uitlezen of wijzigen —
+  endpoints als `transaction_rules`, `bank_rules`, `automatic_bookings` geven 404. Bevestig dit
+  eerlijk en leid regelgedrag af uit de mutatie-velden en tijdstempels (zie §7-recept E).
+  Voor de letterlijke instelling: verwijs naar Moneybird → Instellingen → Boekhouding →
+  Boekingsregels.
 - Iets dat groot/onomkeerbaar is (verwijderen, versturen, archiveren)? → extra expliciet
   bevestigen.
 - Altijd afsluiten met een eerlijke status: wat is gedaan, wat is overgeslagen, wat verdient nog

@@ -84,9 +84,20 @@ HOW TO WORK:
 - Use search/fetch and the list_* tools to read; the report tools for profit and loss,
   balance sheet, and general ledger. For read-only endpoints without a dedicated tool
   (estimates, subscriptions, projects, time entries, etc.), use moneybird_request (GET only).
-- For named tasks, the prompts (verwerk_achterstand, categoriseer_heel_jaar, leg_cijfers_uit)
-  give step-by-step scenarios. Read the resource moneybird://playbook/bookkeeping at the
-  start of a bookkeeping task for btw rules, categorization, and the consistency checklist.
+- For named tasks, the prompts (verwerk_achterstand, categoriseer_heel_jaar, leg_cijfers_uit,
+  diagnose_bankmutatie) give step-by-step scenarios. Read the resource
+  moneybird://playbook/bookkeeping at the start of a bookkeeping task for btw rules,
+  categorization, the consistency checklist, and the bank-mutation diagnosis recipe.
+
+KNOWN LIMITS:
+- Boekingsregels (bank/transaction rules) are NOT exposed by the Moneybird API; you cannot
+  read or change them (endpoints like transaction_rules/bank_rules return 404). When asked why
+  a bank mutation was not auto-processed, infer rule behavior from the financial_mutation
+  fields (state, payments, ledger_account_bookings) and from created_at vs processed_at timing,
+  say plainly what you cannot see, and point the user to Moneybird's Boekingsregels settings.
+  See playbook recipe E and the diagnose_bankmutatie prompt.
+- list_financial_mutations rejects a wide period with HTTP 400 ("too many ... use sync API");
+  query per month (period:"JJJJMM01..JJJJMMnn") or use the sync index.
 
 SYNC INDEX (read this):
 - search uses a local sync index when present and falls back to a live scan otherwise.
