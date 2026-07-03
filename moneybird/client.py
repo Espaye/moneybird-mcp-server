@@ -107,7 +107,12 @@ class MoneybirdClient:
         path: str,
         query: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
+        *,
+        retry_safe: bool | None = None,
     ) -> Any:
+        method = method.upper()
+        if retry_safe is None:
+            retry_safe = method in {"GET", "HEAD", "OPTIONS"}
         url = f"{self.base_url}{path}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query, doseq=True)}"
@@ -127,7 +132,11 @@ class MoneybirdClient:
                 return json.loads(payload) if payload else None
             except urllib.error.HTTPError as exc:
                 body_text = exc.read().decode("utf-8", errors="replace")
-                if attempt < DEFAULT_RETRY_ATTEMPTS and is_retryable_http_status(exc.code):
+                if (
+                    retry_safe
+                    and attempt < DEFAULT_RETRY_ATTEMPTS
+                    and is_retryable_http_status(exc.code)
+                ):
                     delay = retry_delay_seconds(
                         attempt=attempt,
                         retry_after_header=exc.headers.get("Retry-After"),
@@ -143,11 +152,17 @@ class MoneybirdClient:
                     )
                     time.sleep(delay)
                     continue
+                retry_note = (
+                    " Automatic retry was disabled because this write may already have "
+                    "been processed; reconcile the record before retrying."
+                    if not retry_safe and is_retryable_http_status(exc.code)
+                    else ""
+                )
                 raise MoneybirdError(
-                    f"Moneybird returned HTTP {exc.code} for {path}: {body_text}"
+                    f"Moneybird returned HTTP {exc.code} for {path}: {body_text}{retry_note}"
                 ) from exc
             except urllib.error.URLError as exc:
-                if attempt < DEFAULT_RETRY_ATTEMPTS:
+                if retry_safe and attempt < DEFAULT_RETRY_ATTEMPTS:
                     delay = retry_delay_seconds(attempt=attempt)
                     logger.warning(
                         "Retrying Moneybird %s %s after network error in %.1fs (attempt %s/%s): %s",
@@ -160,7 +175,14 @@ class MoneybirdClient:
                     )
                     time.sleep(delay)
                     continue
-                raise MoneybirdError(f"Could not reach Moneybird: {exc.reason}") from exc
+                retry_note = (
+                    " The write result is ambiguous; reconcile Moneybird before retrying."
+                    if not retry_safe
+                    else ""
+                )
+                raise MoneybirdError(
+                    f"Could not reach Moneybird: {exc.reason}.{retry_note}"
+                ) from exc
 
     def _auto_select_administration(self) -> str:
         administrations = self.list_administrations()
@@ -330,6 +352,7 @@ class MoneybirdClient:
             "POST",
             f"/{self.administration_id}/recurring_sales_invoices/synchronization.json",
             body={"ids": ids},
+            retry_safe=True,
         )
 
     def list_products(self, *, limit: int = 25, page: int = 1) -> list[dict[str, Any]]:
@@ -455,6 +478,7 @@ class MoneybirdClient:
             "POST",
             f"/{self.administration_id}/contacts/synchronization.json",
             body={"ids": ids},
+            retry_safe=True,
         )
 
     def list_sales_invoice_versions(self, *, filter: str = "") -> list[dict[str, Any]]:
@@ -470,6 +494,7 @@ class MoneybirdClient:
             "POST",
             f"/{self.administration_id}/sales_invoices/synchronization.json",
             body={"ids": ids},
+            retry_safe=True,
         )
 
     def list_documents(
@@ -535,6 +560,7 @@ class MoneybirdClient:
             "POST",
             f"/{self.administration_id}/{config['collection_path']}/synchronization.json",
             body={"ids": ids},
+            retry_safe=True,
         )
 
     def list_financial_mutations(
@@ -581,6 +607,7 @@ class MoneybirdClient:
             "POST",
             f"/{self.administration_id}/financial_mutations/synchronization.json",
             body={"ids": ids},
+            retry_safe=True,
         )
 
     def get_report(self, report_name: str, *, period: str) -> dict[str, Any]:

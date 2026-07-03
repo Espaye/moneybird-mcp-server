@@ -56,6 +56,14 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
 
 ## Domain gotchas learned the hard way
 
+- **Meterverbruikfacturen hebben een first-class flow.** Gebruik
+  `prepare_meter_usage_sales_invoices` met begin/eindstanden of `usage_kwh`; de tool rekent
+  verbruik na, kan lage/uitgesloten meters overslaan, hergebruikt de laatste passende
+  meterregel voor tarief/btw/grootboek en kan alles in één batch inplannen. Na akkoord:
+  `meter_usage_sales_invoices_from_approval`; de uitvoering verifieert status, datum en
+  totaal automatisch. Voor bestaande concepten gebruik je
+  `prepare_batch_schedule_sales_invoices` → `batch_schedule_sales_invoices_from_approval`.
+
 - **Suppliers invoice *us*.** A vendor like Vitens (water), KPN, etc. has **0 sales
   invoices**; its documents are **purchase invoices** (or receipts). Look under
   `list_documents("purchase_invoice", ...)` / `("receipt", ...)`, then filter by

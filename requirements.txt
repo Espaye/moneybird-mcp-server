@@ -3,3 +3,5 @@
 fastmcp>=3.4,<4
 # Used directly by the __main__ entrypoint to serve the SSE app with middleware.
 uvicorn>=0.30
+# FastMCP imports requests; keep the optional detector within requests' supported range.
+chardet>=5,<6

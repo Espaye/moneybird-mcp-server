@@ -15,6 +15,7 @@ from .client import get_client
 from .formatting import (
     api_url,
     clean_dict,
+    chunked,
     compact_document_summary,
     compact_financial_account_summary,
     compact_financial_mutation_summary,
@@ -54,6 +55,7 @@ from .invoicing import (
     apply_batch_group_merge_checks,
     build_batch_invoice_payload,
     build_invoice_delivery_audit,
+    build_meter_usage_entries,
     build_merge_snapshot_from_invoice,
     build_recent_sales_invoice_send_method_audit,
     details_attributes_payload,
@@ -85,7 +87,7 @@ HOW TO WORK:
   balance sheet, and general ledger. For read-only endpoints without a dedicated tool
   (estimates, subscriptions, projects, time entries, etc.), use moneybird_request (GET only).
 - For named tasks, the prompts (verwerk_achterstand, categoriseer_heel_jaar, leg_cijfers_uit,
-  diagnose_bankmutatie) give step-by-step scenarios. Read the resource
+  diagnose_bankmutatie, factureer_meterverbruik) give step-by-step scenarios. Read the resource
   moneybird://playbook/bookkeeping at the start of a bookkeeping task for btw rules,
   categorization, the consistency checklist, and the bank-mutation diagnosis recipe.
 
@@ -905,8 +907,8 @@ def prepare_create_ledger_account(
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def create_ledger_account_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared ledger account creation."""
-    pending = pop_approval(approval_id, "create_ledger_account")
     client = get_client()
+    pending = pop_approval(approval_id, "create_ledger_account", administration_id=client.administration_id)
     payload = pending["payload"]
     fingerprint = payload["fingerprint"]
     if audit_log_contains_success("create_ledger_account", fingerprint):
@@ -996,8 +998,8 @@ def prepare_create_general_journal_document(
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def create_general_journal_document_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared general journal creation."""
-    pending = pop_approval(approval_id, "create_general_journal_document")
     client = get_client()
+    pending = pop_approval(approval_id, "create_general_journal_document", administration_id=client.administration_id)
     payload = pending["payload"]
     fingerprint = payload["fingerprint"]
     if audit_log_contains_success("create_general_journal_document", fingerprint):
@@ -1052,8 +1054,8 @@ def prepare_reclassify_document_lines(entries: list[dict[str, Any]]) -> dict[str
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def reclassify_document_lines_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared document line reclassification."""
-    pending = pop_approval(approval_id, "reclassify_document_lines")
     client = get_client()
+    pending = pop_approval(approval_id, "reclassify_document_lines", administration_id=client.administration_id)
     payload = pending["payload"]
     fingerprint = payload["fingerprint"]
     if audit_log_contains_success("reclassify_document_lines", fingerprint):
@@ -1139,6 +1141,7 @@ def prepare_create_contact(
     country: str = "NL",
 ) -> dict[str, Any]:
     """Use this before creating a Moneybird contact. Do not execute the write until the user explicitly confirms."""
+    get_client()  # Resolve and bind the active administration to the approval.
     payload = clean_dict(
         {
             "company_name": company_name,
@@ -1166,8 +1169,8 @@ def prepare_create_contact(
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def create_contact_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared contact creation."""
-    pending = pop_approval(approval_id, "create_contact")
     client = get_client()
+    pending = pop_approval(approval_id, "create_contact", administration_id=client.administration_id)
     record = client.create_contact(pending["payload"])
     record_id = str(record.get("id"))
     append_audit_log(
@@ -1205,6 +1208,9 @@ def prepare_create_sales_invoice_draft(
     if not details:
         raise MoneybirdError("At least one invoice line is required.")
 
+    client = get_client()
+    client.get_contact(contact_id)  # Validate scope and bind the approval to this tenant.
+
     normalized_details = []
     for detail in details:
         normalized_details.append(
@@ -1241,8 +1247,8 @@ def prepare_create_sales_invoice_draft(
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def create_sales_invoice_draft_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared draft invoice creation."""
-    pending = pop_approval(approval_id, "create_sales_invoice_draft")
     client = get_client()
+    pending = pop_approval(approval_id, "create_sales_invoice_draft", administration_id=client.administration_id)
     record = client.create_sales_invoice(pending["payload"])
     record_id = str(record.get("id"))
     append_audit_log(
@@ -1270,17 +1276,14 @@ def create_sales_invoice_draft_from_approval(approval_id: str) -> dict[str, Any]
     }
 
 
-@mcp.tool(annotations=PREPARE_ANNOTATIONS)
-def prepare_batch_create_sales_invoices(
+def _prepare_batch_create_sales_invoices(
+    client: Any,
     entries: list[dict[str, Any]],
     skip_if_duplicate: bool = True,
     fail_on_duplicate: bool = False,
 ) -> dict[str, Any]:
-    """Use this before creating multiple sales invoices in one batch. It returns a preview table, duplicate warnings, and an automatic merge-compatibility check before any write happens."""
     if not entries:
         raise MoneybirdError("Provide at least one batch entry.")
-
-    client = get_client()
     batch_items = [build_batch_invoice_payload(client, entry) for entry in entries]
     apply_batch_group_merge_checks(batch_items)
     preview = summarize_batch_preview(batch_items)
@@ -1305,11 +1308,26 @@ def prepare_batch_create_sales_invoices(
     return approval
 
 
+@mcp.tool(annotations=PREPARE_ANNOTATIONS)
+def prepare_batch_create_sales_invoices(
+    entries: list[dict[str, Any]],
+    skip_if_duplicate: bool = True,
+    fail_on_duplicate: bool = False,
+) -> dict[str, Any]:
+    """Use this before creating multiple sales invoices in one batch. It returns a preview table, duplicate warnings, and an automatic merge-compatibility check before any write happens."""
+    return _prepare_batch_create_sales_invoices(
+        get_client(),
+        entries,
+        skip_if_duplicate=skip_if_duplicate,
+        fail_on_duplicate=fail_on_duplicate,
+    )
+
+
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def batch_create_sales_invoices_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared batch invoice creation."""
-    pending = pop_approval(approval_id, "batch_create_sales_invoices")
     client = get_client()
+    pending = pop_approval(approval_id, "batch_create_sales_invoices", administration_id=client.administration_id)
     payload = pending["payload"]
     fingerprint = payload["fingerprint"]
     if audit_log_contains_success("batch_create_sales_invoices", fingerprint):
@@ -1338,6 +1356,10 @@ def batch_create_sales_invoices_from_approval(approval_id: str) -> dict[str, Any
                 "invoice_id": record.get("invoice_id"),
                 "state": record.get("state"),
                 "reference": record.get("reference"),
+                "expected_total_incl_tax": item.get("expected_total_incl_tax"),
+                "expected_state": "scheduled" if item["schedule_send_on"] else "draft",
+                "expected_invoice_date": item["schedule_send_on"]
+                or item["sales_invoice"].get("invoice_date"),
             }
             if item["schedule_send_on"]:
                 record = client.send_sales_invoice(str(record["id"]), item["send_payload"])
@@ -1358,6 +1380,39 @@ def batch_create_sales_invoices_from_approval(approval_id: str) -> dict[str, Any
         )
         raise
 
+    fetched: list[dict[str, Any]] = []
+    created_ids = [row["sales_invoice_id"] for row in created]
+    for id_batch in chunked(created_ids, 100):
+        fetched.extend(client.fetch_sales_invoices_by_ids(id_batch))
+    fetched_by_id = {str(item.get("id")): item for item in fetched}
+    verification: list[dict[str, Any]] = []
+    for row in created:
+        invoice = fetched_by_id.get(row["sales_invoice_id"], {})
+        checks = {
+            "total_matches": str(invoice.get("total_price_incl_tax"))
+            == str(row.get("expected_total_incl_tax")),
+            "state_matches": str(invoice.get("state")) == str(row.get("expected_state")),
+            "invoice_date_matches": (
+                not row.get("expected_invoice_date")
+                or str(invoice.get("invoice_date")) == str(row.get("expected_invoice_date"))
+            ),
+            "not_sent_yet": invoice.get("sent_at") in (None, ""),
+        }
+        verification.append(
+            {
+                "customer_id": row.get("customer_id"),
+                "sales_invoice_id": row["sales_invoice_id"],
+                "state": invoice.get("state"),
+                "invoice_date": invoice.get("invoice_date"),
+                "sent_at": invoice.get("sent_at"),
+                "total_price_incl_tax": invoice.get("total_price_incl_tax"),
+                "expected_total_incl_tax": row.get("expected_total_incl_tax"),
+                "checks": checks,
+                "verified": all(checks.values()),
+            }
+        )
+    all_verified = all(row["verified"] for row in verification)
+
     append_audit_log(
         {
             "action": "batch_create_sales_invoices",
@@ -1365,14 +1420,17 @@ def batch_create_sales_invoices_from_approval(approval_id: str) -> dict[str, Any
             "result": "success",
             "created": created,
             "skipped": skipped,
+            "verification": verification,
         }
     )
     return {
-        "status": "completed",
+        "status": "completed" if all_verified else "completed_with_verification_errors",
         "approved_at": iso_now(),
         "summary": pending["summary"],
         "created": created,
         "skipped": skipped,
+        "verification": verification,
+        "all_verified": all_verified,
         "fingerprint": fingerprint,
     }
 
@@ -1487,8 +1545,8 @@ def prepare_batch_update_sales_invoices(
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def batch_update_sales_invoices_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared batch invoice update."""
-    pending = pop_approval(approval_id, "batch_update_sales_invoices")
     client = get_client()
+    pending = pop_approval(approval_id, "batch_update_sales_invoices", administration_id=client.administration_id)
     payload = pending["payload"]
     fingerprint = payload["fingerprint"]
     if audit_log_contains_success("batch_update_sales_invoices", fingerprint):
@@ -1603,8 +1661,8 @@ def prepare_send_sales_invoice(
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def send_sales_invoice_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared invoice send action."""
-    pending = pop_approval(approval_id, "send_sales_invoice")
     client = get_client()
+    pending = pop_approval(approval_id, "send_sales_invoice", administration_id=client.administration_id)
     payload = pending["payload"]
     record = client.send_sales_invoice(
         payload["sales_invoice_id"],
@@ -1636,6 +1694,301 @@ def send_sales_invoice_from_approval(approval_id: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
+def prepare_batch_schedule_sales_invoices(
+    entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Prepare multiple existing draft invoices for future sending in one approval.
+
+    Each entry needs ``sales_invoice_id`` and ``invoice_date``. Optional delivery_method,
+    email_address and email_message override the contact/workflow defaults.
+    """
+    if not entries:
+        raise MoneybirdError("Provide at least one invoice to schedule.")
+
+    client = get_client()
+    ids = [str(entry.get("sales_invoice_id") or "").strip() for entry in entries]
+    if any(not item_id for item_id in ids):
+        raise MoneybirdError("Each schedule entry needs sales_invoice_id.")
+    if len(set(ids)) != len(ids):
+        raise MoneybirdError("sales_invoice_id values must be unique within the batch.")
+
+    invoices: list[dict[str, Any]] = []
+    for id_batch in chunked(ids, 100):
+        invoices.extend(client.fetch_sales_invoices_by_ids(id_batch))
+    invoices_by_id = {str(invoice.get("id")): invoice for invoice in invoices}
+    if set(invoices_by_id) != set(ids):
+        missing = sorted(set(ids) - set(invoices_by_id))
+        raise MoneybirdError(f"Could not fetch sales invoice(s): {', '.join(missing)}.")
+
+    prepared_items: list[dict[str, Any]] = []
+    preview_rows: list[dict[str, Any]] = []
+    merge_checks: list[dict[str, Any]] = []
+    for entry, sales_invoice_id in zip(entries, ids):
+        invoice = invoices_by_id[sales_invoice_id]
+        invoice_date = str(entry.get("invoice_date") or "").strip()
+        if not invoice_date:
+            raise MoneybirdError(
+                f"invoice_date is required for sales invoice {sales_invoice_id}."
+            )
+        state = str(invoice.get("state") or "")
+        already_scheduled = state == "scheduled" and str(invoice.get("invoice_date")) == invoice_date
+        if state not in {"draft", "scheduled"}:
+            raise MoneybirdError(
+                f"Sales invoice {sales_invoice_id} has state {state}; only draft or scheduled invoices can be prepared."
+            )
+        if state == "scheduled" and not already_scheduled:
+            raise MoneybirdError(
+                f"Sales invoice {sales_invoice_id} is already scheduled for {invoice.get('invoice_date')}."
+            )
+
+        send_payload = clean_dict(
+            {
+                "sending_scheduled": True,
+                "invoice_date": invoice_date,
+                "delivery_method": entry.get("delivery_method", ""),
+                "email_address": entry.get("email_address", ""),
+                "email_message": entry.get("email_message", ""),
+            }
+        )
+        candidates = list_scheduled_merge_candidates(
+            client,
+            contact_id=str(invoice.get("contact_id") or (invoice.get("contact") or {}).get("id") or ""),
+            scheduled_send_on=invoice_date,
+            exclude_sales_invoice_id=sales_invoice_id,
+        )
+        merge_check = evaluate_merge_compatibility(
+            build_merge_snapshot_from_invoice(invoice, scheduled_send_on=invoice_date),
+            candidates,
+        )
+        merge_checks.append(
+            {
+                "customer_id": (invoice.get("contact") or {}).get("customer_id"),
+                "sales_invoice_id": sales_invoice_id,
+                **merge_check,
+            }
+        )
+        prepared_items.append(
+            {
+                "sales_invoice_id": sales_invoice_id,
+                "customer_id": (invoice.get("contact") or {}).get("customer_id"),
+                "before_total_price_incl_tax": invoice.get("total_price_incl_tax"),
+                "already_scheduled": already_scheduled,
+                "sales_invoice_sending": send_payload,
+            }
+        )
+        preview_rows.append(
+            {
+                "customer_id": (invoice.get("contact") or {}).get("customer_id") or sales_invoice_id,
+                "description": ", ".join(
+                    str(detail.get("description") or "") for detail in (invoice.get("details") or [])
+                ),
+                "amount_excl_tax": invoice.get("total_price_excl_tax") or "",
+                "amount_tax": "",
+                "amount_incl_tax": invoice.get("total_price_incl_tax") or "",
+                "status": "already-scheduled" if already_scheduled else "ready",
+            }
+        )
+
+    payload = {"items": prepared_items}
+    fingerprint = duplicate_fingerprint("batch_schedule_sales_invoices", payload)
+    approval = make_approval(
+        "batch_schedule_sales_invoices",
+        {**payload, "fingerprint": fingerprint},
+        f"Schedule {len(prepared_items)} sales invoice(s)",
+    )
+    approval["payload"] = {**payload, "fingerprint": fingerprint}
+    approval["preview"] = {
+        "preview_table": render_preview_table(preview_rows),
+        "item_count": len(prepared_items),
+        "merge_checks": merge_checks,
+    }
+    return approval
+
+
+@mcp.tool(annotations=WRITE_ANNOTATIONS)
+def batch_schedule_sales_invoices_from_approval(approval_id: str) -> dict[str, Any]:
+    """Schedule a prepared invoice batch and verify every resulting invoice."""
+    client = get_client()
+    pending = pop_approval(
+        approval_id,
+        "batch_schedule_sales_invoices",
+        administration_id=client.administration_id,
+    )
+    payload = pending["payload"]
+    fingerprint = payload["fingerprint"]
+    if audit_log_contains_success("batch_schedule_sales_invoices", fingerprint):
+        raise MoneybirdError(
+            "This schedule batch already completed successfully according to the local audit log."
+        )
+
+    scheduled: list[dict[str, Any]] = []
+    try:
+        for item in payload["items"]:
+            if item.get("already_scheduled"):
+                scheduled.append(
+                    {
+                        "sales_invoice_id": item["sales_invoice_id"],
+                        "customer_id": item.get("customer_id"),
+                        "action": "already_scheduled",
+                    }
+                )
+                continue
+            record = client.send_sales_invoice(
+                item["sales_invoice_id"],
+                item["sales_invoice_sending"],
+            )
+            scheduled.append(
+                {
+                    "sales_invoice_id": str(record.get("id")),
+                    "customer_id": item.get("customer_id"),
+                    "action": "scheduled",
+                }
+            )
+    except Exception as exc:
+        append_failed_audit_log(
+            "batch_schedule_sales_invoices",
+            fingerprint=fingerprint,
+            error=str(exc),
+            partial={"scheduled": scheduled},
+        )
+        raise
+
+    ids = [item["sales_invoice_id"] for item in payload["items"]]
+    fetched: list[dict[str, Any]] = []
+    for id_batch in chunked(ids, 100):
+        fetched.extend(client.fetch_sales_invoices_by_ids(id_batch))
+    fetched_by_id = {str(invoice.get("id")): invoice for invoice in fetched}
+
+    verification: list[dict[str, Any]] = []
+    for item in payload["items"]:
+        invoice = fetched_by_id.get(item["sales_invoice_id"], {})
+        expected_date = item["sales_invoice_sending"]["invoice_date"]
+        checks = {
+            "total_unchanged": str(invoice.get("total_price_incl_tax"))
+            == str(item.get("before_total_price_incl_tax")),
+            "state_scheduled": invoice.get("state") == "scheduled",
+            "invoice_date_matches": invoice.get("invoice_date") == expected_date,
+            "not_sent_yet": invoice.get("sent_at") in (None, ""),
+        }
+        verification.append(
+            {
+                "customer_id": item.get("customer_id"),
+                "sales_invoice_id": item["sales_invoice_id"],
+                "state": invoice.get("state"),
+                "invoice_date": invoice.get("invoice_date"),
+                "sent_at": invoice.get("sent_at"),
+                "total_price_incl_tax": invoice.get("total_price_incl_tax"),
+                "checks": checks,
+                "verified": all(checks.values()),
+            }
+        )
+    all_verified = all(item["verified"] for item in verification)
+    append_audit_log(
+        {
+            "action": "batch_schedule_sales_invoices",
+            "fingerprint": fingerprint,
+            "result": "success",
+            "scheduled": scheduled,
+            "verification": verification,
+        }
+    )
+    return {
+        "status": "completed" if all_verified else "completed_with_verification_errors",
+        "approved_at": iso_now(),
+        "summary": pending["summary"],
+        "scheduled": scheduled,
+        "verification": verification,
+        "all_verified": all_verified,
+        "fingerprint": fingerprint,
+    }
+
+
+@mcp.tool(annotations=PREPARE_ANNOTATIONS)
+def prepare_meter_usage_sales_invoices(
+    rows: list[dict[str, Any]],
+    period_label: str,
+    invoice_date: str,
+    schedule_send_on: str = "",
+    minimum_usage_kwh: str = "0",
+    description_prefix: str = "Elektra",
+    default_unit_price: str = "",
+    default_tax_rate_id: str = "",
+    default_ledger_account_id: str = "",
+    skip_meters: list[str] | None = None,
+) -> dict[str, Any]:
+    """Prepare a complete metered-usage invoice run from readings or supplied usage.
+
+    Each row accepts ``meter``, optional ``customer_id``, and either ``usage_kwh`` or
+    ``begin_reading`` + ``end_reading``. ``action`` may be ``skip``, ``draft``,
+    ``schedule``, ``merge`` or ``separate``. When price/tax/ledger are omitted, the
+    newest matching invoice line (for example ``Elektra B5``) supplies those defaults.
+    """
+    client = get_client()
+    prepared_usage = build_meter_usage_entries(
+        client,
+        rows=rows,
+        period_label=period_label,
+        invoice_date=invoice_date,
+        schedule_send_on=schedule_send_on,
+        minimum_usage_kwh=minimum_usage_kwh,
+        description_prefix=description_prefix,
+        default_unit_price=default_unit_price,
+        default_tax_rate_id=default_tax_rate_id,
+        default_ledger_account_id=default_ledger_account_id,
+        skip_meters=skip_meters,
+    )
+    approval = _prepare_batch_create_sales_invoices(
+        client,
+        prepared_usage["entries"],
+        skip_if_duplicate=True,
+        fail_on_duplicate=True,
+    )
+    merge_checks = {
+        str(item.get("customer_id") or ""): item
+        for item in (approval.get("preview") or {}).get("merge_checks", [])
+    }
+    intent_warnings: list[dict[str, Any]] = []
+    for decision in prepared_usage["decisions"]:
+        intent = decision.get("merge_intent")
+        check = merge_checks.get(str(decision.get("customer_id") or ""), {})
+        if intent == "merge" and check.get("status") != "compatible":
+            intent_warnings.append(
+                {
+                    "customer_id": decision.get("customer_id"),
+                    "intent": "merge",
+                    "warning": (
+                        "No currently scheduled compatible invoice was found; "
+                        "merging may only become verifiable when the recurring invoice exists."
+                    ),
+                }
+            )
+        if intent == "separate" and check.get("status") == "compatible":
+            intent_warnings.append(
+                {
+                    "customer_id": decision.get("customer_id"),
+                    "intent": "separate",
+                    "warning": "A compatible scheduled invoice exists, so Moneybird may merge them.",
+                }
+            )
+    approval["meter_usage_preview"] = {
+        "period_label": period_label,
+        "invoice_date": invoice_date,
+        "schedule_send_on": schedule_send_on,
+        "minimum_usage_kwh": minimum_usage_kwh,
+        "decisions": prepared_usage["decisions"],
+        "intent_warnings": intent_warnings,
+        "invoice_preview": approval.get("preview"),
+    }
+    return approval
+
+
+@mcp.tool(annotations=WRITE_ANNOTATIONS)
+def meter_usage_sales_invoices_from_approval(approval_id: str) -> dict[str, Any]:
+    """Execute an approved metered-usage run and return automatic verification."""
+    return batch_create_sales_invoices_from_approval(approval_id)
+
+
+@mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_pause_sales_invoice_workflow(sales_invoice_id: str) -> dict[str, Any]:
     """Use this before pausing a sales invoice workflow. This is the safe way to stop a scheduled send from going out automatically."""
     client = get_client()
@@ -1653,8 +2006,8 @@ def prepare_pause_sales_invoice_workflow(sales_invoice_id: str) -> dict[str, Any
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def pause_sales_invoice_workflow_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed pausing the invoice workflow."""
-    pending = pop_approval(approval_id, "pause_sales_invoice_workflow")
     client = get_client()
+    pending = pop_approval(approval_id, "pause_sales_invoice_workflow", administration_id=client.administration_id)
     record = client.pause_sales_invoice(pending["payload"]["sales_invoice_id"])
     record_id = str(record.get("id"))
     append_audit_log(
@@ -1698,8 +2051,8 @@ def prepare_resume_sales_invoice_workflow(sales_invoice_id: str) -> dict[str, An
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def resume_sales_invoice_workflow_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed resuming the invoice workflow."""
-    pending = pop_approval(approval_id, "resume_sales_invoice_workflow")
     client = get_client()
+    pending = pop_approval(approval_id, "resume_sales_invoice_workflow", administration_id=client.administration_id)
     record = client.resume_sales_invoice(pending["payload"]["sales_invoice_id"])
     record_id = str(record.get("id"))
     append_audit_log(
@@ -1772,8 +2125,8 @@ def prepare_set_contacts_delivery_method_email(
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def set_contacts_delivery_method_email_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed bulk-updating contact invoice delivery methods to Email."""
-    pending = pop_approval(approval_id, "set_contacts_delivery_method_email")
     client = get_client()
+    pending = pop_approval(approval_id, "set_contacts_delivery_method_email", administration_id=client.administration_id)
     payload = pending["payload"]
     fingerprint = payload["fingerprint"]
     if audit_log_contains_success("set_contacts_delivery_method_email", fingerprint):
@@ -1919,8 +2272,8 @@ def prepare_update_contact(
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def update_contact_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared contact update."""
-    pending = pop_approval(approval_id, "update_contact")
     client = get_client()
+    pending = pop_approval(approval_id, "update_contact", administration_id=client.administration_id)
     payload = pending["payload"]
     record = client.update_contact(payload["contact_id"], payload["contact"])
     record_id = str(record.get("id"))
@@ -1965,8 +2318,8 @@ def prepare_archive_contact(contact_id: str) -> dict[str, Any]:
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
 def archive_contact_from_approval(approval_id: str) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared contact archive."""
-    pending = pop_approval(approval_id, "archive_contact")
     client = get_client()
+    pending = pop_approval(approval_id, "archive_contact", administration_id=client.administration_id)
     payload = pending["payload"]
     client.archive_contact(payload["contact_id"])
     record = client.get_contact(payload["contact_id"])

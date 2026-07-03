@@ -1,7 +1,9 @@
 import os
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
 import moneybird_mcp_server as server
 from moneybird import safety
@@ -113,6 +115,24 @@ class MoneybirdHelperTests(unittest.TestCase):
         )
         self.assertEqual([item["label"] for item in mismatches], ["workflow"])
 
+    def test_compare_merge_snapshots_detects_language_difference(self) -> None:
+        base = {
+            "contact_id": "123",
+            "scheduled_send_on": "2026-04-16",
+            "workflow_id": "wf-a",
+            "document_style_id": "ds-1",
+            "identity_id": "id-1",
+            "currency": "EUR",
+            "prices_are_incl_tax": False,
+            "discount": "",
+            "extra_fields": [],
+        }
+        mismatches = server.compare_merge_snapshots(
+            {**base, "language": "nl"},
+            {**base, "language": "en"},
+        )
+        self.assertEqual([item["label"] for item in mismatches], ["language"])
+
     def test_evaluate_merge_compatibility_marks_exact_match(self) -> None:
         result = server.evaluate_merge_compatibility(
             {
@@ -205,6 +225,21 @@ class MoneybirdHelperTests(unittest.TestCase):
         )
         self.assertIn("customer", table)
         self.assertIn("Elektra B4 - 37,02 kWh", table)
+
+    def test_invoice_line_preview_respects_prices_including_tax(self) -> None:
+        from moneybird.invoicing import build_invoice_line_preview
+
+        row = build_invoice_line_preview(
+            customer_id="B4",
+            description="Incl",
+            entered_total=server.Decimal("121.00"),
+            tax_percentage=server.Decimal("21"),
+            prices_are_incl_tax=True,
+            duplicate_hits=[],
+        )
+        self.assertEqual(row["amount_excl_tax"], "100.00")
+        self.assertEqual(row["amount_tax"], "21.00")
+        self.assertEqual(row["amount_incl_tax"], "121.00")
 
     def test_contact_invoice_email_prefers_invoice_email(self) -> None:
         contact = {
@@ -346,12 +381,17 @@ class GuidanceTests(unittest.TestCase):
             guidance.prompt_verwerk_achterstand(period="2025"),
             guidance.prompt_categoriseer_heel_jaar(year="2025"),
             guidance.prompt_leg_cijfers_uit(period="2025"),
+            guidance.prompt_factureer_meterverbruik(
+                period_label="2026-K2",
+                invoice_date="2026-07-16",
+                schedule_send_on="2026-07-16",
+            ),
         ]
-        # The two writing scenarios must spell out the approval discipline and the
-        # never-invent rule; all three must point at the playbook resource.
+        # Writing scenarios must spell out the approval discipline and the
+        # never-invent rule; every scenario points at the playbook resource.
         for text in renderers:
             self.assertIn(guidance.PLAYBOOK_URI, text)
-        for text in renderers[:2]:
+        for text in [renderers[0], renderers[1], renderers[3]]:
             self.assertIn("prepare_", text)
             self.assertIn("_from_approval", text)
             self.assertIn("Verzin NOOIT", text)
@@ -379,6 +419,7 @@ class GuidanceTests(unittest.TestCase):
                 "categoriseer_heel_jaar",
                 "leg_cijfers_uit",
                 "diagnose_bankmutatie",
+                "factureer_meterverbruik",
             },
         )
         self.assertIn(guidance.PLAYBOOK_URI, resource_uris)
@@ -473,6 +514,229 @@ class SyncIndexPathTests(unittest.TestCase):
             finally:
                 sync.SYNC_INDEX_BASENAME = orig_base
                 sync.LEGACY_SYNC_INDEX_PATH = orig_legacy
+
+
+class ApprovalSafetyTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        safety.PENDING_APPROVALS.clear()
+
+    def test_approval_is_bound_to_administration(self) -> None:
+        from moneybird.credentials import set_active_administration_id
+
+        set_active_administration_id("admin-a")
+        approval = safety.make_approval("demo", {"value": 1}, "Demo")
+        with self.assertRaises(server.MoneybirdError):
+            safety.pop_approval(
+                approval["approval_id"],
+                "demo",
+                administration_id="admin-b",
+            )
+        pending = safety.pop_approval(
+            approval["approval_id"],
+            "demo",
+            administration_id="admin-a",
+        )
+        self.assertEqual(pending["administration_id"], "admin-a")
+
+
+class ClientRetrySafetyTests(unittest.TestCase):
+    def test_write_network_error_is_not_retried(self) -> None:
+        import moneybird.client as client_module
+
+        client = client_module.MoneybirdClient("token", "admin")
+        with mock.patch.object(
+            client_module.urllib.request,
+            "urlopen",
+            side_effect=urllib.error.URLError("lost response"),
+        ) as urlopen:
+            with self.assertRaises(server.MoneybirdError) as raised:
+                client._request("POST", "/admin/sales_invoices.json", body={"x": 1})
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertIn("ambiguous", str(raised.exception))
+
+
+class MeterUsageTests(unittest.TestCase):
+    class FakeClient:
+        administration_id = "admin"
+
+        def get_contact_by_customer_id(self, customer_id):
+            return {
+                "id": f"contact-{customer_id}",
+                "customer_id": customer_id,
+                "company_name": customer_id,
+            }
+
+        def get_contact(self, contact_id):
+            return {
+                "id": contact_id,
+                "customer_id": contact_id.replace("contact-", ""),
+            }
+
+        def list_sales_invoices(self, **kwargs):
+            customer_id = str(kwargs["contact_id"]).replace("contact-", "")
+            return [
+                {
+                    "id": f"invoice-{customer_id}",
+                    "invoice_id": "2026-0001",
+                    "invoice_date": "2026-04-16",
+                    "state": "paid",
+                    "contact_id": f"contact-{customer_id}",
+                    "contact": {"id": f"contact-{customer_id}", "customer_id": customer_id},
+                    "workflow_id": "workflow",
+                    "document_style_id": "style",
+                    "identity_id": "identity",
+                    "language": "nl",
+                    "currency": "EUR",
+                    "prices_are_incl_tax": False,
+                    "details": [
+                        {
+                            "description": f"Elektra {customer_id} - 10,00 kWh",
+                            "price": "0.34",
+                            "tax_rate_id": "tax-21",
+                            "ledger_account_id": "ledger-electricity",
+                        }
+                    ],
+                }
+            ]
+
+        def list_tax_rates(self):
+            return [{"id": "tax-21", "percentage": "21.0"}]
+
+    def test_meter_usage_builds_entries_and_skips_low_usage(self) -> None:
+        from moneybird.invoicing import build_meter_usage_entries
+
+        result = build_meter_usage_entries(
+            self.FakeClient(),
+            rows=[
+                {"meter": "B5", "begin_reading": "233,10", "end_reading": "362,99"},
+                {"meter": "B8", "begin_reading": "16,39", "end_reading": "17,00"},
+            ],
+            period_label="2026-K2",
+            invoice_date="2026-07-16",
+            schedule_send_on="2026-07-16",
+            minimum_usage_kwh="10",
+        )
+        self.assertEqual(len(result["entries"]), 1)
+        entry = result["entries"][0]
+        self.assertEqual(entry["reference"], "STROOM-2026-K2-B5")
+        self.assertEqual(entry["details"][0]["amount"], "129.89")
+        self.assertEqual(entry["details"][0]["price"], "0.34")
+        self.assertEqual(result["decisions"][1]["action"], "skip")
+
+    def test_meter_usage_prepare_tool_returns_single_approval_preview(self) -> None:
+        from moneybird import tools
+        from moneybird.credentials import set_active_administration_id
+
+        fake = self.FakeClient()
+
+        def get_fake_client(*args, **kwargs):
+            set_active_administration_id(fake.administration_id)
+            return fake
+
+        safety.PENDING_APPROVALS.clear()
+        with mock.patch.object(tools, "get_client", side_effect=get_fake_client):
+            prepared = tools.prepare_meter_usage_sales_invoices(
+                rows=[
+                    {
+                        "meter": "B5",
+                        "begin_reading": "233,10",
+                        "end_reading": "362,99",
+                        "action": "schedule",
+                    }
+                ],
+                period_label="2026-K2",
+                invoice_date="2026-07-16",
+                schedule_send_on="2026-07-16",
+            )
+        self.assertEqual(prepared["action"], "batch_create_sales_invoices")
+        self.assertEqual(
+            prepared["meter_usage_preview"]["decisions"][0]["source_invoice_id"],
+            "invoice-B5",
+        )
+        self.assertIn("53.43", prepared["preview"]["preview_table"])
+
+    def test_batch_preview_rejects_tax_percentage_mismatch(self) -> None:
+        from moneybird.invoicing import build_batch_invoice_payload
+
+        with self.assertRaises(server.MoneybirdError):
+            build_batch_invoice_payload(
+                self.FakeClient(),
+                {
+                    "customer_id": "B5",
+                    "invoice_date": "2026-07-16",
+                    "details": [
+                        {
+                            "description": "Elektra B5 - 129,89 kWh",
+                            "amount": "129.89",
+                            "price": "0.34",
+                            "tax_rate_id": "tax-21",
+                            "tax_percentage": "9",
+                            "ledger_account_id": "ledger-electricity",
+                        }
+                    ],
+                },
+            )
+
+
+class BatchScheduleTests(unittest.TestCase):
+    class FakeClient:
+        administration_id = "admin"
+
+        def __init__(self):
+            self.invoice = {
+                "id": "invoice-1",
+                "contact_id": "contact-1",
+                "contact": {"id": "contact-1", "customer_id": "B9"},
+                "state": "draft",
+                "invoice_date": "2026-07-16",
+                "sent_at": None,
+                "total_price_excl_tax": "40.90",
+                "total_price_incl_tax": "49.49",
+                "workflow_id": "wf",
+                "document_style_id": "style",
+                "identity_id": "identity",
+                "language": "nl",
+                "currency": "EUR",
+                "prices_are_incl_tax": False,
+                "details": [{"description": "Elektra B9 - 120,28 kWh"}],
+            }
+
+        def fetch_sales_invoices_by_ids(self, ids):
+            return [dict(self.invoice)]
+
+        def list_sales_invoices(self, **kwargs):
+            return []
+
+        def send_sales_invoice(self, sales_invoice_id, payload):
+            self.invoice["state"] = "scheduled"
+            self.invoice["invoice_date"] = payload["invoice_date"]
+            return dict(self.invoice)
+
+    def test_batch_schedule_executes_and_verifies(self) -> None:
+        from moneybird import tools
+        from moneybird.credentials import set_active_administration_id
+
+        fake = self.FakeClient()
+
+        def get_fake_client(*args, **kwargs):
+            set_active_administration_id(fake.administration_id)
+            return fake
+
+        safety.PENDING_APPROVALS.clear()
+        with (
+            mock.patch.object(tools, "get_client", side_effect=get_fake_client),
+            mock.patch.object(tools, "audit_log_contains_success", return_value=False),
+            mock.patch.object(tools, "append_audit_log"),
+            mock.patch.object(tools, "append_failed_audit_log"),
+        ):
+            prepared = tools.prepare_batch_schedule_sales_invoices(
+                [{"sales_invoice_id": "invoice-1", "invoice_date": "2026-07-16"}]
+            )
+            result = tools.batch_schedule_sales_invoices_from_approval(
+                prepared["approval_id"]
+            )
+        self.assertTrue(result["all_verified"])
+        self.assertEqual(result["verification"][0]["state"], "scheduled")
 
 
 if __name__ == "__main__":

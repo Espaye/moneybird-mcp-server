@@ -220,6 +220,21 @@ Een veelgestelde vraag. Een bankmutatie is "verwerkt" als hij gekoppeld is aan e
 > (`period:"JJJJMM01..JJJJMMnn"`) of gebruik de sync-index. Een enkele maand met
 > `period:"JJJJMM"` kan ook 400 geven ("Period is invalid"); gebruik dan het datumbereik.
 
+### F. Meterverbruik factureren
+
+1. Gebruik `prepare_meter_usage_sales_invoices` met per meter `begin_reading` +
+   `end_reading`, of met een expliciete `usage_kwh`.
+2. Geef uitzonderingen aan via `action: "skip"`, `skip_meters` of een controleerbare
+   `minimum_usage_kwh`. De preview moet elke overgeslagen meter en reden tonen.
+3. Laat tarief, btw en grootboek uit de nieuwste passende meterregel overnemen. Ontbreekt
+   zo'n regel, geef expliciete defaults; neem nooit automatisch de eerste huurregel over.
+4. Gebruik een stabiele periodereferentie zoals `STROOM-2026-K2-B5` voor betrouwbare
+   duplicaatcontrole.
+5. Plan nieuwe facturen direct in dezelfde voorbereide batch. Bestaan de concepten al,
+   gebruik `prepare_batch_schedule_sales_invoices`.
+6. Na akkoord voert de matching `*_from_approval`-tool uit én verifieert per factuur:
+   totaal, status, factuurdatum en dat `sent_at` nog leeg is bij toekomstige verzending.
+
 ---
 
 ## 8. Bij twijfel / grenzen

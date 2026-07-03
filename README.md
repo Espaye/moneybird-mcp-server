@@ -43,6 +43,10 @@ It exposes these tools:
 - `batch_create_sales_invoices_from_approval`
 - `prepare_batch_update_sales_invoices`
 - `batch_update_sales_invoices_from_approval`
+- `prepare_batch_schedule_sales_invoices`
+- `batch_schedule_sales_invoices_from_approval`
+- `prepare_meter_usage_sales_invoices`
+- `meter_usage_sales_invoices_from_approval`
 - `prepare_send_sales_invoice`
 - `send_sales_invoice_from_approval`
 - `prepare_pause_sales_invoice_workflow`
@@ -220,6 +224,10 @@ Then use the public URL ending in `/sse`.
 - `batch_create_sales_invoices_from_approval(approval_id)`: executes the staged batch create.
 - `prepare_batch_update_sales_invoices(entries)`: stages updates to existing invoices by explicit invoice id or by customer lookup plus filters.
 - `batch_update_sales_invoices_from_approval(approval_id)`: executes the staged batch update.
+- `prepare_batch_schedule_sales_invoices(entries)`: stages future sending for multiple existing draft invoices, with merge checks and a single preview.
+- `batch_schedule_sales_invoices_from_approval(approval_id)`: schedules the prepared batch and automatically verifies totals, state, date, and `sent_at`.
+- `prepare_meter_usage_sales_invoices(...)`: turns meter readings into a complete invoice batch, calculates usage, skips configured/low-usage meters, reuses the latest matching tariff/tax/ledger, creates stable period references, and optionally schedules sending.
+- `meter_usage_sales_invoices_from_approval(approval_id)`: executes the approved meter-usage batch and returns the automatic invoice verification table.
 - `prepare_send_sales_invoice(...)`: stages sending or scheduling an invoice, with an automatic merge-compatibility check whenever the send is scheduled.
 - `send_sales_invoice_from_approval(approval_id)`: executes the staged invoice send/schedule action.
 - `prepare_pause_sales_invoice_workflow(sales_invoice_id)`: stages pausing a scheduled/automatic invoice workflow.
@@ -253,6 +261,8 @@ It uses progressive disclosure rather than one giant always-on instruction:
   - `diagnose_bankmutatie(zoekterm, period)` — work out why a bank mutation was not
     automatically linked to a category or document, inferring rule behavior from the mutation
     fields and `created_at`/`processed_at` timing (boekingsregels themselves are not in the API).
+  - `factureer_meterverbruik(period_label, invoice_date, schedule_send_on)` — calculate,
+    preview, approve, schedule, and verify a complete meter-usage invoice run.
 - **Reference (MCP resource)** — `moneybird://playbook/bookkeeping` serves
   `moneybird/playbooks/boekhoud_playbook.md` on demand: golden rules, btw, private vs.
   business / drawings, categorization, a consistency checklist, and scenario recipes. Edit
@@ -280,7 +290,9 @@ Relevant OpenAI docs:
 
 - This scaffold is intentionally conservative on writes.
 - It now supports contact create/update/archive, ledger account creation, general journal creation, purchase-document reclassification, sales invoice draft creation, and explicit send/schedule as approval-gated actions.
-- It now also supports previewed batch invoice creation, duplicate warnings, automatic merge checks for scheduled sends, workflow pause/resume, and batch invoice updates.
+- It now also supports previewed batch invoice creation, batch scheduling with verification,
+  a first-class meter-usage invoice run, duplicate warnings, automatic merge checks for
+  scheduled sends, workflow pause/resume, and batch invoice updates.
 - When a new invoice is scheduled for a contact/date that already has exactly one scheduled invoice, the server automatically reuses that invoice's workflow/style/identity defaults before showing the approval preview.
 - `search` uses a local synchronization cache when available and falls back to a live first-page scan when no cache exists yet.
 - The sync cache now covers contacts, sales invoices, purchase invoices, receipts, general journal documents, and financial mutations.

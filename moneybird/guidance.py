@@ -146,6 +146,34 @@ Werkwijze:
 Zie voor context en vervolgacties (zoals categoriseren) de resource {PLAYBOOK_URI}."""
 
 
+def prompt_factureer_meterverbruik(
+    period_label: str = "",
+    invoice_date: str = "",
+    schedule_send_on: str = "",
+) -> str:
+    """Bereid een controleerbare batch meterverbruikfacturen voor."""
+    return f"""\
+Bereid meterverbruikfacturen voor periode "{period_label or 'onbekend'}" voor.
+Factuurdatum: "{invoice_date or 'nog op te geven'}". Geplande verzenddatum:
+"{schedule_send_on or 'niet automatisch inplannen'}".
+
+{GUARDRAILS}
+
+Werkwijze:
+1. Neem per meter beginstand + eindstand of expliciet verbruik over. Reken verbruik na en
+   corrigeer de brongegevens nooit stilzwijgend.
+2. Leg per meter vast: customer_id, action (skip/draft/schedule/merge/separate) en eventueel
+   een expliciete minimumgrens. Toon overgeslagen meters inclusief reden.
+3. Gebruik prepare_meter_usage_sales_invoices. Laat tarief, btw en grootboek bij voorkeur
+   afleiden uit de nieuwste passende meterregel; geef alleen expliciete defaults als de
+   administratie geen eerdere passende regel heeft.
+4. Toon de volledige preview: standen, kWh, tariefbron, bedragen, actie, verzenddatum,
+   duplicaten en merge-waarschuwingen.
+5. Wacht op expliciet akkoord en voer daarna uit met
+   meter_usage_sales_invoices_from_approval.
+6. Rapporteer de automatische verificatie: totaal, status, factuurdatum en sent_at per klant."""
+
+
 def register_guidance(mcp) -> None:
     """Register the playbook resource and scenario prompts on the given FastMCP instance."""
     mcp.resource(
@@ -183,3 +211,9 @@ def register_guidance(mcp) -> None:
         description="Zoek uit waarom een bankmutatie niet automatisch is gekoppeld aan een categorie of document (let op: boekingsregels zijn niet via de API te lezen).",
         tags={"boekhouding"},
     )(prompt_diagnose_bankmutatie)
+
+    mcp.prompt(
+        name="factureer_meterverbruik",
+        description="Bereken en factureer meterverbruik in één gecontroleerde batch met tariefhergebruik, uitzonderingen en planning.",
+        tags={"boekhouding", "facturatie"},
+    )(prompt_factureer_meterverbruik)

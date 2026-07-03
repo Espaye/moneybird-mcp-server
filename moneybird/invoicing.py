@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from decimal import Decimal, ROUND_HALF_UP
+import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from .config import (
@@ -28,6 +29,17 @@ from .formatting import (
     render_preview_table,
     year_period_for_date,
 )
+
+
+def parse_decimal_number(value: Any, *, label: str) -> Decimal:
+    text = str(value).strip().replace("\u00a0", " ")
+    match = re.match(r"^[-+]?\d+(?:[.,]\d+)?", text)
+    if not match:
+        raise MoneybirdError(f"Invalid {label}: {value!r}.")
+    try:
+        return Decimal(match.group(0).replace(",", "."))
+    except InvalidOperation as exc:
+        raise MoneybirdError(f"Invalid {label}: {value!r}.") from exc
 
 def validate_general_journal_entries(entries: list[dict[str, Any]]) -> dict[str, Any]:
     if len(entries) < 2:
@@ -440,27 +452,306 @@ def resolve_contact_reference(
     contact_id: str = "",
     customer_id: str = "",
 ) -> dict[str, Any]:
+    by_id = getattr(client, "_moneybird_contacts_by_id", {})
+    by_customer_id = getattr(client, "_moneybird_contacts_by_customer_id", {})
     if contact_id:
-        return client.get_contact(contact_id)
-    if customer_id:
-        return client.get_contact_by_customer_id(customer_id)
-    raise MoneybirdError("Provide contact_id or customer_id.")
+        contact = by_id.get(str(contact_id)) or client.get_contact(contact_id)
+    elif customer_id:
+        contact = by_customer_id.get(str(customer_id)) or client.get_contact_by_customer_id(customer_id)
+    else:
+        raise MoneybirdError("Provide contact_id or customer_id.")
+    contact_id_value = str(contact.get("id") or "")
+    customer_id_value = str(contact.get("customer_id") or "")
+    if contact_id_value:
+        by_id[contact_id_value] = contact
+    if customer_id_value:
+        by_customer_id[customer_id_value] = contact
+    setattr(client, "_moneybird_contacts_by_id", by_id)
+    setattr(client, "_moneybird_contacts_by_customer_id", by_customer_id)
+    return contact
 
 
 
 
-def get_latest_invoice_for_contact(client: MoneybirdClient, contact_id: str) -> dict[str, Any] | None:
-    for period in ("this_year", "prev_year"):
-        invoices = client.list_sales_invoices(
-            limit=1,
+def list_contact_invoices_cached(
+    client: MoneybirdClient,
+    *,
+    contact_id: str,
+    period: str,
+) -> list[dict[str, Any]]:
+    cache = getattr(client, "_moneybird_invoices_by_contact_period", {})
+    key = (str(contact_id), str(period))
+    if key not in cache:
+        cache[key] = client.list_sales_invoices(
+            limit=100,
             page=1,
             state="all",
             contact_id=contact_id,
             period=period,
         )
+        setattr(client, "_moneybird_invoices_by_contact_period", cache)
+    return cache[key]
+
+
+def get_latest_invoice_for_contact(client: MoneybirdClient, contact_id: str) -> dict[str, Any] | None:
+    cache = getattr(client, "_moneybird_latest_invoice_by_contact", {})
+    if contact_id in cache:
+        return cache[contact_id]
+    history_cache = getattr(client, "_moneybird_invoices_by_contact_period", {})
+    cached_invoices = [
+        invoice
+        for (cached_contact_id, _), invoices in history_cache.items()
+        if cached_contact_id == str(contact_id)
+        for invoice in invoices
+    ]
+    if cached_invoices:
+        cache[contact_id] = max(
+            cached_invoices,
+            key=lambda invoice: str(
+                invoice.get("invoice_date") or invoice.get("created_at") or ""
+            ),
+        )
+        setattr(client, "_moneybird_latest_invoice_by_contact", cache)
+        return cache[contact_id]
+    for period in ("this_year", "prev_year"):
+        invoices = list_contact_invoices_cached(
+            client,
+            contact_id=contact_id,
+            period=period,
+        )
         if invoices:
-            return invoices[0]
+            cache[contact_id] = max(
+                invoices,
+                key=lambda invoice: str(
+                    invoice.get("invoice_date") or invoice.get("created_at") or ""
+                ),
+            )
+            setattr(client, "_moneybird_latest_invoice_by_contact", cache)
+            return cache[contact_id]
+    cache[contact_id] = None
+    setattr(client, "_moneybird_latest_invoice_by_contact", cache)
     return None
+
+
+def find_latest_matching_invoice_detail(
+    client: MoneybirdClient,
+    *,
+    contact_id: str,
+    meter: str,
+    description_prefix: str,
+    primary_period: str = "this_year",
+) -> dict[str, Any] | None:
+    """Find the newest prior invoice line for the same metered unit."""
+    meter_pattern = re.compile(
+        rf"\b{re.escape(description_prefix.casefold())}\s+{re.escape(meter.casefold())}\b"
+    )
+    matches: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    periods = [primary_period]
+    if primary_period != "prev_year":
+        periods.append("prev_year")
+    for period in periods:
+        invoices = list_contact_invoices_cached(
+            client,
+            contact_id=contact_id,
+            period=period,
+        )
+        for invoice in invoices:
+            for detail in invoice.get("details") or []:
+                description = str(detail.get("description") or "")
+                if meter_pattern.search(description.casefold()):
+                    matches.append(
+                        (
+                            str(invoice.get("invoice_date") or invoice.get("created_at") or ""),
+                            invoice,
+                            detail,
+                        )
+                    )
+        if matches:
+            break
+    if not matches:
+        return None
+    _, invoice, detail = max(matches, key=lambda item: item[0])
+    return {
+        "invoice": invoice,
+        "detail": detail,
+    }
+
+
+def format_decimal_nl(value: Decimal) -> str:
+    return f"{value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):.2f}".replace(".", ",")
+
+
+def build_meter_usage_entries(
+    client: MoneybirdClient,
+    *,
+    rows: list[dict[str, Any]],
+    period_label: str,
+    invoice_date: str,
+    schedule_send_on: str = "",
+    minimum_usage_kwh: Any = "0",
+    description_prefix: str = "Elektra",
+    default_unit_price: str = "",
+    default_tax_rate_id: str = "",
+    default_ledger_account_id: str = "",
+    skip_meters: list[str] | None = None,
+) -> dict[str, Any]:
+    if not rows:
+        raise MoneybirdError("Provide at least one meter row.")
+    if not period_label.strip():
+        raise MoneybirdError("period_label is required (for example 2026-K2).")
+    if not invoice_date.strip():
+        raise MoneybirdError("invoice_date is required.")
+
+    threshold = parse_decimal_number(minimum_usage_kwh, label="minimum_usage_kwh")
+    skip_set = {str(item).strip().casefold() for item in (skip_meters or [])}
+    entries: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    seen_meters: set[str] = set()
+
+    for row in rows:
+        meter = str(row.get("meter") or row.get("customer_id") or "").strip()
+        if not meter:
+            raise MoneybirdError("Each meter row needs meter or customer_id.")
+        meter_key = meter.casefold()
+        if meter_key in seen_meters:
+            raise MoneybirdError(f"Meter {meter} is listed more than once.")
+        seen_meters.add(meter_key)
+
+        explicit_action = str(row.get("action") or "").strip().casefold()
+        if explicit_action not in {"", "skip", "draft", "schedule", "merge", "separate"}:
+            raise MoneybirdError(
+                f"Unsupported action '{explicit_action}' for meter {meter}."
+            )
+
+        begin = row.get("begin_reading")
+        end = row.get("end_reading")
+        supplied_usage = row.get("usage_kwh")
+        if supplied_usage not in (None, ""):
+            usage = parse_decimal_number(supplied_usage, label=f"usage_kwh for {meter}")
+            if begin not in (None, "") and end not in (None, ""):
+                calculated = parse_decimal_number(end, label=f"end_reading for {meter}") - parse_decimal_number(
+                    begin, label=f"begin_reading for {meter}"
+                )
+                if calculated.quantize(Decimal("0.01")) != usage.quantize(Decimal("0.01")):
+                    raise MoneybirdError(
+                        f"usage_kwh for {meter} does not equal end_reading - begin_reading."
+                    )
+        elif begin not in (None, "") and end not in (None, ""):
+            usage = parse_decimal_number(end, label=f"end_reading for {meter}") - parse_decimal_number(
+                begin, label=f"begin_reading for {meter}"
+            )
+        else:
+            raise MoneybirdError(
+                f"Meter {meter} needs usage_kwh or both begin_reading and end_reading."
+            )
+        usage = usage.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if usage < 0:
+            raise MoneybirdError(f"Meter {meter} has negative usage ({usage}).")
+
+        skip_reason = ""
+        if explicit_action == "skip" or meter_key in skip_set:
+            skip_reason = "explicitly_skipped"
+        elif usage < threshold:
+            skip_reason = f"below_minimum_{threshold}"
+        if skip_reason:
+            decisions.append(
+                {
+                    "meter": meter,
+                    "customer_id": row.get("customer_id") or meter,
+                    "usage_kwh": f"{usage:.2f}",
+                    "action": "skip",
+                    "reason": skip_reason,
+                }
+            )
+            continue
+
+        customer_id = str(row.get("customer_id") or meter).strip()
+        contact = resolve_contact_reference(client, customer_id=customer_id)
+        source = find_latest_matching_invoice_detail(
+            client,
+            contact_id=str(contact["id"]),
+            meter=meter,
+            description_prefix=description_prefix,
+            primary_period=year_period_for_date(invoice_date),
+        )
+        source_invoice = (source or {}).get("invoice") or {}
+        source_detail = (source or {}).get("detail") or {}
+        unit_price = str(row.get("unit_price") or default_unit_price or source_detail.get("price") or "")
+        tax_rate_id = str(
+            row.get("tax_rate_id")
+            or default_tax_rate_id
+            or source_detail.get("tax_rate_id")
+            or ""
+        )
+        ledger_account_id = str(
+            row.get("ledger_account_id")
+            or default_ledger_account_id
+            or source_detail.get("ledger_account_id")
+            or ""
+        )
+        if not unit_price or not tax_rate_id or not ledger_account_id:
+            raise MoneybirdError(
+                f"Could not resolve unit price, tax rate and ledger account for meter {meter}. "
+                "Provide explicit defaults or ensure a previous matching invoice exists."
+            )
+
+        action = explicit_action or ("schedule" if schedule_send_on else "draft")
+        should_schedule = action in {"schedule", "merge", "separate"}
+        row_send_on = str(row.get("schedule_send_on") or schedule_send_on or "").strip()
+        if should_schedule and not row_send_on:
+            raise MoneybirdError(f"Meter {meter} is scheduled but no schedule_send_on was provided.")
+        prices_are_incl_tax = bool(
+            row.get(
+                "prices_are_incl_tax",
+                source_invoice.get("prices_are_incl_tax", False),
+            )
+        )
+        reference = str(
+            row.get("reference")
+            or f"STROOM-{period_label.strip()}-{meter.upper()}"
+        )
+        entry = {
+            "contact_id": str(contact["id"]),
+            "customer_id": customer_id,
+            "reference": reference,
+            "invoice_date": invoice_date,
+            "prices_are_incl_tax": prices_are_incl_tax,
+            "details": [
+                {
+                    "description": f"{description_prefix} {meter} - {format_decimal_nl(usage)} kWh",
+                    "amount": f"{usage:.2f}",
+                    "price": unit_price,
+                    "tax_rate_id": tax_rate_id,
+                    "ledger_account_id": ledger_account_id,
+                    "period": row.get("period", ""),
+                }
+            ],
+        }
+        if should_schedule:
+            entry["schedule_send_on"] = row_send_on
+        entries.append(entry)
+        decisions.append(
+            {
+                "meter": meter,
+                "customer_id": customer_id,
+                "contact_id": str(contact["id"]),
+                "usage_kwh": f"{usage:.2f}",
+                "unit_price": unit_price,
+                "tax_rate_id": tax_rate_id,
+                "ledger_account_id": ledger_account_id,
+                "action": "schedule" if should_schedule else "draft",
+                "merge_intent": action if action in {"merge", "separate"} else "unspecified",
+                "schedule_send_on": row_send_on if should_schedule else "",
+                "reference": reference,
+                "source_invoice_id": str(source_invoice.get("id") or ""),
+                "source_invoice_number": source_invoice.get("invoice_id"),
+                "source_invoice_date": source_invoice.get("invoice_date"),
+            }
+        )
+
+    if not entries:
+        raise MoneybirdError("All meter rows were skipped; there are no invoices to prepare.")
+    return {"entries": entries, "decisions": decisions}
 
 
 
@@ -474,6 +765,7 @@ def infer_contact_invoice_defaults(client: MoneybirdClient, contact: dict[str, A
         or contact.get("invoice_workflow_id"),
         "document_style_id": (latest_invoice or {}).get("document_style_id"),
         "identity_id": (latest_invoice or {}).get("identity_id"),
+        "language": (latest_invoice or {}).get("language") or "nl",
         "currency": (latest_invoice or {}).get("currency") or "EUR",
         "prices_are_incl_tax": (latest_invoice or {}).get("prices_are_incl_tax", False),
         "tax_rate_id": first_detail.get("tax_rate_id"),
@@ -534,6 +826,7 @@ def build_merge_snapshot_from_invoice(
         "workflow_id": invoice.get("workflow_id"),
         "document_style_id": invoice.get("document_style_id"),
         "identity_id": invoice.get("identity_id"),
+        "language": invoice.get("language"),
         "currency": invoice.get("currency"),
         "prices_are_incl_tax": invoice.get("prices_are_incl_tax", False),
         "discount": extract_invoice_discount(invoice),
@@ -559,6 +852,7 @@ def build_merge_snapshot_from_payload(
         "workflow_id": sales_invoice.get("workflow_id"),
         "document_style_id": sales_invoice.get("document_style_id"),
         "identity_id": sales_invoice.get("identity_id"),
+        "language": sales_invoice.get("language"),
         "currency": sales_invoice.get("currency"),
         "prices_are_incl_tax": sales_invoice.get("prices_are_incl_tax", False),
         "discount": extract_invoice_discount(sales_invoice),
@@ -600,10 +894,8 @@ def list_scheduled_merge_candidates(
     if not scheduled_send_on:
         return []
 
-    invoices = client.list_sales_invoices(
-        limit=100,
-        page=1,
-        state="all",
+    invoices = list_contact_invoices_cached(
+        client,
         contact_id=contact_id,
         period=year_period_for_date(scheduled_send_on),
     )
@@ -635,6 +927,7 @@ def align_defaults_with_scheduled_invoice(
         "document_style_id": scheduled_invoice.get("document_style_id")
         or defaults.get("document_style_id"),
         "identity_id": scheduled_invoice.get("identity_id") or defaults.get("identity_id"),
+        "language": scheduled_invoice.get("language") or defaults.get("language") or "nl",
         "currency": scheduled_invoice.get("currency") or defaults.get("currency"),
         "prices_are_incl_tax": scheduled_invoice.get(
             "prices_are_incl_tax",
@@ -791,6 +1084,57 @@ def build_preview_row(
     }
 
 
+def build_invoice_line_preview(
+    *,
+    customer_id: str,
+    description: str,
+    entered_total: Decimal,
+    tax_percentage: Decimal,
+    prices_are_incl_tax: bool,
+    duplicate_hits: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a preview that follows Moneybird's incl/excl price setting."""
+    if prices_are_incl_tax:
+        divisor = Decimal("1") + (tax_percentage / Decimal("100"))
+        amount_incl_tax = entered_total
+        amount_excl_tax = (
+            entered_total / divisor if divisor else entered_total
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        tax_amount = amount_incl_tax - amount_excl_tax
+        return {
+            "customer_id": customer_id,
+            "description": description,
+            "amount_excl_tax": f"{amount_excl_tax:.2f}",
+            "amount_tax": f"{tax_amount:.2f}",
+            "amount_incl_tax": f"{amount_incl_tax:.2f}",
+            "status": "duplicate-warning" if duplicate_hits else "ready",
+        }
+    return build_preview_row(
+        customer_id=customer_id,
+        description=description,
+        amount_excl_tax=entered_total,
+        tax_percentage=tax_percentage,
+        duplicate_hits=duplicate_hits,
+    )
+
+
+def tax_rate_percentage(
+    client: MoneybirdClient,
+    tax_rate_id: str,
+) -> Decimal:
+    cache = getattr(client, "_moneybird_tax_rate_percentages", None)
+    if cache is None:
+        cache = {
+            str(item.get("id")): Decimal(str(item.get("percentage") or "0"))
+            for item in client.list_tax_rates()
+            if item.get("id")
+        }
+        setattr(client, "_moneybird_tax_rate_percentages", cache)
+    if tax_rate_id not in cache:
+        raise MoneybirdError(f"Unknown tax_rate_id {tax_rate_id}.")
+    return cache[tax_rate_id]
+
+
 
 
 def find_potential_invoice_duplicates(
@@ -801,10 +1145,8 @@ def find_potential_invoice_duplicates(
     reference: str,
     descriptions: list[str],
 ) -> list[dict[str, Any]]:
-    invoices = client.list_sales_invoices(
-        limit=100,
-        page=1,
-        state="all",
+    invoices = list_contact_invoices_cached(
+        client,
         contact_id=contact_id,
         period=year_period_for_date(invoice_date) if invoice_date else "this_year",
     )
@@ -844,6 +1186,9 @@ def build_batch_invoice_payload(
         customer_id=str(entry.get("customer_id", "")),
     )
     defaults = infer_contact_invoice_defaults(client, contact)
+    prices_are_incl_tax = bool(
+        entry.get("prices_are_incl_tax", defaults.get("prices_are_incl_tax", False))
+    )
     schedule_send_on = str(entry.get("schedule_send_on", "")).strip()
     scheduled_merge_candidates = list_scheduled_merge_candidates(
         client,
@@ -870,17 +1215,33 @@ def build_batch_invoice_payload(
         if not price:
             raise MoneybirdError("Each invoice line needs a price.")
 
-        tax_percentage = Decimal(str(raw_detail.get("tax_percentage", "21")))
+        selected_tax_rate_id = str(
+            raw_detail.get("tax_rate_id") or defaults.get("tax_rate_id") or ""
+        )
+        if not selected_tax_rate_id:
+            raise MoneybirdError(
+                f"No tax rate could be resolved for invoice line '{description}'."
+            )
+        tax_percentage = tax_rate_percentage(client, selected_tax_rate_id)
+        supplied_percentage = raw_detail.get("tax_percentage")
+        if supplied_percentage not in (None, ""):
+            supplied = parse_decimal_number(supplied_percentage, label="tax_percentage")
+            if supplied != tax_percentage:
+                raise MoneybirdError(
+                    f"tax_percentage {supplied} does not match tax_rate_id "
+                    f"{selected_tax_rate_id} ({tax_percentage}%)."
+                )
         line_total = (
-            Decimal(amount.replace(" x", "").replace(",", "."))
-            * Decimal(price.replace(",", "."))
+            parse_decimal_number(amount, label="amount")
+            * parse_decimal_number(price, label="price")
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         preview_rows.append(
-            build_preview_row(
+            build_invoice_line_preview(
                 customer_id=str(contact.get("customer_id") or entry.get("customer_id") or contact.get("id")),
                 description=description,
-                amount_excl_tax=line_total,
+                entered_total=line_total,
                 tax_percentage=tax_percentage,
+                prices_are_incl_tax=prices_are_incl_tax,
                 duplicate_hits=[],
             )
         )
@@ -891,7 +1252,7 @@ def build_batch_invoice_payload(
                     "description": description,
                     "amount": amount,
                     "price": price,
-                    "tax_rate_id": raw_detail.get("tax_rate_id") or defaults.get("tax_rate_id"),
+                    "tax_rate_id": selected_tax_rate_id,
                     "ledger_account_id": raw_detail.get("ledger_account_id")
                     or defaults.get("ledger_account_id"),
                     "period": raw_detail.get("period", ""),
@@ -905,11 +1266,12 @@ def build_batch_invoice_payload(
             "workflow_id": entry.get("workflow_id") or defaults.get("workflow_id"),
             "document_style_id": entry.get("document_style_id") or defaults.get("document_style_id"),
             "identity_id": entry.get("identity_id") or defaults.get("identity_id"),
+            "language": entry.get("language") or defaults.get("language"),
             "reference": entry.get("reference", ""),
             "invoice_date": entry.get("invoice_date", ""),
             "due_date": entry.get("due_date", ""),
             "currency": entry.get("currency") or defaults.get("currency"),
-            "prices_are_incl_tax": entry.get("prices_are_incl_tax", defaults.get("prices_are_incl_tax", False)),
+            "prices_are_incl_tax": prices_are_incl_tax,
             "details_attributes": details_attributes,
         }
     )
@@ -959,6 +1321,7 @@ def build_batch_invoice_payload(
         "schedule_send_on": schedule_send_on,
         "duplicates": duplicates,
         "preview_rows": preview_rows,
+        "expected_total_incl_tax": f"{sum(Decimal(row['amount_incl_tax']) for row in preview_rows):.2f}",
         "merge_snapshot": merge_snapshot,
         "merge_check": merge_check,
     }
@@ -1007,6 +1370,7 @@ def summarize_batch_preview(batch_items: list[dict[str, Any]]) -> dict[str, Any]
         )
     return {
         "preview_table": render_preview_table(rows),
+        "rows": rows,
         "duplicate_count": len(duplicates),
         "duplicates": duplicates,
         "merge_warning_count": sum(

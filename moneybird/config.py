@@ -62,6 +62,7 @@ MERGE_FIELD_LABELS = {
     "workflow_id": "workflow",
     "document_style_id": "document_style",
     "identity_id": "identity",
+    "language": "language",
     "currency": "currency",
     "prices_are_incl_tax": "prices_are_incl_tax",
     "discount": "discount",

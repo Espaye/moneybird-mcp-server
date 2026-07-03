@@ -35,10 +35,16 @@ def audit_log_path(administration_id: str | None = None) -> Path:
 def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[str, Any]:
     approval_id = secrets.token_urlsafe(18)
     expires_at = datetime.now(UTC) + timedelta(minutes=APPROVAL_TTL_MINUTES)
+    administration_id = get_active_administration_id()
+    if not administration_id:
+        raise MoneybirdError(
+            "Cannot prepare a write without an active Moneybird administration."
+        )
     PENDING_APPROVALS[approval_id] = {
         "action": action,
         "payload": payload,
         "summary": summary,
+        "administration_id": administration_id,
         "expires_at": expires_at,
         "created_at": datetime.now(UTC),
     }
@@ -46,6 +52,7 @@ def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[st
         "approval_id": approval_id,
         "action": action,
         "summary": summary,
+        "administration_id": administration_id,
         "expires_at": expires_at.isoformat(),
         "warning": (
             "This action is not executed yet. Ask the user for explicit confirmation "
@@ -56,7 +63,12 @@ def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[st
 
 
 
-def pop_approval(approval_id: str, expected_action: str) -> dict[str, Any]:
+def pop_approval(
+    approval_id: str,
+    expected_action: str,
+    *,
+    administration_id: str | None = None,
+) -> dict[str, Any]:
     pending = PENDING_APPROVALS.get(approval_id)
     if not pending:
         raise MoneybirdError(
@@ -66,6 +78,16 @@ def pop_approval(approval_id: str, expected_action: str) -> dict[str, Any]:
     if pending["action"] != expected_action:
         raise MoneybirdError(
             f"approval_id is for {pending['action']}, not {expected_action}."
+        )
+
+    prepared_administration_id = pending.get("administration_id")
+    if (
+        prepared_administration_id
+        and str(prepared_administration_id) != str(administration_id or "")
+    ):
+        raise MoneybirdError(
+            "approval_id belongs to a different Moneybird administration. "
+            "Prepare the action again for the active administration."
         )
 
     if datetime.now(UTC) > pending["expires_at"]:
