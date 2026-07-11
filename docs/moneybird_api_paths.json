@@ -1,0 +1,727 @@
+{
+ "info": {
+  "version": "v2-20260710-57729b61b9",
+  "retrieved": "2026-07-11",
+  "source": "https://developer.moneybird.com (bundled OpenAPI asset)"
+ },
+ "paths": {
+  "/administrations": {
+   "GET": "List all administrations"
+  },
+  "/{administration_id}/assets/{id}/disposals": {
+   "POST": "Create a disposal"
+  },
+  "/{administration_id}/assets/{id}/reinvestment_reserve_purchase": {
+   "POST": "Create a reinvestment reserve purchase",
+   "DELETE": "Delete a reinvestment reserve purchase"
+  },
+  "/{administration_id}/assets/{id}/reinvestment_reserve_sale": {
+   "POST": "Create a reinvestment reserve sale",
+   "DELETE": "Delete a reinvestment reserve sale"
+  },
+  "/{administration_id}/assets/{id}/sources/{source_id}": {
+   "DELETE": "Delete a source"
+  },
+  "/{administration_id}/assets/{id}/sources": {
+   "POST": "Add a source to an asset"
+  },
+  "/{administration_id}/assets/{id}/value_changes/arbitrary": {
+   "POST": "Create an arbitrary value change"
+  },
+  "/{administration_id}/assets/{id}/value_changes/divestment": {
+   "POST": "Create a divestment value change"
+  },
+  "/{administration_id}/assets/{id}/value_changes/full_depreciation": {
+   "POST": "Create a full depreciation value change"
+  },
+  "/{administration_id}/assets/{id}/value_changes/manual": {
+   "POST": "Create a manual value change"
+  },
+  "/{administration_id}/assets/{id}/value_changes/retroactive_linear_value_changes": {
+   "POST": "Create linear value changes retroactively"
+  },
+  "/{administration_id}/assets/{id}": {
+   "GET": "Get an asset by ID",
+   "PATCH": "Update an asset",
+   "DELETE": "Delete an asset"
+  },
+  "/{administration_id}/assets": {
+   "GET": "List all assets",
+   "POST": "Create a new asset"
+  },
+  "/{administration_id}/contacts/customer_id/{customer_id}": {
+   "GET": "Get contact by customer id"
+  },
+  "/{administration_id}/contacts/filter": {
+   "GET": "Filter contacts"
+  },
+  "/{administration_id}/contacts/synchronization": {
+   "GET": "List all ids and versions",
+   "POST": "Fetch contacts with given ids"
+  },
+  "/{administration_id}/contacts/{contact_id}/contact_people/{id}": {
+   "GET": "Get contact person",
+   "PATCH": "Update a contact person",
+   "DELETE": "Delete a contact person"
+  },
+  "/{administration_id}/contacts/{contact_id}/contact_people": {
+   "POST": "Create a new contact person"
+  },
+  "/{administration_id}/contacts/{contact_id}/moneybird_payments_mandate/url": {
+   "POST": "Request an URL for setting up a Moneybird Payments mandate"
+  },
+  "/{administration_id}/contacts/{contact_id}/moneybird_payments_mandate": {
+   "GET": "Get Moneybird Payments mandate",
+   "POST": "Request a new Moneybird Payments mandate",
+   "DELETE": "Delete a stored Moneybird Payments mandate"
+  },
+  "/{administration_id}/contacts/{contact_id}/notes/{id}": {
+   "DELETE": "Destroys note from entity"
+  },
+  "/{administration_id}/contacts/{contact_id}/notes": {
+   "POST": "Adds note to entity"
+  },
+  "/{administration_id}/contacts/{id}/additional_charges": {
+   "GET": "Get additional charges",
+   "POST": "Create an additional charge to be invoiced at start of next period"
+  },
+  "/{administration_id}/contacts/{id}/archive": {
+   "PATCH": "Archive a contact"
+  },
+  "/{administration_id}/contacts/{id}": {
+   "GET": "Get contact",
+   "PATCH": "Update a contact",
+   "DELETE": "Delete a contact"
+  },
+  "/{administration_id}/contacts": {
+   "GET": "List all contacts",
+   "POST": "Create a new contact"
+  },
+  "/{administration_id}/custom_fields": {
+   "GET": "List all custom fields"
+  },
+  "/{administration_id}/customer_contact_portal/{contact_id}/invoices": {
+   "GET": "Get a temporary link to the invoices in the customer contact portal"
+  },
+  "/{administration_id}/customer_contact_portal/{contact_id}/subscriptions/{id}": {
+   "GET": "Get a temporary link to the subscriptions in the customer contact portal"
+  },
+  "/{administration_id}/customer_contact_portal/{contact_id}": {
+   "GET": "Get a temporary link to the customer contact portal"
+  },
+  "/{administration_id}/document_styles": {
+   "GET": "List all document styles"
+  },
+  "/{administration_id}/documents/general_documents/synchronization": {
+   "GET": "List ids and versions of general documents",
+   "POST": "Fetch general documents with given ids"
+  },
+  "/{administration_id}/documents/general_documents/{general_document_id}/notes/{id}": {
+   "DELETE": "Destroys note from entity"
+  },
+  "/{administration_id}/documents/general_documents/{general_document_id}/notes": {
+   "POST": "Adds note to entity"
+  },
+  "/{administration_id}/documents/general_documents/{id}/attachments/{attachment_id}/download": {
+   "GET": "Download attachment"
+  },
+  "/{administration_id}/documents/general_documents/{id}/attachments/{attachment_id}": {
+   "DELETE": "Delete an attachment"
+  },
+  "/{administration_id}/documents/general_documents/{id}/attachments": {
+   "POST": "Add attachment to general document"
+  },
+  "/{administration_id}/documents/general_documents/{id}": {
+   "GET": "Get general document",
+   "PATCH": "Update a general document",
+   "DELETE": "Delete a general document"
+  },
+  "/{administration_id}/documents/general_documents": {
+   "GET": "Get general documents",
+   "POST": "Create a new general document"
+  },
+  "/{administration_id}/documents/general_journal_documents/synchronization": {
+   "GET": "List ids and versions of general journal documents",
+   "POST": "Fetch general journal documents with given ids"
+  },
+  "/{administration_id}/documents/general_journal_documents/{general_journal_document_id}/notes/{id}": {
+   "DELETE": "Destroys note from entity"
+  },
+  "/{administration_id}/documents/general_journal_documents/{general_journal_document_id}/notes": {
+   "POST": "Adds note to entity"
+  },
+  "/{administration_id}/documents/general_journal_documents/{id}/attachments/{attachment_id}/download": {
+   "GET": "Download attachment"
+  },
+  "/{administration_id}/documents/general_journal_documents/{id}/attachments/{attachment_id}": {
+   "DELETE": "Delete an attachment"
+  },
+  "/{administration_id}/documents/general_journal_documents/{id}/attachments": {
+   "POST": "Add attachment to general journal document"
+  },
+  "/{administration_id}/documents/general_journal_documents/{id}": {
+   "GET": "Get general journal document",
+   "PATCH": "Update a general journal document",
+   "DELETE": "Delete a general journal document"
+  },
+  "/{administration_id}/documents/general_journal_documents": {
+   "GET": "Get general journal documents",
+   "POST": "Create a new general journal document"
+  },
+  "/{administration_id}/documents/purchase_invoices/synchronization": {
+   "GET": "List ids and versions of purchase invoices",
+   "POST": "Fetch purchase invoices with given ids"
+  },
+  "/{administration_id}/documents/purchase_invoices/{id}/attachments/{attachment_id}/download": {
+   "GET": "Download attachment"
+  },
+  "/{administration_id}/documents/purchase_invoices/{id}/attachments/{attachment_id}": {
+   "DELETE": "Delete an attachment"
+  },
+  "/{administration_id}/documents/purchase_invoices/{id}/attachments": {
+   "POST": "Add attachment to purchase invoice"
+  },
+  "/{administration_id}/documents/purchase_invoices/{id}/payments/{payment_id}": {
+   "DELETE": "Delete a payment"
+  },
+  "/{administration_id}/documents/purchase_invoices/{id}/payments": {
+   "POST": "Create a payment"
+  },
+  "/{administration_id}/documents/purchase_invoices/{id}/register_payment": {
+   "PATCH": "Register a payment for a purchase invoice"
+  },
+  "/{administration_id}/documents/purchase_invoices/{id}": {
+   "GET": "Get purchase invoice",
+   "PATCH": "Update purchase invoice",
+   "DELETE": "Delete a purchase invoices"
+  },
+  "/{administration_id}/documents/purchase_invoices/{purchase_invoice_id}/notes/{id}": {
+   "DELETE": "Destroys note from entity"
+  },
+  "/{administration_id}/documents/purchase_invoices/{purchase_invoice_id}/notes": {
+   "POST": "Adds note to entity"
+  },
+  "/{administration_id}/documents/purchase_invoices": {
+   "GET": "Get purchase invoices",
+   "POST": "Create a new purchase invoice"
+  },
+  "/{administration_id}/documents/receipts/synchronization": {
+   "GET": "List ids and versions of receipts",
+   "POST": "Fetch receipts with given ids"
+  },
+  "/{administration_id}/documents/receipts/{id}/attachments/{attachment_id}/download": {
+   "GET": "Download attachment"
+  },
+  "/{administration_id}/documents/receipts/{id}/attachments/{attachment_id}": {
+   "DELETE": "Delete an attachment"
+  },
+  "/{administration_id}/documents/receipts/{id}/attachments": {
+   "POST": "Add attachment to receipt"
+  },
+  "/{administration_id}/documents/receipts/{id}/payments/{payment_id}": {
+   "DELETE": "Delete a payment"
+  },
+  "/{administration_id}/documents/receipts/{id}/payments": {
+   "POST": "Create a payment"
+  },
+  "/{administration_id}/documents/receipts/{id}/register_payment": {
+   "PATCH": "Register a payment for a receipt"
+  },
+  "/{administration_id}/documents/receipts/{id}": {
+   "GET": "Get a receipt",
+   "PATCH": "Update a receipt",
+   "DELETE": "Delete a receipts"
+  },
+  "/{administration_id}/documents/receipts/{receipt_id}/notes/{id}": {
+   "DELETE": "Destroys note from entity"
+  },
+  "/{administration_id}/documents/receipts/{receipt_id}/notes": {
+   "POST": "Adds note to entity"
+  },
+  "/{administration_id}/documents/receipts": {
+   "GET": "List receipts",
+   "POST": "Create a new receipt"
+  },
+  "/{administration_id}/documents/typeless_documents/synchronization": {
+   "GET": "List ids and versions of typeless documents",
+   "POST": "Fetch typeless documents with given ids"
+  },
+  "/{administration_id}/documents/typeless_documents/{id}/attachments/{attachment_id}/download": {
+   "GET": "Download attachment"
+  },
+  "/{administration_id}/documents/typeless_documents/{id}/attachments/{attachment_id}": {
+   "DELETE": "Delete an attachment"
+  },
+  "/{administration_id}/documents/typeless_documents/{id}/attachments": {
+   "POST": "Add attachment to typeless document"
+  },
+  "/{administration_id}/documents/typeless_documents/{id}": {
+   "GET": "Get a typeless document",
+   "DELETE": "Delete a typeless document"
+  },
+  "/{administration_id}/documents/typeless_documents": {
+   "GET": "Get typeless documents",
+   "POST": "Create a new typeless document"
+  },
+  "/{administration_id}/downloads/{id}/download": {
+   "POST": "Download a file"
+  },
+  "/{administration_id}/downloads": {
+   "GET": "List all downloads"
+  },
+  "/{administration_id}/estimates/find_by_estimate_id/{estimate_id}": {
+   "GET": "Get an estimate by estimate_id"
+  },
+  "/{administration_id}/estimates/synchronization": {
+   "GET": "List all ids and versions",
+   "POST": "Fetch estimates with given ids"
+  },
+  "/{administration_id}/estimates/{estimate_id}/attachments/{id}/download": {
+   "GET": "Download attachment"
+  },
+  "/{administration_id}/estimates/{estimate_id}/attachments/{id}": {
+   "DELETE": "Delete an attachment"
+  },
+  "/{administration_id}/estimates/{estimate_id}/notes/{id}": {
+   "DELETE": "Destroys note from entity"
+  },
+  "/{administration_id}/estimates/{estimate_id}/notes": {
+   "POST": "Adds note to entity"
+  },
+  "/{administration_id}/estimates/{id}/attachments": {
+   "POST": "Add attachment to estimate"
+  },
+  "/{administration_id}/estimates/{id}/bill_estimate": {
+   "PATCH": "Bills an estimate"
+  },
+  "/{administration_id}/estimates/{id}/change_state": {
+   "PATCH": "Changes the state of an estimate"
+  },
+  "/{administration_id}/estimates/{id}/download_pdf": {
+   "GET": "Download estimate PDF by id"
+  },
+  "/{administration_id}/estimates/{id}/send_estimate": {
+   "PATCH": "Sends an estimate"
+  },
+  "/{administration_id}/estimates/{id}": {
+   "GET": "Get an estimate by id",
+   "PATCH": "Updates an estimate",
+   "DELETE": "Deletes an estimate"
+  },
+  "/{administration_id}/estimates": {
+   "GET": "List all estimates",
+   "POST": "Creates a new estimate"
+  },
+  "/{administration_id}/external_sales_invoices/attachment": {
+   "POST": "Create external sales invoice from attachment"
+  },
+  "/{administration_id}/external_sales_invoices/synchronization": {
+   "GET": "List all ids and versions",
+   "POST": "Fetch external sales invoices with given ids"
+  },
+  "/{administration_id}/external_sales_invoices/{external_sales_invoice_id}/attachments/{id}/download": {
+   "GET": "Download attachment"
+  },
+  "/{administration_id}/external_sales_invoices/{external_sales_invoice_id}/attachments/{id}": {
+   "DELETE": "Delete an attachment"
+  },
+  "/{administration_id}/external_sales_invoices/{external_sales_invoice_id}/notes/{id}": {
+   "DELETE": "Destroys note from entity"
+  },
+  "/{administration_id}/external_sales_invoices/{external_sales_invoice_id}/notes": {
+   "POST": "Adds note to entity"
+  },
+  "/{administration_id}/external_sales_invoices/{external_sales_invoice_id}/payments/{id}": {
+   "DELETE": "Delete a payment"
+  },
+  "/{administration_id}/external_sales_invoices/{external_sales_invoice_id}/payments": {
+   "POST": "Create a payment"
+  },
+  "/{administration_id}/external_sales_invoices/{id}/attachment": {
+   "POST": "Add attachment to external sales invoice"
+  },
+  "/{administration_id}/external_sales_invoices/{id}/mark_as_dubious": {
+   "PATCH": "Mark as dubious"
+  },
+  "/{administration_id}/external_sales_invoices/{id}/mark_as_uncollectible": {
+   "PATCH": "Mark as uncollectible"
+  },
+  "/{administration_id}/external_sales_invoices/{id}": {
+   "GET": "Get an external sales invoice by id",
+   "PATCH": "Update an external sales invoice",
+   "DELETE": "Delete an external sales invoice"
+  },
+  "/{administration_id}/external_sales_invoices": {
+   "GET": "List all external invoices",
+   "POST": "Create an external sales invoice"
+  },
+  "/{administration_id}/financial_accounts": {
+   "GET": "Retrieve all available financial accounts for the administration"
+  },
+  "/{administration_id}/financial_mutations/synchronization": {
+   "GET": "List all ids and versions",
+   "POST": "Fetch financial mutations with given ids"
+  },
+  "/{administration_id}/financial_mutations/{id}/link_booking": {
+   "PATCH": "Links a financial mutation to a booking"
+  },
+  "/{administration_id}/financial_mutations/{id}/unlink_booking": {
+   "DELETE": "Unlinks a booking from a financial mutation"
+  },
+  "/{administration_id}/financial_mutations/{id}": {
+   "GET": "Get a financial mutation by id"
+  },
+  "/{administration_id}/financial_mutations": {
+   "GET": "List all financial mutations"
+  },
+  "/{administration_id}/financial_statements/{id}": {
+   "PATCH": "Update a financial statement",
+   "DELETE": "Delete a financial statement"
+  },
+  "/{administration_id}/financial_statements": {
+   "POST": "Create a new financial statement"
+  },
+  "/{administration_id}/identities/default": {
+   "GET": "Retrieve the default identity",
+   "PATCH": "Updates the default identity"
+  },
+  "/{administration_id}/identities/{id}": {
+   "GET": "Retrieve identity by given id",
+   "PATCH": "Updates an identity",
+   "DELETE": "Deletes an identity"
+  },
+  "/{administration_id}/identities": {
+   "GET": "Retrieve identities",
+   "POST": "Creates an identity"
+  },
+  "/{administration_id}/ledger_accounts/{id}": {
+   "GET": "Returns information about a ledger account",
+   "PATCH": "Updates a ledger account",
+   "DELETE": "Deletes a ledger account"
+  },
+  "/{administration_id}/ledger_accounts": {
+   "GET": "List all ledger accounts of an administration",
+   "POST": "Creates a new ledger account"
+  },
+  "/{administration_id}/payments/{id}": {
+   "GET": "Returns information about a payment"
+  },
+  "/{administration_id}/products/identifier/{identifier}": {
+   "GET": "Returns information about a product based on the identifier"
+  },
+  "/{administration_id}/products/{id}/sales_link": {
+   "POST": "Create online sales link"
+  },
+  "/{administration_id}/products/{id}": {
+   "GET": "Returns information about a product",
+   "PATCH": "Updates a product",
+   "DELETE": "Deletes a product"
+  },
+  "/{administration_id}/products": {
+   "GET": "List all products of an administration",
+   "POST": "Creates a new product"
+  },
+  "/{administration_id}/projects/{id}": {
+   "GET": "Returns information about a project",
+   "PATCH": "Updates a project",
+   "DELETE": "Deletes a project"
+  },
+  "/{administration_id}/projects": {
+   "GET": "List all projects of an administration",
+   "POST": "Creates a new project"
+  },
+  "/{administration_id}/purchase_transactions/{id}/delete": {
+   "DELETE": "Delete a purchase transaction"
+  },
+  "/{administration_id}/purchase_transactions/{id}": {
+   "GET": "Get a purchase transaction by id",
+   "DELETE": "Delete a purchase transaction"
+  },
+  "/{administration_id}/purchase_transactions": {
+   "GET": "List all purchase transactions"
+  },
+  "/{administration_id}/recurring_sales_invoices/synchronization": {
+   "GET": "List all IDs and versions",
+   "POST": "Fetch recurring sales invoices with given IDs"
+  },
+  "/{administration_id}/recurring_sales_invoices/{id}": {
+   "GET": "Get a recurring sales invoice by id",
+   "PATCH": "Updates a recurring sales invoice",
+   "DELETE": "Destroy or deactivate a recurring sales invoice"
+  },
+  "/{administration_id}/recurring_sales_invoices/{recurring_sales_invoice_id}/notes/{id}": {
+   "DELETE": "Destroys note from entity"
+  },
+  "/{administration_id}/recurring_sales_invoices/{recurring_sales_invoice_id}/notes": {
+   "POST": "Adds note to entity"
+  },
+  "/{administration_id}/recurring_sales_invoices": {
+   "GET": "List all recurring sales invoices",
+   "POST": "Creates a new recurring sales invoice"
+  },
+  "/{administration_id}/reports/assets": {
+   "GET": "Assets report"
+  },
+  "/{administration_id}/reports/balance_sheet": {
+   "GET": "Balance sheet report"
+  },
+  "/{administration_id}/reports/cash_flow": {
+   "GET": "Cash flow report"
+  },
+  "/{administration_id}/reports/creditors": {
+   "GET": "Creditors report"
+  },
+  "/{administration_id}/reports/creditors_aging": {
+   "GET": "Creditors aging report"
+  },
+  "/{administration_id}/reports/debtors": {
+   "GET": "Debtors report"
+  },
+  "/{administration_id}/reports/debtors_aging": {
+   "GET": "Debtors aging report"
+  },
+  "/{administration_id}/reports/expenses_by_contact": {
+   "GET": "Expenses by contact report"
+  },
+  "/{administration_id}/reports/expenses_by_project": {
+   "GET": "Expenses by project report"
+  },
+  "/{administration_id}/reports/export/auditfile": {
+   "POST": "Export auditfile"
+  },
+  "/{administration_id}/reports/export/brugstaat": {
+   "POST": "Export brugstaat"
+  },
+  "/{administration_id}/reports/export/ledger_accounts": {
+   "POST": "Export ledger accounts"
+  },
+  "/{administration_id}/reports/general_ledger": {
+   "GET": "General ledger report"
+  },
+  "/{administration_id}/reports/journal_entries": {
+   "GET": "Journal entries report"
+  },
+  "/{administration_id}/reports/ledger_accounts/{ledger_account_id}": {
+   "GET": "Ledger account report"
+  },
+  "/{administration_id}/reports/profit_loss": {
+   "GET": "Profit loss report"
+  },
+  "/{administration_id}/reports/revenue_by_contact": {
+   "GET": "Revenue by contact report"
+  },
+  "/{administration_id}/reports/revenue_by_project": {
+   "GET": "Revenue by project report"
+  },
+  "/{administration_id}/reports/subscriptions": {
+   "GET": "Subscriptions report"
+  },
+  "/{administration_id}/reports/tax": {
+   "GET": "Tax report"
+  },
+  "/{administration_id}/sales_invoices/find_by_invoice_id/{invoice_id}": {
+   "GET": "Get an invoice by invoice_id"
+  },
+  "/{administration_id}/sales_invoices/find_by_reference/{reference}": {
+   "GET": "Get an invoice by reference"
+  },
+  "/{administration_id}/sales_invoices/send_reminders": {
+   "POST": "Sends a reminder"
+  },
+  "/{administration_id}/sales_invoices/synchronization": {
+   "GET": "List all ids and versions",
+   "POST": "Fetch sales invoices with given ids"
+  },
+  "/{administration_id}/sales_invoices/{id}/attachments": {
+   "POST": "Add attachment to sales invoice"
+  },
+  "/{administration_id}/sales_invoices/{id}/download_packing_slip_pdf": {
+   "GET": "Download sales invoice packing slip PDF by id"
+  },
+  "/{administration_id}/sales_invoices/{id}/download_pdf": {
+   "GET": "Download sales invoice PDF by id"
+  },
+  "/{administration_id}/sales_invoices/{id}/download_ubl": {
+   "GET": "Download sales invoice UBL by id"
+  },
+  "/{administration_id}/sales_invoices/{id}/duplicate_creditinvoice": {
+   "PATCH": "Duplicate to credit invoice"
+  },
+  "/{administration_id}/sales_invoices/{id}/mark_as_dubious": {
+   "PATCH": "Mark as dubious"
+  },
+  "/{administration_id}/sales_invoices/{id}/mark_as_uncollectible": {
+   "PATCH": "Mark as uncollectible"
+  },
+  "/{administration_id}/sales_invoices/{id}/pause": {
+   "POST": "Pause sales invoice"
+  },
+  "/{administration_id}/sales_invoices/{id}/register_payment": {
+   "PATCH": "Register a payment"
+  },
+  "/{administration_id}/sales_invoices/{id}/register_payment_creditinvoice": {
+   "PATCH": "Register a payment for a creditinvoice"
+  },
+  "/{administration_id}/sales_invoices/{id}/resume": {
+   "POST": "Resume sales invoice"
+  },
+  "/{administration_id}/sales_invoices/{id}/send_invoice": {
+   "PATCH": "Sends an invoice"
+  },
+  "/{administration_id}/sales_invoices/{id}": {
+   "GET": "Get an invoice by id",
+   "PATCH": "Update a sales invoice",
+   "DELETE": "Delete a sales invoice"
+  },
+  "/{administration_id}/sales_invoices/{sales_invoice_id}/attachments/{id}/download": {
+   "GET": "Download attachment"
+  },
+  "/{administration_id}/sales_invoices/{sales_invoice_id}/attachments/{id}": {
+   "DELETE": "Delete an attachment"
+  },
+  "/{administration_id}/sales_invoices/{sales_invoice_id}/notes/{id}": {
+   "DELETE": "Destroys note from entity"
+  },
+  "/{administration_id}/sales_invoices/{sales_invoice_id}/notes": {
+   "POST": "Adds note to entity"
+  },
+  "/{administration_id}/sales_invoices/{sales_invoice_id}/payments/{id}": {
+   "DELETE": "Delete a payment"
+  },
+  "/{administration_id}/sales_invoices/{sales_invoice_id}/payments": {
+   "POST": "Create a payment"
+  },
+  "/{administration_id}/sales_invoices": {
+   "GET": "List all invoices",
+   "POST": "Create a sales invoice"
+  },
+  "/{administration_id}/sepa_credit_transfer": {
+   "POST": "Upload a SEPA credit transfer file to create purchase transaction batches"
+  },
+  "/{administration_id}/subscription_templates/{id}/checkout_identifier": {
+   "GET": "Create online sales link [Deprecated]"
+  },
+  "/{administration_id}/subscription_templates/{id}/sales_link": {
+   "POST": "Create online sales link"
+  },
+  "/{administration_id}/subscription_templates": {
+   "GET": "List all subscription templates"
+  },
+  "/{administration_id}/subscriptions/{id}/additional_charges": {
+   "GET": "Get additional charges",
+   "POST": "Create an additional charge to be invoiced together with the subscription"
+  },
+  "/{administration_id}/subscriptions/{id}/create_and_schedule_one_off_sales_invoice": {
+   "POST": "Create and schedule an invoice to be sent together with the subscription"
+  },
+  "/{administration_id}/subscriptions/{id}": {
+   "GET": "Get subscription",
+   "PATCH": "Update a subscription",
+   "DELETE": "Cancel a subscription"
+  },
+  "/{administration_id}/subscriptions": {
+   "GET": "List all subscriptions",
+   "POST": "Create a new subscription"
+  },
+  "/{administration_id}/task_list_groups/{id}": {
+   "GET": "Returns information about a task list group",
+   "PATCH": "Updates a task list group",
+   "DELETE": "Deletes a task list group"
+  },
+  "/{administration_id}/task_list_groups/{task_list_group_id}/tasks": {
+   "POST": "Creates a new task in a group"
+  },
+  "/{administration_id}/task_list_tasks/{id}": {
+   "GET": "Returns information about a task",
+   "PATCH": "Updates a task",
+   "DELETE": "Deletes a task"
+  },
+  "/{administration_id}/task_list_tasks/{task_list_task_id}/assignment": {
+   "POST": "Assigns a user to a task",
+   "DELETE": "Unassigns the user from a task"
+  },
+  "/{administration_id}/task_list_tasks/{task_list_task_id}/completion": {
+   "POST": "Completes a task",
+   "DELETE": "Reopens a task"
+  },
+  "/{administration_id}/task_list_tasks/{task_list_task_id}/notes": {
+   "POST": "Creates a note on a task"
+  },
+  "/{administration_id}/task_list_templates/{id}": {
+   "GET": "Returns information about a task list template",
+   "PATCH": "Updates a task list template",
+   "DELETE": "Deletes a task list template"
+  },
+  "/{administration_id}/task_list_templates/{task_list_template_id}/groups": {
+   "POST": "Creates a new group in a task list template"
+  },
+  "/{administration_id}/task_list_templates/{task_list_template_id}/task_lists": {
+   "POST": "Creates a task list from a template"
+  },
+  "/{administration_id}/task_list_templates": {
+   "GET": "List all task list templates of an administration",
+   "POST": "Creates a new task list template"
+  },
+  "/{administration_id}/task_lists/{id}": {
+   "GET": "Returns information about a task list",
+   "PATCH": "Updates a task list",
+   "DELETE": "Deletes a task list"
+  },
+  "/{administration_id}/task_lists/{task_list_id}/groups": {
+   "POST": "Creates a new group in a task list"
+  },
+  "/{administration_id}/task_lists": {
+   "GET": "List all task lists of an administration",
+   "POST": "Creates a new task list"
+  },
+  "/{administration_id}/tax_rates": {
+   "GET": "List all available tax rates for the administration"
+  },
+  "/{administration_id}/time_entries/{id}/resume": {
+   "PATCH": "Resume a stopped timer"
+  },
+  "/{administration_id}/time_entries/{id}/stop": {
+   "PATCH": "Stops an active time entry"
+  },
+  "/{administration_id}/time_entries/{id}": {
+   "GET": "Get a time entry by id",
+   "PATCH": "Update a time entry",
+   "DELETE": "Delete a time entry"
+  },
+  "/{administration_id}/time_entries/{time_entry_id}/notes/{id}": {
+   "DELETE": "Destroys note from entity"
+  },
+  "/{administration_id}/time_entries/{time_entry_id}/notes": {
+   "POST": "Adds note to entity"
+  },
+  "/{administration_id}/time_entries": {
+   "GET": "List all time entries",
+   "POST": "Create a time entry"
+  },
+  "/{administration_id}/users": {
+   "GET": "List all users"
+  },
+  "/{administration_id}/verifications": {
+   "GET": "Retrieve verifications"
+  },
+  "/{administration_id}/webhooks/{id}/activate": {
+   "PATCH": "Activate a webhook"
+  },
+  "/{administration_id}/webhooks/{id}/deactivate": {
+   "PATCH": "Deactivate a webhook"
+  },
+  "/{administration_id}/webhooks/{id}": {
+   "DELETE": "Delete a webhook"
+  },
+  "/{administration_id}/webhooks": {
+   "GET": "List all webhooks",
+   "POST": "Create a webhook"
+  },
+  "/{administration_id}/workflows/{id}": {
+   "GET": "Get a workflow by id"
+  },
+  "/{administration_id}/workflows": {
+   "GET": "Retrieve available workflows"
+  }
+ }
+}

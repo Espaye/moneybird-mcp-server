@@ -5,6 +5,10 @@ import urllib.error
 from pathlib import Path
 from unittest import mock
 
+# Isolate all server state (approvals DB, audit logs, sync caches) from the repo:
+# data_dir() reads this env var at call time, so setting it before any test runs is enough.
+os.environ["MONEYBIRD_MCP_DATA_DIR"] = tempfile.mkdtemp(prefix="moneybird_mcp_test_state_")
+
 import moneybird_mcp_server as server
 from moneybird import safety
 
@@ -386,12 +390,14 @@ class GuidanceTests(unittest.TestCase):
                 invoice_date="2026-07-16",
                 schedule_send_on="2026-07-16",
             ),
+            guidance.prompt_aan_de_slag(),
+            guidance.prompt_koppel_banktransacties(period="202506"),
         ]
         # Writing scenarios must spell out the approval discipline and the
         # never-invent rule; every scenario points at the playbook resource.
         for text in renderers:
             self.assertIn(guidance.PLAYBOOK_URI, text)
-        for text in [renderers[0], renderers[1], renderers[3]]:
+        for text in [renderers[0], renderers[1], renderers[3], renderers[4], renderers[5]]:
             self.assertIn("prepare_", text)
             self.assertIn("_from_approval", text)
             self.assertIn("Verzin NOOIT", text)
@@ -415,10 +421,12 @@ class GuidanceTests(unittest.TestCase):
         self.assertEqual(
             prompt_names,
             {
+                "aan_de_slag",
                 "verwerk_achterstand",
                 "categoriseer_heel_jaar",
                 "leg_cijfers_uit",
                 "diagnose_bankmutatie",
+                "koppel_banktransacties",
                 "factureer_meterverbruik",
             },
         )
@@ -478,10 +486,11 @@ class SyncIndexPathTests(unittest.TestCase):
     def test_path_is_per_administration_and_sanitized(self) -> None:
         from moneybird import sync
 
-        self.assertEqual(sync.sync_index_path(None), sync.LEGACY_SYNC_INDEX_PATH)
+        # No administration: same basename as the legacy single file, inside data_dir().
+        self.assertEqual(sync.sync_index_path(None).name, sync.LEGACY_SYNC_INDEX_PATH.name)
         per_admin = sync.sync_index_path("ab/cd")  # path-unsafe chars are sanitized
         self.assertEqual(per_admin.name, ".moneybird_sync_index_ab_cd.json")
-        self.assertNotEqual(per_admin, sync.LEGACY_SYNC_INDEX_PATH)
+        self.assertNotEqual(per_admin.name, sync.LEGACY_SYNC_INDEX_PATH.name)
 
     def test_round_trip_and_legacy_migration(self) -> None:
         from moneybird import sync
@@ -518,7 +527,7 @@ class SyncIndexPathTests(unittest.TestCase):
 
 class ApprovalSafetyTests(unittest.TestCase):
     def tearDown(self) -> None:
-        safety.PENDING_APPROVALS.clear()
+        safety.clear_pending_approvals()
 
     def test_approval_is_bound_to_administration(self) -> None:
         from moneybird.credentials import set_active_administration_id
@@ -537,6 +546,40 @@ class ApprovalSafetyTests(unittest.TestCase):
             administration_id="admin-a",
         )
         self.assertEqual(pending["administration_id"], "admin-a")
+
+    def test_approval_survives_restart_and_pops_once(self) -> None:
+        from moneybird.credentials import set_active_administration_id
+
+        set_active_administration_id("admin-a")
+        approval = safety.make_approval("demo", {"value": 2}, "Demo")
+        # Durable: the approval lives in SQLite on disk, not in process memory.
+        self.assertTrue(safety.approvals_db_path().exists())
+        self.assertGreaterEqual(safety.pending_approval_count(), 1)
+        pending = safety.pop_approval(
+            approval["approval_id"], "demo", administration_id="admin-a"
+        )
+        self.assertEqual(pending["payload"], {"value": 2})
+        # Single-use: a second pop of the same id must fail.
+        with self.assertRaises(server.MoneybirdError):
+            safety.pop_approval(
+                approval["approval_id"], "demo", administration_id="admin-a"
+            )
+
+    def test_expired_approval_is_rejected(self) -> None:
+        from moneybird.credentials import set_active_administration_id
+
+        set_active_administration_id("admin-a")
+        approval = safety.make_approval("demo", {"value": 3}, "Demo")
+        with safety._approvals_connection() as connection:
+            connection.execute(
+                "UPDATE approvals SET expires_at = ? WHERE approval_id = ?",
+                ("2000-01-01T00:00:00+00:00", approval["approval_id"]),
+            )
+        with self.assertRaises(server.MoneybirdError) as raised:
+            safety.pop_approval(
+                approval["approval_id"], "demo", administration_id="admin-a"
+            )
+        self.assertIn("expired", str(raised.exception))
 
 
 class ClientRetrySafetyTests(unittest.TestCase):
@@ -625,6 +668,7 @@ class MeterUsageTests(unittest.TestCase):
 
     def test_meter_usage_prepare_tool_returns_single_approval_preview(self) -> None:
         from moneybird import tools
+        from moneybird.tools import _context as tool_context
         from moneybird.credentials import set_active_administration_id
 
         fake = self.FakeClient()
@@ -633,8 +677,8 @@ class MeterUsageTests(unittest.TestCase):
             set_active_administration_id(fake.administration_id)
             return fake
 
-        safety.PENDING_APPROVALS.clear()
-        with mock.patch.object(tools, "get_client", side_effect=get_fake_client):
+        safety.clear_pending_approvals()
+        with mock.patch.object(tool_context, "get_client", side_effect=get_fake_client):
             prepared = tools.prepare_meter_usage_sales_invoices(
                 rows=[
                     {
@@ -714,6 +758,7 @@ class BatchScheduleTests(unittest.TestCase):
 
     def test_batch_schedule_executes_and_verifies(self) -> None:
         from moneybird import tools
+        from moneybird.tools import _context as tool_context
         from moneybird.credentials import set_active_administration_id
 
         fake = self.FakeClient()
@@ -722,12 +767,12 @@ class BatchScheduleTests(unittest.TestCase):
             set_active_administration_id(fake.administration_id)
             return fake
 
-        safety.PENDING_APPROVALS.clear()
+        safety.clear_pending_approvals()
         with (
-            mock.patch.object(tools, "get_client", side_effect=get_fake_client),
-            mock.patch.object(tools, "audit_log_contains_success", return_value=False),
-            mock.patch.object(tools, "append_audit_log"),
-            mock.patch.object(tools, "append_failed_audit_log"),
+            mock.patch.object(tool_context, "get_client", side_effect=get_fake_client),
+            mock.patch.object(tool_context, "audit_log_contains_success", return_value=False),
+            mock.patch.object(tool_context, "append_audit_log"),
+            mock.patch.object(tool_context, "append_failed_audit_log"),
         ):
             prepared = tools.prepare_batch_schedule_sales_invoices(
                 [{"sales_invoice_id": "invoice-1", "invoice_date": "2026-07-16"}]
@@ -737,6 +782,290 @@ class BatchScheduleTests(unittest.TestCase):
             )
         self.assertTrue(result["all_verified"])
         self.assertEqual(result["verification"][0]["state"], "scheduled")
+
+
+class _ToolPatches:
+    """Context helper: route tools.get_client to a fake and silence the audit log."""
+
+    def __init__(self, fake):
+        self.fake = fake
+
+    def __enter__(self):
+        from moneybird import tools
+        from moneybird.tools import _context as tool_context
+        from moneybird.credentials import set_active_administration_id
+
+        def get_fake_client(*args, **kwargs):
+            set_active_administration_id(self.fake.administration_id)
+            return self.fake
+
+        safety.clear_pending_approvals()
+        self._patches = [
+            mock.patch.object(tool_context, "get_client", side_effect=get_fake_client),
+            mock.patch.object(tool_context, "audit_log_contains_success", return_value=False),
+            mock.patch.object(tool_context, "append_audit_log"),
+            mock.patch.object(tool_context, "append_failed_audit_log"),
+        ]
+        for patch in self._patches:
+            patch.start()
+        return self
+
+    def __exit__(self, *exc_info):
+        for patch in self._patches:
+            patch.stop()
+        return False
+
+
+class RegisterPaymentTests(unittest.TestCase):
+    class FakeClient:
+        administration_id = "admin"
+
+        def __init__(self):
+            self.invoice = {
+                "id": "inv-1",
+                "invoice_id": "2026-0001",
+                "reference": "2026-0001",
+                "state": "open",
+                "invoice_date": "2026-06-01",
+                "contact": {"company_name": "Klant BV"},
+                "total_price_incl_tax": "121.00",
+                "total_unpaid": "121.00",
+                "payments": [],
+            }
+
+        def get_sales_invoice(self, invoice_id):
+            return dict(self.invoice)
+
+        def register_sales_invoice_payment(self, invoice_id, payment):
+            self.invoice["payments"] = [dict(payment)]
+            self.invoice["total_unpaid"] = "0.00"
+            return dict(self.invoice)
+
+    def test_full_payment_prepares_and_verifies(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_register_payment(
+                document_type="sales_invoice",
+                document_id="inv-1",
+                payment_date="2026-06-15",
+                price="121.00",
+            )
+            self.assertEqual(prepared["preview"]["document"]["open_amount"], "121.00")
+            result = tools.register_payment_from_approval(prepared["approval_id"])
+        verification = result["verification"]
+        self.assertTrue(verification["total_unchanged_to_the_cent"])
+        self.assertTrue(verification["payment_visible_on_document"])
+        self.assertEqual(verification["open_amount_after"], "0.00")
+
+    def test_overpayment_warns_in_preview(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_register_payment(
+                document_type="sales_invoice",
+                document_id="inv-1",
+                payment_date="2026-06-15",
+                price="150.00",
+            )
+        self.assertTrue(
+            any("higher than the open amount" in w for w in prepared["preview"]["warnings"])
+        )
+
+    def test_rejects_unknown_document_type(self) -> None:
+        from moneybird import tools
+
+        with self.assertRaises(server.MoneybirdError):
+            tools.prepare_register_payment(
+                document_type="estimate",
+                document_id="x",
+                payment_date="2026-06-15",
+                price="10",
+            )
+
+
+class LinkBankMutationTests(unittest.TestCase):
+    class FakeClient:
+        administration_id = "admin"
+
+        def __init__(self):
+            self.mutation = {
+                "id": "mut-1",
+                "date": "2026-06-20",
+                "message": "Factuur 2026-0001",
+                "contra_account_name": "Klant BV",
+                "state": "unprocessed",
+                "amount": "121.00",
+                "amount_open": "121.00",
+                "payments": [],
+                "ledger_account_bookings": [],
+            }
+            self.invoice = {
+                "id": "inv-1",
+                "invoice_id": "2026-0001",
+                "reference": "2026-0001",
+                "state": "open",
+                "contact": {"company_name": "Klant BV"},
+                "total_price_incl_tax": "121.00",
+                "total_unpaid": "121.00",
+                "payments": [],
+            }
+
+        def get_financial_mutation(self, mutation_id):
+            return dict(self.mutation)
+
+        def get_sales_invoice(self, invoice_id):
+            return dict(self.invoice)
+
+        def link_financial_mutation_booking(self, mutation_id, booking):
+            self.mutation["payments"] = [
+                {"id": "pay-1", "price": "121.00", "invoice_id": "inv-1", "invoice_type": "SalesInvoice"}
+            ]
+            self.mutation["state"] = "processed"
+            self.mutation["amount_open"] = "0.00"
+
+    def test_link_executes_and_verifies(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_link_bank_mutation_booking(
+                financial_mutation_id="mut-1",
+                booking_type="SalesInvoice",
+                booking_id="inv-1",
+            )
+            self.assertIn("full open amount", prepared["preview"]["price_note"])
+            self.assertEqual(
+                prepared["preview"]["booking_target"]["total_price_incl_tax"], "121.00"
+            )
+            result = tools.link_bank_mutation_booking_from_approval(
+                prepared["approval_id"]
+            )
+        self.assertTrue(result["verification"]["new_link_visible_on_mutation"])
+        self.assertEqual(result["verification"]["after"]["state"], "processed")
+
+    def test_rejects_invalid_booking_type(self) -> None:
+        from moneybird import tools
+
+        with self.assertRaises(server.MoneybirdError):
+            tools.prepare_link_bank_mutation_booking(
+                financial_mutation_id="mut-1",
+                booking_type="Invoice",
+                booking_id="inv-1",
+            )
+
+
+class UnlinkBankMutationTests(unittest.TestCase):
+    class FakeClient:
+        administration_id = "admin"
+
+        def __init__(self):
+            self.mutation = {
+                "id": "mut-1",
+                "date": "2026-06-20",
+                "message": "Huur juni",
+                "state": "processed",
+                "amount": "-950.00",
+                "payments": [],
+                "ledger_account_bookings": [
+                    {"id": "book-1", "ledger_account_id": "la-9", "price": "-950.00", "description": "Huur"}
+                ],
+            }
+
+        def get_financial_mutation(self, mutation_id):
+            return dict(self.mutation)
+
+        def unlink_financial_mutation_booking(self, mutation_id, *, booking_type, booking_id):
+            self.mutation["ledger_account_bookings"] = []
+            self.mutation["state"] = "unprocessed"
+
+    def test_unlink_requires_existing_booking(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            with self.assertRaises(server.MoneybirdError):
+                tools.prepare_unlink_bank_mutation_booking(
+                    financial_mutation_id="mut-1",
+                    booking_type="LedgerAccountBooking",
+                    booking_id="missing",
+                )
+
+    def test_unlink_executes_and_verifies(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_unlink_bank_mutation_booking(
+                financial_mutation_id="mut-1",
+                booking_type="LedgerAccountBooking",
+                booking_id="book-1",
+            )
+            self.assertEqual(prepared["preview"]["unlink"]["id"], "book-1")
+            result = tools.unlink_bank_mutation_booking_from_approval(
+                prepared["approval_id"]
+            )
+        self.assertTrue(result["verification"]["booking_removed_from_mutation"])
+
+
+class CreditInvoiceTests(unittest.TestCase):
+    class FakeClient:
+        administration_id = "admin"
+
+        def __init__(self):
+            self.invoice = {
+                "id": "inv-1",
+                "invoice_id": "2026-0001",
+                "reference": "2026-0001",
+                "state": "open",
+                "invoice_date": "2026-06-01",
+                "contact": {"company_name": "Klant BV"},
+                "total_price_incl_tax": "100.00",
+            }
+
+        def get_sales_invoice(self, invoice_id):
+            return dict(self.invoice)
+
+        def duplicate_sales_invoice_to_credit_invoice(self, invoice_id):
+            return {
+                "id": "inv-2",
+                "state": "draft",
+                "reference": "2026-0001",
+                "total_price_incl_tax": "-100.00",
+            }
+
+    def test_credit_invoice_verifies_negated_total(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_create_credit_invoice(sales_invoice_id="inv-1")
+            result = tools.create_credit_invoice_from_approval(prepared["approval_id"])
+        self.assertEqual(result["credit_invoice"]["state"], "draft")
+        self.assertTrue(result["verification"]["credit_negates_original"])
+
+
+class ReportEndpointTests(unittest.TestCase):
+    def test_aging_reports_use_period_until(self) -> None:
+        import moneybird.client as client_module
+
+        client = client_module.MoneybirdClient("token", "admin")
+        with mock.patch.object(client, "_request", return_value={}) as request:
+            client.get_report("debtors_aging", period="20260630")
+        request.assert_called_once_with(
+            "GET",
+            "/admin/reports/debtors_aging.json",
+            query={"period_until": "20260630"},
+        )
+
+    def test_pagination_rejected_for_unpaginated_report(self) -> None:
+        import moneybird.client as client_module
+
+        client = client_module.MoneybirdClient("token", "admin")
+        with self.assertRaises(server.MoneybirdError):
+            client.get_report("profit_loss", period="this_year", page=2)
 
 
 if __name__ == "__main__":

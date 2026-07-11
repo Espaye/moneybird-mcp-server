@@ -22,10 +22,13 @@ It exposes these tools:
 - `list_financial_accounts`
 - `list_projects`
 - `list_time_entries`
+- `list_estimates`
+- `list_recurring_sales_invoices`
 - `moneybird_request`
 - `get_profit_loss`
 - `get_balance_sheet`
 - `get_general_ledger`
+- `get_financial_report`
 - `sync_search_index`
 - `search_contacts`
 - `get_invoice_defaults_for_contact`
@@ -59,6 +62,14 @@ It exposes these tools:
 - `update_contact_from_approval`
 - `prepare_archive_contact`
 - `archive_contact_from_approval`
+- `prepare_register_payment`
+- `register_payment_from_approval`
+- `prepare_link_bank_mutation_booking`
+- `link_bank_mutation_booking_from_approval`
+- `prepare_unlink_bank_mutation_booking`
+- `unlink_bank_mutation_booking_from_approval`
+- `prepare_create_credit_invoice`
+- `create_credit_invoice_from_approval`
 
 The first two are the important ones if you want ChatGPT deep research or ChatGPT developer mode to treat Moneybird like a data source. The `prepare_*` and `*_from_approval` pairs are the guarded write path.
 
@@ -81,6 +92,11 @@ MONEYBIRD_ADMINISTRATION_ID=123456789
 MCP_HOST=127.0.0.1
 MCP_PORT=8000
 MCP_AUTH_TOKEN=
+# Optional: where server state lives (approvals DB, audit logs, sync caches).
+# Defaults to the working directory; set an absolute path for real deployments.
+MONEYBIRD_MCP_DATA_DIR=
+# Optional: "sse" (default, endpoint /sse) or "http" (streamable HTTP, endpoint /mcp).
+MCP_TRANSPORT=sse
 ```
 
 `MONEYBIRD_ADMINISTRATION_ID` can be left blank if your token only has access to one administration. If the token can see more than one, the server will ask you to choose one explicitly.
@@ -118,7 +134,11 @@ Notes and limits:
   history.
 - **Not yet included:** a full OAuth flow and a server-side per-user token store. This header
   model fits a small, trusted group; a public multi-user product would add OAuth + token storage
-  on top.
+  on top. The prerequisite that cannot be automated: register an OAuth application with
+  Moneybird (Instellingen → Ontwikkelaars, or via their partner program) to obtain a
+  client_id/client_secret; after that the server would implement the standard authorization-code
+  flow described at `https://developer.moneybird.com/authentication` and store per-user refresh
+  tokens next to the other server state.
 
 ## 3. Install and run
 
@@ -127,11 +147,15 @@ python -m pip install -r requirements.txt
 python .\moneybird_mcp_server.py
 ```
 
-By default the server exposes an SSE endpoint at:
+By default the server exposes a (legacy) SSE endpoint at:
 
 ```text
 http://localhost:8000/sse
 ```
+
+Set `MCP_TRANSPORT=http` to serve the current MCP streamable-HTTP transport at
+`http://localhost:8000/mcp` instead — prefer this for new clients; `sse` remains
+the default only so existing deployments keep working.
 
 ## Project layout
 
@@ -139,26 +163,62 @@ The server is split into a small package by concern; `moneybird_mcp_server.py`
 is just the entrypoint you run.
 
 ```text
-moneybird_mcp_server.py   # entrypoint: env-driven host/port/auth, runs the SSE app
+moneybird_mcp_server.py   # entrypoint: env-driven host/port/auth/transport
 moneybird/
-  config.py               # constants, MoneybirdError, .env loading
+  config.py               # constants, MoneybirdError, .env loading, data_dir()
   credentials.py          # per-request tenant credentials (headers) + env fallback
   client.py               # Moneybird REST client (HTTP, retry/backoff)
   formatting.py           # pure helpers: titles, money, search-record shaping
-  safety.py               # write guards: approval tokens (TTL) + audit log
+  safety.py               # write guards: durable approvals (SQLite) + audit log
   sync.py                 # local search-index sync (cached on disk)
   invoicing.py            # bookkeeping logic: journals, invoices, merge/reclassify
-  tools.py                # the ~51 MCP tools exposed to ChatGPT
+  tools/                  # the 66 MCP tools, split by domain
+    _registry.py          #   FastMCP instance + always-on server instructions
+    _context.py           #   patchable indirection for client + audit-log access
+    _writes.py            #   shared prepare/approve machinery (stage_write, run_approved_write)
+    core.py               #   administrations, search/fetch, sync index, raw GET
+    contacts.py           #   contact reads + guarded contact writes
+    sales.py              #   sales reads + draft/send/pause/resume/credit writes
+    sales_batches.py      #   batch create/update/schedule + meter-usage run
+    purchases.py          #   purchase invoices, receipts, journals (reads)
+    bank.py               #   financial mutations + link/unlink bookings
+    payments.py           #   payment registration on invoices and receipts
+    ledger.py             #   ledger accounts, general journals, reclassification
+    reference.py          #   products, tax rates, projects, time entries, accounts
+    reports.py            #   all Moneybird reports
   guidance.py             # the "skill" layer: playbook resource + scenario prompts
   playbooks/
     boekhoud_playbook.md  # deep bookkeeping reference (loaded on demand)
-  auth.py                 # optional shared-secret SSE auth middleware
+  auth.py                 # optional shared-secret auth middleware
+docs/
+  moneybird_api_coverage.md  # all 296 API operations + per-endpoint coverage status
+  moneybird_api_paths.json   # slim OpenAPI snapshot backing the conformance test
 ```
 
 Dependencies flow one way: `config → credentials → client → formatting → safety →
 sync → invoicing → tools`. Nothing below `tools` imports from `tools`. `guidance.py`
-imports nothing from the package and is registered imperatively at the end of
-`tools.py`, so it cannot create an import cycle.
+imports nothing from the package and is registered by `tools/__init__.py`, so it
+cannot create an import cycle.
+
+### Write flow machinery
+
+Every guarded write follows the same discipline via `tools/_writes.py`: a
+`prepare_*` tool validates, builds a preview, and calls `stage_write(...)`; the
+matching `*_from_approval` tool calls `run_approved_write(...)`, which pops the
+stored approval, enforces the duplicate-suppression fingerprint, executes, and
+audit-logs success or failure in one place. Adding a new write means writing a
+prepare function and an executor — the safety plumbing comes for free. A few
+multi-step batch flows (batch invoices, meter usage, reclassify, bulk delivery
+method) keep hand-rolled executors because they record partial progress on failure.
+
+### Durable approvals & server state
+
+Approvals are stored in SQLite (`moneybird_approvals.sqlite3`), so a prepared write
+survives a server restart and works across multiple worker processes. All server
+state (approvals DB, per-administration audit logs, sync caches) lives in
+`MONEYBIRD_MCP_DATA_DIR` (default: the working directory, for backward
+compatibility); legacy state files in the working directory are still read and
+migrated transparently.
 
 ## 4. Connect it to ChatGPT
 
@@ -203,10 +263,13 @@ Then use the public URL ending in `/sse`.
 - `list_financial_accounts(limit=25, page=1)`: reads available bank, cash, and intermediary accounts.
 - `list_projects(limit=25, page=1, state="")`: lists projects; optional `state` is `active`, `archived`, or `all`.
 - `list_time_entries(limit=25, page=1, filter="", period="")`: lists logged hours; `filter` accepts Moneybird query syntax (e.g. `contact_id:123`, `project_id:456`, `state:open`), `period` accepts e.g. `202506` or `20250101..20250331`.
+- `list_estimates(limit=10, page=1, filter="", period="")`: compact offerteoverzicht; `filter` accepts e.g. `state:open|late|accepted|rejected|billed`.
+- `list_recurring_sales_invoices(limit=10, page=1, filter="")`: compact overzicht van periodieke facturen (frequentie, volgende factuurdatum, `auto_send`).
 - `moneybird_request(path, query=None)`: read-only escape hatch that performs a single GET against any Moneybird endpoint this server does not wrap explicitly (e.g. `estimates`, `subscriptions`, `time_entries/123`, `documents/purchase_invoices`). `path` is relative to the administration; use `administrations` for the API root. It can only read — use the `prepare_*` / `*_from_approval` tools to change anything.
 - `get_profit_loss(period)`: reads the Moneybird profit and loss report for the requested period.
 - `get_balance_sheet(period)`: reads the Moneybird balance sheet report for the requested period.
 - `get_general_ledger(period)`: reads the Moneybird general ledger report for the requested period.
+- `get_financial_report(report_name, period, page=0)`: reads any Moneybird report — `profit_loss`, `balance_sheet`, `general_ledger`, `cash_flow`, `tax` (btw), `debtors` / `creditors` (openstaande posten), `debtors_aging` / `creditors_aging`, `revenue_by_contact`, `revenue_by_project`, `expenses_by_contact`, `expenses_by_project`, `journal_entries`, `subscriptions`, `assets`. Note: `cash_flow`, `tax`, `debtors`, and `creditors` accept at most one month of period (`this_month`, `202606`); the aging reports take a whole month as reference date.
 - `sync_search_index(invoice_filter="state:all,period:this_year", document_filter="period:this_year", financial_mutation_filter="period:this_year", force_full=False)`: builds or refreshes a local cached search index from Moneybird synchronization endpoints across contacts, sales invoices, purchase invoices, receipts, general journals, and financial mutations.
 - `search_contacts(query, limit=10)`: contact lookup by partial customer id, e-mail, phone, city, or company/person name.
 - `get_invoice_defaults_for_contact(contact_id="", customer_id="")`: reads the latest invoice defaults for a contact so new invoices can inherit the right workflow, style, identity, tax, ledger, and send settings.
@@ -240,6 +303,14 @@ Then use the public URL ending in `/sse`.
 - `update_contact_from_approval(approval_id)`: executes the staged contact update.
 - `prepare_archive_contact(contact_id)`: stages archiving a contact.
 - `archive_contact_from_approval(approval_id)`: executes the staged archive.
+- `prepare_register_payment(document_type, document_id, payment_date, price, ...)`: stages a payment registration on a sales invoice, purchase invoice, or receipt, with an open-amount preview and overpayment/partial-payment warnings.
+- `register_payment_from_approval(approval_id)`: executes the payment registration and verifies the document total is unchanged and the payment is visible.
+- `prepare_link_bank_mutation_booking(financial_mutation_id, booking_type, booking_id, price="")`: stages linking a bank/cash mutation to an open invoice/document (`SalesInvoice`, `Document`) or directly to a ledger category (`LedgerAccount`) — the manual counterpart of Moneybird's bank reconciliation. Empty `price` links the full open amount.
+- `link_bank_mutation_booking_from_approval(approval_id)`: executes the link and verifies the payment/category booking appears on the mutation.
+- `prepare_unlink_bank_mutation_booking(financial_mutation_id, booking_type, booking_id)`: stages removing a wrongly matched `Payment` or `LedgerAccountBooking` from a mutation (errors early if the booking id is not on the mutation).
+- `unlink_bank_mutation_booking_from_approval(approval_id)`: executes the unlink and verifies the booking is gone.
+- `prepare_create_credit_invoice(sales_invoice_id)`: stages duplicating an invoice into a draft credit invoice (negated amounts, nothing sent).
+- `create_credit_invoice_from_approval(approval_id)`: executes the credit duplication and verifies the credit total negates the original.
 
 ## 5b. Prompts and the playbook (the "skill" layer)
 
@@ -252,6 +323,12 @@ It uses progressive disclosure rather than one giant always-on instruction:
   tax advisor).
 - **Scenarios (MCP prompts)** — invokable, parameterized playbooks that carry the rails
   inline and point at the reference:
+  - `aan_de_slag()` — first-run onboarding: explains what the assistant can do, shows the
+    approval mechanism, pulls a first read-only picture of the administration, and offers
+    five concrete starter tasks.
+  - `koppel_banktransacties(period, limit)` — walk through unprocessed bank mutations,
+    propose a match per mutation (open invoice, document, or ledger category), and link
+    each one after approval via the bank-mutation booking tools.
   - `verwerk_achterstand(period, document_kind)` — work through a backlog: inventory,
     categorize, and apply consistently, with approval per batch.
   - `categoriseer_heel_jaar(year)` — categorize a full year, quarter by quarter and
@@ -293,6 +370,10 @@ Relevant OpenAI docs:
 - It now also supports previewed batch invoice creation, batch scheduling with verification,
   a first-class meter-usage invoice run, duplicate warnings, automatic merge checks for
   scheduled sends, workflow pause/resume, and batch invoice updates.
+- It also supports the daily-bookkeeping writes: payment registration on sales/purchase
+  invoices and receipts, linking/unlinking bank mutations to invoices, documents, or ledger
+  categories (manual bank reconciliation), and duplicating an invoice to a draft credit
+  invoice — all approval-gated with automatic post-write verification.
 - When a new invoice is scheduled for a contact/date that already has exactly one scheduled invoice, the server automatically reuses that invoice's workflow/style/identity defaults before showing the approval preview.
 - `search` uses a local synchronization cache when available and falls back to a live first-page scan when no cache exists yet.
 - The sync cache now covers contacts, sales invoices, purchase invoices, receipts, general journal documents, and financial mutations.
@@ -303,3 +384,5 @@ Relevant OpenAI docs:
 - OpenAI’s current MCP docs explicitly warn that prompt injection and accidental writes are real risks. Do not disable approvals for destructive tools unless you truly trust the full prompt chain and the server.
 - **Boekingsregels (bank/transaction rules) are not exposed by the Moneybird API**, so the server cannot read or change them. To explain why a bank mutation was not auto-processed, the `diagnose_bankmutatie` prompt and playbook recipe E infer rule behavior from the financial-mutation fields and `created_at`/`processed_at` timing, and point the user to Moneybird's own Boekingsregels settings.
 - `list_financial_mutations` returns HTTP 400 ("too many ... use sync API") for a wide period; query per month (`period:"JJJJMM01..JJJJMMnn"`) or use the sync index.
+- The `cash_flow`, `tax`, `debtors`, and `creditors` reports accept at most one month of period; the `*_aging` reports require a whole month as reference date (verified live: `{"error":"Period cannot exceed 1 month"}`).
+- `docs/moneybird_api_coverage.md` holds the full catalogue of all 296 Moneybird API operations (from the official OpenAPI spec) with per-endpoint coverage status — consult it before wrapping new endpoints.

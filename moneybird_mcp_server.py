@@ -88,14 +88,20 @@ if __name__ == "__main__":
     host = os.environ.get("MCP_HOST", "127.0.0.1")
     port = int(os.environ.get("MCP_PORT", "8000"))
     auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
+    # "http" = streamable HTTP (current MCP transport, endpoint /mcp);
+    # "sse" = legacy SSE (endpoint /sse), kept as default for existing deployments.
+    transport = os.environ.get("MCP_TRANSPORT", "sse").strip().lower()
+    if transport not in {"sse", "http"}:
+        logger.error("MCP_TRANSPORT must be 'sse' or 'http', not %r.", transport)
+        raise SystemExit(1)
 
     middleware = []
     if auth_token:
         middleware.append(Middleware(SharedSecretAuthMiddleware, token=auth_token))
-        logger.info("Shared-secret auth ENABLED on the SSE endpoint.")
+        logger.info("Shared-secret auth ENABLED on the MCP endpoint.")
     else:
         logger.warning(
-            "MCP_AUTH_TOKEN is not set: the SSE endpoint has NO authentication. "
+            "MCP_AUTH_TOKEN is not set: the MCP endpoint has NO authentication. "
             "This is only safe because host=%s. Set MCP_AUTH_TOKEN before exposing "
             "the server beyond loopback.",
             host,
@@ -108,6 +114,13 @@ if __name__ == "__main__":
             )
             raise SystemExit(1)
 
-    app = mcp.http_app(transport="sse", middleware=middleware or None)
-    logger.info("Starting Moneybird MCP server on %s:%s (SSE at /sse)", host, port)
+    app = mcp.http_app(transport=transport, middleware=middleware or None)
+    endpoint = "/sse" if transport == "sse" else "/mcp"
+    logger.info(
+        "Starting Moneybird MCP server on %s:%s (%s at %s)",
+        host,
+        port,
+        "legacy SSE" if transport == "sse" else "streamable HTTP",
+        endpoint,
+    )
     uvicorn.run(app, host=host, port=port)

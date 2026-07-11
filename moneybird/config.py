@@ -109,7 +109,66 @@ REPORT_ENDPOINTS = {
     "profit_loss": "profit_loss",
     "balance_sheet": "balance_sheet",
     "general_ledger": "general_ledger",
+    "cash_flow": "cash_flow",
+    "tax": "tax",
+    "debtors": "debtors",
+    "debtors_aging": "debtors_aging",
+    "creditors": "creditors",
+    "creditors_aging": "creditors_aging",
+    "revenue_by_contact": "revenue_by_contact",
+    "revenue_by_project": "revenue_by_project",
+    "expenses_by_contact": "expenses_by_contact",
+    "expenses_by_project": "expenses_by_project",
+    "journal_entries": "journal_entries",
+    "subscriptions": "subscriptions",
+    "assets": "assets",
 }
+
+
+# The aging reports take a reference date (period_until) instead of a period range.
+REPORT_PERIOD_PARAM_OVERRIDES = {
+    "debtors_aging": "period_until",
+    "creditors_aging": "period_until",
+}
+
+
+# Reports that support page/per_page pagination.
+PAGINATED_REPORTS = {
+    "debtors",
+    "debtors_aging",
+    "creditors",
+    "creditors_aging",
+    "revenue_by_contact",
+    "revenue_by_project",
+    "expenses_by_contact",
+    "expenses_by_project",
+    "journal_entries",
+}
+
+
+# Valid booking_type values for linking a financial mutation to a booking.
+FINANCIAL_MUTATION_LINK_BOOKING_TYPES = {
+    "SalesInvoice",
+    "Document",
+    "LedgerAccount",
+    "PaymentTransactionBatch",
+    "PurchaseTransaction",
+    "NewPurchaseInvoice",
+    "NewReceipt",
+    "PaymentTransaction",
+    "PurchaseTransactionBatch",
+    "ExternalSalesInvoice",
+    "Payment",
+    "VatDocument",
+}
+
+
+# Valid booking_type values for unlinking a booking from a financial mutation.
+FINANCIAL_MUTATION_UNLINK_BOOKING_TYPES = {"Payment", "LedgerAccountBooking"}
+
+
+# Document kinds that support register_payment (general journals do not carry payments).
+PAYABLE_DOCUMENT_KINDS = {"sales_invoice", "purchase_invoice", "receipt"}
 
 
 LEDGER_ACCOUNT_REFERENCE_FIELDS = {"ledger_account_id", "ledger_account_name"}
@@ -122,6 +181,25 @@ DOCUMENT_POSTABLE_ACCOUNT_TYPES = {"expenses", "direct_costs", "other_income_exp
 
 class MoneybirdError(RuntimeError):
     """Raised when Moneybird rejects a request or configuration is incomplete."""
+
+
+
+
+def data_dir() -> Path:
+    """Directory for server state (approvals DB, audit logs, sync caches).
+
+    Defaults to the current working directory for backward compatibility with
+    existing deployments; set ``MONEYBIRD_MCP_DATA_DIR`` to move state out of
+    the repo/cwd (recommended for anything beyond local development). Read at
+    call time, not import time, so tests and long-running processes can
+    redirect state without re-importing.
+    """
+    override = os.environ.get("MONEYBIRD_MCP_DATA_DIR", "").strip()
+    if not override:
+        return Path(".")
+    path = Path(override).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 

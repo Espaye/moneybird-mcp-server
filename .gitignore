@@ -10,3 +10,6 @@ __pycache__/
 
 # Generated bookkeeping data dumps (financial data, not source code)
 outputs/
+
+# Durable approval store (state, not source)
+moneybird_approvals.sqlite3

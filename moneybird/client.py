@@ -17,7 +17,9 @@ from .config import (
     DEFAULT_TIMEOUT_SECONDS,
     MAX_RETRY_DELAY_SECONDS,
     MoneybirdError,
+    PAGINATED_REPORTS,
     REPORT_ENDPOINTS,
+    REPORT_PERIOD_PARAM_OVERRIDES,
     RETRYABLE_HTTP_STATUS_CODES,
 )
 from .credentials import resolve_credentials, set_active_administration_id
@@ -393,9 +395,14 @@ class MoneybirdClient:
         )
 
     def get_financial_account(self, financial_account_id: str) -> dict[str, Any]:
-        return self._request(
-            "GET",
-            f"/{self.administration_id}/financial_accounts/{financial_account_id}.json",
+        # The API documents no GET /financial_accounts/{id} (it returns 404 live),
+        # so fetch the list and select the record client-side.
+        wanted = str(financial_account_id)
+        for account in self.list_financial_accounts(limit=100):
+            if str(account.get("id")) == wanted:
+                return account
+        raise MoneybirdError(
+            f"Financial account {financial_account_id} not found in this administration."
         )
 
     def list_projects(
@@ -610,17 +617,140 @@ class MoneybirdClient:
             retry_safe=True,
         )
 
-    def get_report(self, report_name: str, *, period: str) -> dict[str, Any]:
-        endpoint = REPORT_ENDPOINTS.get(str(report_name).strip())
+    def get_report(
+        self,
+        report_name: str,
+        *,
+        period: str,
+        page: int | None = None,
+        extra_query: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        name = str(report_name).strip()
+        endpoint = REPORT_ENDPOINTS.get(name)
         if not endpoint:
             supported = ", ".join(sorted(REPORT_ENDPOINTS))
             raise MoneybirdError(
                 f"Unsupported report '{report_name}'. Use one of: {supported}."
             )
+        period_param = REPORT_PERIOD_PARAM_OVERRIDES.get(name, "period")
+        query: dict[str, Any] = {period_param: period}
+        if page is not None:
+            if name not in PAGINATED_REPORTS:
+                raise MoneybirdError(
+                    f"Report '{name}' does not support pagination."
+                )
+            query["page"] = max(1, page)
+        if extra_query:
+            query.update(extra_query)
         return self._request(
             "GET",
             f"/{self.administration_id}/reports/{endpoint}.json",
-            query={"period": period},
+            query=query,
+        )
+
+    def register_sales_invoice_payment(
+        self,
+        sales_invoice_id: str,
+        payment: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._request(
+            "PATCH",
+            f"/{self.administration_id}/sales_invoices/{sales_invoice_id}/register_payment.json",
+            body={"payment": payment},
+        )
+
+    def register_document_payment(
+        self,
+        kind: str,
+        document_id: str,
+        payment: dict[str, Any],
+    ) -> dict[str, Any]:
+        config = document_kind_config(kind)
+        if config["record_key"] not in {"purchase_invoice", "receipt"}:
+            raise MoneybirdError(
+                f"Documents of kind '{kind}' do not support payment registration."
+            )
+        return self._request(
+            "PATCH",
+            f"/{self.administration_id}/{config['collection_path']}/{document_id}/register_payment.json",
+            body={"payment": payment},
+        )
+
+    def link_financial_mutation_booking(
+        self,
+        mutation_id: str,
+        booking: dict[str, Any],
+    ) -> Any:
+        return self._request(
+            "PATCH",
+            f"/{self.administration_id}/financial_mutations/{mutation_id}/link_booking.json",
+            body=booking,
+        )
+
+    def unlink_financial_mutation_booking(
+        self,
+        mutation_id: str,
+        *,
+        booking_type: str,
+        booking_id: str,
+    ) -> Any:
+        return self._request(
+            "DELETE",
+            f"/{self.administration_id}/financial_mutations/{mutation_id}/unlink_booking.json",
+            body={"booking_type": booking_type, "booking_id": booking_id},
+        )
+
+    def duplicate_sales_invoice_to_credit_invoice(
+        self,
+        sales_invoice_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "PATCH",
+            f"/{self.administration_id}/sales_invoices/{sales_invoice_id}/duplicate_creditinvoice.json",
+        )
+
+    def list_estimates(
+        self,
+        *,
+        limit: int = 10,
+        page: int = 1,
+        filter: str = "",
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {
+            "per_page": max(1, min(limit, 100)),
+            "page": max(1, page),
+        }
+        if filter:
+            query["filter"] = filter
+        return self._request(
+            "GET",
+            f"/{self.administration_id}/estimates.json",
+            query=query,
+        )
+
+    def get_estimate(self, estimate_id: str) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/{self.administration_id}/estimates/{estimate_id}.json",
+        )
+
+    def list_recurring_sales_invoices(
+        self,
+        *,
+        limit: int = 10,
+        page: int = 1,
+        filter: str = "",
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {
+            "per_page": max(1, min(limit, 100)),
+            "page": max(1, page),
+        }
+        if filter:
+            query["filter"] = filter
+        return self._request(
+            "GET",
+            f"/{self.administration_id}/recurring_sales_invoices.json",
+            query=query,
         )
 
     def create_ledger_account(

@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .config import MoneybirdError
+from .config import MoneybirdError, data_dir
 from .client import MoneybirdClient
 from .formatting import (
     chunked,
@@ -28,9 +28,19 @@ LEGACY_SYNC_INDEX_PATH = Path(f"{SYNC_INDEX_BASENAME}.json")
 
 def sync_index_path(administration_id: str | None) -> Path:
     if not administration_id:
-        return LEGACY_SYNC_INDEX_PATH
+        return data_dir() / LEGACY_SYNC_INDEX_PATH.name
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(administration_id))
-    return Path(f"{SYNC_INDEX_BASENAME}_{safe}.json")
+    return data_dir() / f"{SYNC_INDEX_BASENAME}_{safe}.json"
+
+
+def _legacy_sync_index_candidates(administration_id: str | None) -> list[Path]:
+    """Pre-data-dir locations (cwd) this index may still live at, newest layout first."""
+    candidates: list[Path] = []
+    if administration_id:
+        safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(administration_id))
+        candidates.append(Path(f"{SYNC_INDEX_BASENAME}_{safe}.json"))
+    candidates.append(LEGACY_SYNC_INDEX_PATH)
+    return candidates
 
 
 
@@ -75,13 +85,18 @@ def load_sync_index(administration_id: str | None = None) -> dict[str, Any]:
     if path.exists():
         return ensure_sync_index_shape(json.loads(path.read_text(encoding="utf-8")))
 
-    # Migrate transparently: if a legacy single-file cache exists and belongs to this
-    # administration, use it until the next sync rewrites it at the per-admin path.
-    if administration_id and LEGACY_SYNC_INDEX_PATH.exists():
+    # Migrate transparently from pre-data-dir locations (cwd): the per-admin file
+    # first, then the pre-multitenant single file. The next sync rewrites the index
+    # at the current path.
+    for legacy_path in _legacy_sync_index_candidates(administration_id):
+        if legacy_path.resolve() == path.resolve() or not legacy_path.exists():
+            continue
         legacy = ensure_sync_index_shape(
-            json.loads(LEGACY_SYNC_INDEX_PATH.read_text(encoding="utf-8"))
+            json.loads(legacy_path.read_text(encoding="utf-8"))
         )
-        if str(legacy.get("administration_id")) == str(administration_id):
+        if not administration_id or str(legacy.get("administration_id")) == str(
+            administration_id
+        ):
             return legacy
 
     return ensure_sync_index_shape({})

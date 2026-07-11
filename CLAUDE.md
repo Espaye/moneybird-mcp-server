@@ -79,12 +79,39 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   it doesn't change any total.
 - **Boekingsregels (bank/transaction rules) are not in the API** — see
   `moneybird/playbooks/boekhoud_playbook.md` and the memory note. Don't try to read them.
+- **Sommige rapporten zijn maand-gebonden**: `cash_flow`, `tax`, `debtors` en `creditors`
+  accepteren maximaal één maand (`this_month`, `202606`); de `*_aging`-rapporten willen een
+  hele maand als peildatum. Alleen `profit_loss`, `balance_sheet`, `general_ledger` en de
+  `*_by_contact`/`*_by_project`-rapporten slikken `this_year`. (Live geverifieerd:
+  `{"error":"Period cannot exceed 1 month"}`.)
+- **Betalingen en bankkoppeling hebben eigen guarded tools**: `prepare_register_payment`
+  (verkoopfactuur/inkoopfactuur/bon), `prepare_link_bank_mutation_booking` /
+  `prepare_unlink_bank_mutation_booking` (bankmutatie ↔ factuur/document/grootboekcategorie)
+  en `prepare_create_credit_invoice`. Gebruik die, geen handmatige constructies.
+
+## API coverage reference
+
+`docs/moneybird_api_coverage.md` is the generated catalogue of **all 296 operations** in the
+official Moneybird OpenAPI spec, annotated with what this server covers (dedicated tool,
+`moneybird_request` read, or not exposed). Check it before wrapping a new endpoint or before
+answering "does the API support X?". Its header explains how to regenerate it from the spec
+asset bundled on developer.moneybird.com.
 
 ## Where things live
 
-- `moneybird/tools.py` — MCP tool definitions (read tools, `prepare_*`/`*_from_approval`).
-- `moneybird/client.py` — HTTP client + endpoint methods.
-- `moneybird/config.py` — constants, `MoneybirdError`, `.env` loading.
+- `moneybird/tools/` — MCP tool definitions, split by domain (`sales.py`, `bank.py`,
+  `payments.py`, `contacts.py`, `ledger.py`, `purchases.py`, `reference.py`,
+  `reports.py`, `core.py`, `sales_batches.py`). `_registry.py` holds the FastMCP
+  instance + server instructions; `_context.py` is the patchable indirection tests use
+  (`mock.patch.object(moneybird.tools._context, "get_client", ...)`); `_writes.py` is
+  the shared write machinery — new guarded writes use `stage_write` +
+  `run_approved_write`, don't hand-roll the approval/audit plumbing.
+- `moneybird/client.py` — HTTP client + endpoint methods. Every endpoint it calls is
+  checked against `docs/moneybird_api_paths.json` by
+  `tests/test_client_spec_conformance.py`, so a typo'd path fails the suite.
+- `moneybird/config.py` — constants, `MoneybirdError`, `.env` loading, and `data_dir()`
+  (where approvals DB / audit logs / sync caches live; override with
+  `MONEYBIRD_MCP_DATA_DIR`). Approvals are persisted in SQLite and survive restarts.
 - `moneybird/playbooks/boekhoud_playbook.md` — btw rules, categorization, consistency
   checklist, bank-mutation diagnosis. Read it before a bookkeeping task.
 - `scripts/` — runnable read-only/reclassify scripts (good examples of the patterns above).
@@ -92,6 +119,6 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
 
 ## Tests
 
-`python -m pytest -q` from the repo root. (Note: one pre-existing failure,
-`test_register_guidance_registers_prompts_and_resource`, is stale — it predates the
-`diagnose_bankmutatie` prompt and is unrelated to live Moneybird work.)
+`python -m pytest -q` from the repo root. All tests should pass; when adding an MCP prompt,
+also update `test_register_guidance_registers_prompts_and_resource` (it pins the exact
+prompt-name set).

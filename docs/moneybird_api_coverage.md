@@ -1,0 +1,493 @@
+# Moneybird API — full endpoint catalogue and server coverage
+
+Generated from the official OpenAPI spec published on developer.moneybird.com
+(spec version `v2-20260710-57729b61b9`, retrieved 2026-07-11). The spec is bundled as a JS
+asset on the docs site (`/assets/api-openapi.yaml-<hash>.js`, referenced from
+`/assets/entry.client-<hash>.js`); evaluate that module with Node and read its `schema`
+export to regenerate this file.
+
+> 296 operations in the API: **77** with a dedicated tool or flow, **60** readable
+> through the generic `moneybird_request` escape hatch, **159** not exposed by this server.
+
+Legend: ✅ dedicated tool/flow · 🔎 reachable read-only via `moneybird_request` (no dedicated
+tool) · — not exposed (writes are only ever exposed through explicit `prepare_*` /
+`*_from_approval` pairs; unexposed writes cannot be triggered through this server at all).
+
+Known API blind spot: **boekingsregels (bank/transaction rules) are not in the API at all** —
+they appear nowhere below because Moneybird does not publish endpoints for them.
+
+## Administrations
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/administrations` | List all administrations | ✅ `list_administrations` |
+
+## Assets
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/assets` | List all assets | 🔎 moneybird_request (generic GET) |
+| POST | `/assets` | Create a new asset | — |
+| DELETE | `/assets/{id}` | Delete an asset | — |
+| GET | `/assets/{id}` | Get an asset by ID | 🔎 moneybird_request (generic GET) |
+| PATCH | `/assets/{id}` | Update an asset | — |
+| POST | `/assets/{id}/disposals` | Create a disposal | — |
+| DELETE | `/assets/{id}/reinvestment_reserve_purchase` | Delete a reinvestment reserve purchase | — |
+| POST | `/assets/{id}/reinvestment_reserve_purchase` | Create a reinvestment reserve purchase | — |
+| DELETE | `/assets/{id}/reinvestment_reserve_sale` | Delete a reinvestment reserve sale | — |
+| POST | `/assets/{id}/reinvestment_reserve_sale` | Create a reinvestment reserve sale | — |
+| POST | `/assets/{id}/sources` | Add a source to an asset | — |
+| DELETE | `/assets/{id}/sources/{source_id}` | Delete a source | — |
+| POST | `/assets/{id}/value_changes/arbitrary` | Create an arbitrary value change | — |
+| POST | `/assets/{id}/value_changes/divestment` | Create a divestment value change | — |
+| POST | `/assets/{id}/value_changes/full_depreciation` | Create a full depreciation value change | — |
+| POST | `/assets/{id}/value_changes/manual` | Create a manual value change | — |
+| POST | `/assets/{id}/value_changes/retroactive_linear_value_changes` | Create linear value changes retroactively | — |
+
+## Contacts
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/contacts` | List all contacts | ✅ `list_contacts` |
+| POST | `/contacts` | Create a new contact | ✅ `prepare_create_contact` |
+| POST | `/contacts/{contact_id}/contact_people` | Create a new contact person | — |
+| DELETE | `/contacts/{contact_id}/contact_people/{id}` | Delete a contact person | — |
+| GET | `/contacts/{contact_id}/contact_people/{id}` | Get contact person | 🔎 moneybird_request (generic GET) |
+| PATCH | `/contacts/{contact_id}/contact_people/{id}` | Update a contact person | — |
+| DELETE | `/contacts/{contact_id}/moneybird_payments_mandate` | Delete a stored Moneybird Payments mandate | — |
+| GET | `/contacts/{contact_id}/moneybird_payments_mandate` | Get Moneybird Payments mandate | 🔎 moneybird_request (generic GET) |
+| POST | `/contacts/{contact_id}/moneybird_payments_mandate` | Request a new Moneybird Payments mandate | — |
+| POST | `/contacts/{contact_id}/moneybird_payments_mandate/url` | Request an URL for setting up a Moneybird Payments mandate | — |
+| POST | `/contacts/{contact_id}/notes` | Adds note to entity | — |
+| DELETE | `/contacts/{contact_id}/notes/{id}` | Destroys note from entity | — |
+| DELETE | `/contacts/{id}` | Delete a contact | — |
+| GET | `/contacts/{id}` | Get contact | ✅ `fetch("contact:<id>")` |
+| PATCH | `/contacts/{id}` | Update a contact | ✅ `prepare_update_contact` |
+| GET | `/contacts/{id}/additional_charges` | Get additional charges | 🔎 moneybird_request (generic GET) |
+| POST | `/contacts/{id}/additional_charges` | Create an additional charge to be invoiced at start of next period | — |
+| PATCH | `/contacts/{id}/archive` | Archive a contact | ✅ `prepare_archive_contact` |
+| GET | `/contacts/customer_id/{customer_id}` | Get contact by customer id | ✅ `get_contact_by_customer_id` |
+| GET | `/contacts/filter` | Filter contacts | ✅ `search_contacts (via local index)` |
+| GET | `/contacts/synchronization` | List all ids and versions | ✅ `sync_search_index` |
+| POST | `/contacts/synchronization` | Fetch contacts with given ids | ✅ `sync_search_index` |
+
+## Custom fields
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/custom_fields` | List all custom fields | 🔎 moneybird_request (generic GET) |
+
+## Customer contact portal
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/customer_contact_portal/{contact_id}` | Get a temporary link to the customer contact portal | 🔎 moneybird_request (generic GET) |
+| GET | `/customer_contact_portal/{contact_id}/invoices` | Get a temporary link to the invoices in the customer contact portal | 🔎 moneybird_request (generic GET) |
+| GET | `/customer_contact_portal/{contact_id}/subscriptions/{id}` | Get a temporary link to the subscriptions in the customer contact portal | 🔎 moneybird_request (generic GET) |
+
+## Document styles
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/document_styles` | List all document styles | 🔎 moneybird_request (generic GET) |
+
+## Documents: General documents
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/documents/general_documents` | Get general documents | 🔎 moneybird_request (generic GET) |
+| POST | `/documents/general_documents` | Create a new general document | — |
+| POST | `/documents/general_documents/{general_document_id}/notes` | Adds note to entity | — |
+| DELETE | `/documents/general_documents/{general_document_id}/notes/{id}` | Destroys note from entity | — |
+| DELETE | `/documents/general_documents/{id}` | Delete a general document | — |
+| GET | `/documents/general_documents/{id}` | Get general document | 🔎 moneybird_request (generic GET) |
+| PATCH | `/documents/general_documents/{id}` | Update a general document | — |
+| POST | `/documents/general_documents/{id}/attachments` | Add attachment to general document | — |
+| DELETE | `/documents/general_documents/{id}/attachments/{attachment_id}` | Delete an attachment | — |
+| GET | `/documents/general_documents/{id}/attachments/{attachment_id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/documents/general_documents/synchronization` | List ids and versions of general documents | 🔎 moneybird_request (generic GET) |
+| POST | `/documents/general_documents/synchronization` | Fetch general documents with given ids | — |
+
+## Documents: General journal documents
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/documents/general_journal_documents` | Get general journal documents | ✅ `list_general_journal_documents` |
+| POST | `/documents/general_journal_documents` | Create a new general journal document | ✅ `prepare_create_general_journal_document` |
+| POST | `/documents/general_journal_documents/{general_journal_document_id}/notes` | Adds note to entity | — |
+| DELETE | `/documents/general_journal_documents/{general_journal_document_id}/notes/{id}` | Destroys note from entity | — |
+| DELETE | `/documents/general_journal_documents/{id}` | Delete a general journal document | — |
+| GET | `/documents/general_journal_documents/{id}` | Get general journal document | ✅ `fetch("general_journal_document:<id>")` |
+| PATCH | `/documents/general_journal_documents/{id}` | Update a general journal document | — |
+| POST | `/documents/general_journal_documents/{id}/attachments` | Add attachment to general journal document | — |
+| DELETE | `/documents/general_journal_documents/{id}/attachments/{attachment_id}` | Delete an attachment | — |
+| GET | `/documents/general_journal_documents/{id}/attachments/{attachment_id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/documents/general_journal_documents/synchronization` | List ids and versions of general journal documents | ✅ `sync_search_index` |
+| POST | `/documents/general_journal_documents/synchronization` | Fetch general journal documents with given ids | ✅ `sync_search_index` |
+
+## Documents: Purchase invoices
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/documents/purchase_invoices` | Get purchase invoices | ✅ `list_purchase_invoices` |
+| POST | `/documents/purchase_invoices` | Create a new purchase invoice | — |
+| DELETE | `/documents/purchase_invoices/{id}` | Delete a purchase invoices | — |
+| GET | `/documents/purchase_invoices/{id}` | Get purchase invoice | ✅ `fetch("purchase_invoice:<id>")` |
+| PATCH | `/documents/purchase_invoices/{id}` | Update purchase invoice | ✅ `prepare_reclassify_document_lines` |
+| POST | `/documents/purchase_invoices/{id}/attachments` | Add attachment to purchase invoice | — |
+| DELETE | `/documents/purchase_invoices/{id}/attachments/{attachment_id}` | Delete an attachment | — |
+| GET | `/documents/purchase_invoices/{id}/attachments/{attachment_id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| POST | `/documents/purchase_invoices/{id}/payments` | Create a payment | — |
+| DELETE | `/documents/purchase_invoices/{id}/payments/{payment_id}` | Delete a payment | — |
+| PATCH | `/documents/purchase_invoices/{id}/register_payment` | Register a payment for a purchase invoice | ✅ `prepare_register_payment` |
+| POST | `/documents/purchase_invoices/{purchase_invoice_id}/notes` | Adds note to entity | — |
+| DELETE | `/documents/purchase_invoices/{purchase_invoice_id}/notes/{id}` | Destroys note from entity | — |
+| GET | `/documents/purchase_invoices/synchronization` | List ids and versions of purchase invoices | ✅ `sync_search_index` |
+| POST | `/documents/purchase_invoices/synchronization` | Fetch purchase invoices with given ids | ✅ `sync_search_index` |
+
+## Documents: Receipts
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/documents/receipts` | List receipts | ✅ `list_receipts` |
+| POST | `/documents/receipts` | Create a new receipt | — |
+| DELETE | `/documents/receipts/{id}` | Delete a receipts | — |
+| GET | `/documents/receipts/{id}` | Get a receipt | ✅ `fetch("receipt:<id>")` |
+| PATCH | `/documents/receipts/{id}` | Update a receipt | ✅ `prepare_reclassify_document_lines` |
+| POST | `/documents/receipts/{id}/attachments` | Add attachment to receipt | — |
+| DELETE | `/documents/receipts/{id}/attachments/{attachment_id}` | Delete an attachment | — |
+| GET | `/documents/receipts/{id}/attachments/{attachment_id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| POST | `/documents/receipts/{id}/payments` | Create a payment | — |
+| DELETE | `/documents/receipts/{id}/payments/{payment_id}` | Delete a payment | — |
+| PATCH | `/documents/receipts/{id}/register_payment` | Register a payment for a receipt | ✅ `prepare_register_payment` |
+| POST | `/documents/receipts/{receipt_id}/notes` | Adds note to entity | — |
+| DELETE | `/documents/receipts/{receipt_id}/notes/{id}` | Destroys note from entity | — |
+| GET | `/documents/receipts/synchronization` | List ids and versions of receipts | ✅ `sync_search_index` |
+| POST | `/documents/receipts/synchronization` | Fetch receipts with given ids | ✅ `sync_search_index` |
+
+## Documents: Typeless documents
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/documents/typeless_documents` | Get typeless documents | 🔎 moneybird_request (generic GET) |
+| POST | `/documents/typeless_documents` | Create a new typeless document | — |
+| DELETE | `/documents/typeless_documents/{id}` | Delete a typeless document | — |
+| GET | `/documents/typeless_documents/{id}` | Get a typeless document | 🔎 moneybird_request (generic GET) |
+| POST | `/documents/typeless_documents/{id}/attachments` | Add attachment to typeless document | — |
+| DELETE | `/documents/typeless_documents/{id}/attachments/{attachment_id}` | Delete an attachment | — |
+| GET | `/documents/typeless_documents/{id}/attachments/{attachment_id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/documents/typeless_documents/synchronization` | List ids and versions of typeless documents | 🔎 moneybird_request (generic GET) |
+| POST | `/documents/typeless_documents/synchronization` | Fetch typeless documents with given ids | — |
+
+## Downloads
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/downloads` | List all downloads | 🔎 moneybird_request (generic GET) |
+| POST | `/downloads/{id}/download` | Download a file | — |
+
+## Estimates
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/estimates` | List all estimates | ✅ `list_estimates` |
+| POST | `/estimates` | Creates a new estimate | — |
+| DELETE | `/estimates/{estimate_id}/attachments/{id}` | Delete an attachment | — |
+| GET | `/estimates/{estimate_id}/attachments/{id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| POST | `/estimates/{estimate_id}/notes` | Adds note to entity | — |
+| DELETE | `/estimates/{estimate_id}/notes/{id}` | Destroys note from entity | — |
+| DELETE | `/estimates/{id}` | Deletes an estimate | — |
+| GET | `/estimates/{id}` | Get an estimate by id | ✅ `client get_estimate` |
+| PATCH | `/estimates/{id}` | Updates an estimate | — |
+| POST | `/estimates/{id}/attachments` | Add attachment to estimate | — |
+| PATCH | `/estimates/{id}/bill_estimate` | Bills an estimate | — |
+| PATCH | `/estimates/{id}/change_state` | Changes the state of an estimate | — |
+| GET | `/estimates/{id}/download_pdf` | Download estimate PDF by id | 🔎 moneybird_request (generic GET) |
+| PATCH | `/estimates/{id}/send_estimate` | Sends an estimate | — |
+| GET | `/estimates/find_by_estimate_id/{estimate_id}` | Get an estimate by estimate_id | 🔎 moneybird_request (generic GET) |
+| GET | `/estimates/synchronization` | List all ids and versions | 🔎 moneybird_request (generic GET) |
+| POST | `/estimates/synchronization` | Fetch estimates with given ids | — |
+
+## External sales invoices
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/external_sales_invoices` | List all external invoices | 🔎 moneybird_request (generic GET) |
+| POST | `/external_sales_invoices` | Create an external sales invoice | — |
+| DELETE | `/external_sales_invoices/{external_sales_invoice_id}/attachments/{id}` | Delete an attachment | — |
+| GET | `/external_sales_invoices/{external_sales_invoice_id}/attachments/{id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| POST | `/external_sales_invoices/{external_sales_invoice_id}/notes` | Adds note to entity | — |
+| DELETE | `/external_sales_invoices/{external_sales_invoice_id}/notes/{id}` | Destroys note from entity | — |
+| POST | `/external_sales_invoices/{external_sales_invoice_id}/payments` | Create a payment | — |
+| DELETE | `/external_sales_invoices/{external_sales_invoice_id}/payments/{id}` | Delete a payment | — |
+| DELETE | `/external_sales_invoices/{id}` | Delete an external sales invoice | — |
+| GET | `/external_sales_invoices/{id}` | Get an external sales invoice by id | 🔎 moneybird_request (generic GET) |
+| PATCH | `/external_sales_invoices/{id}` | Update an external sales invoice | — |
+| POST | `/external_sales_invoices/{id}/attachment` | Add attachment to external sales invoice | — |
+| PATCH | `/external_sales_invoices/{id}/mark_as_dubious` | Mark as dubious | — |
+| PATCH | `/external_sales_invoices/{id}/mark_as_uncollectible` | Mark as uncollectible | — |
+| POST | `/external_sales_invoices/attachment` | Create external sales invoice from attachment | — |
+| GET | `/external_sales_invoices/synchronization` | List all ids and versions | 🔎 moneybird_request (generic GET) |
+| POST | `/external_sales_invoices/synchronization` | Fetch external sales invoices with given ids | — |
+
+## Financial accounts
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/financial_accounts` | Retrieve all available financial accounts for the administration | ✅ `list_financial_accounts` |
+
+## Financial mutations
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/financial_mutations` | List all financial mutations | ✅ `list_financial_mutations` |
+| GET | `/financial_mutations/{id}` | Get a financial mutation by id | ✅ `fetch("financial_mutation:<id>")` |
+| PATCH | `/financial_mutations/{id}/link_booking` | Links a financial mutation to a booking | ✅ `prepare_link_bank_mutation_booking` |
+| DELETE | `/financial_mutations/{id}/unlink_booking` | Unlinks a booking from a financial mutation | ✅ `prepare_unlink_bank_mutation_booking` |
+| GET | `/financial_mutations/synchronization` | List all ids and versions | ✅ `sync_search_index` |
+| POST | `/financial_mutations/synchronization` | Fetch financial mutations with given ids | ✅ `sync_search_index` |
+
+## Financial statements
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| POST | `/financial_statements` | Create a new financial statement | — |
+| DELETE | `/financial_statements/{id}` | Delete a financial statement | — |
+| PATCH | `/financial_statements/{id}` | Update a financial statement | — |
+
+## Identities
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/identities` | Retrieve identities | 🔎 moneybird_request (generic GET) |
+| POST | `/identities` | Creates an identity | — |
+| DELETE | `/identities/{id}` | Deletes an identity | — |
+| GET | `/identities/{id}` | Retrieve identity by given id | 🔎 moneybird_request (generic GET) |
+| PATCH | `/identities/{id}` | Updates an identity | — |
+| GET | `/identities/default` | Retrieve the default identity | 🔎 moneybird_request (generic GET) |
+| PATCH | `/identities/default` | Updates the default identity | — |
+
+## Ledger accounts
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/ledger_accounts` | List all ledger accounts of an administration | ✅ `list_ledger_accounts` |
+| POST | `/ledger_accounts` | Creates a new ledger account | ✅ `prepare_create_ledger_account` |
+| DELETE | `/ledger_accounts/{id}` | Deletes a ledger account | — |
+| GET | `/ledger_accounts/{id}` | Returns information about a ledger account | ✅ `fetch("ledger_account:<id>")` |
+| PATCH | `/ledger_accounts/{id}` | Updates a ledger account | — |
+
+## Payments
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/payments/{id}` | Returns information about a payment | 🔎 moneybird_request (generic GET) |
+
+## Products
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/products` | List all products of an administration | ✅ `list_products` |
+| POST | `/products` | Creates a new product | — |
+| DELETE | `/products/{id}` | Deletes a product | — |
+| GET | `/products/{id}` | Returns information about a product | 🔎 moneybird_request (generic GET) |
+| PATCH | `/products/{id}` | Updates a product | — |
+| POST | `/products/{id}/sales_link` | Create online sales link | — |
+| GET | `/products/identifier/{identifier}` | Returns information about a product based on the identifier | 🔎 moneybird_request (generic GET) |
+
+## Projects
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/projects` | List all projects of an administration | ✅ `list_projects` |
+| POST | `/projects` | Creates a new project | — |
+| DELETE | `/projects/{id}` | Deletes a project | — |
+| GET | `/projects/{id}` | Returns information about a project | 🔎 moneybird_request (generic GET) |
+| PATCH | `/projects/{id}` | Updates a project | — |
+
+## Purchase transactions
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/purchase_transactions` | List all purchase transactions | 🔎 moneybird_request (generic GET) |
+| DELETE | `/purchase_transactions/{id}` | Delete a purchase transaction | — |
+| GET | `/purchase_transactions/{id}` | Get a purchase transaction by id | 🔎 moneybird_request (generic GET) |
+| DELETE | `/purchase_transactions/{id}/delete` | Delete a purchase transaction | — |
+| POST | `/sepa_credit_transfer` | Upload a SEPA credit transfer file to create purchase transaction batches | — |
+
+## Recurring sales invoices
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/recurring_sales_invoices` | List all recurring sales invoices | ✅ `list_recurring_sales_invoices` |
+| POST | `/recurring_sales_invoices` | Creates a new recurring sales invoice | — |
+| DELETE | `/recurring_sales_invoices/{id}` | Destroy or deactivate a recurring sales invoice | — |
+| GET | `/recurring_sales_invoices/{id}` | Get a recurring sales invoice by id | ✅ `client get_recurring_sales_invoice` |
+| PATCH | `/recurring_sales_invoices/{id}` | Updates a recurring sales invoice | — |
+| POST | `/recurring_sales_invoices/{recurring_sales_invoice_id}/notes` | Adds note to entity | — |
+| DELETE | `/recurring_sales_invoices/{recurring_sales_invoice_id}/notes/{id}` | Destroys note from entity | — |
+| GET | `/recurring_sales_invoices/synchronization` | List all IDs and versions | ✅ `client (delivery audit)` |
+| POST | `/recurring_sales_invoices/synchronization` | Fetch recurring sales invoices with given IDs | ✅ `client (delivery audit)` |
+
+## Reports
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/reports/assets` | Assets report | ✅ `get_financial_report` |
+| GET | `/reports/balance_sheet` | Balance sheet report | ✅ `get_financial_report` |
+| GET | `/reports/cash_flow` | Cash flow report | ✅ `get_financial_report` |
+| GET | `/reports/creditors_aging` | Creditors aging report | ✅ `get_financial_report` |
+| GET | `/reports/creditors` | Creditors report | ✅ `get_financial_report` |
+| GET | `/reports/debtors_aging` | Debtors aging report | ✅ `get_financial_report` |
+| GET | `/reports/debtors` | Debtors report | ✅ `get_financial_report` |
+| GET | `/reports/expenses_by_contact` | Expenses by contact report | ✅ `get_financial_report` |
+| GET | `/reports/expenses_by_project` | Expenses by project report | ✅ `get_financial_report` |
+| POST | `/reports/export/auditfile` | Export auditfile | — |
+| POST | `/reports/export/brugstaat` | Export brugstaat | — |
+| POST | `/reports/export/ledger_accounts` | Export ledger accounts | — |
+| GET | `/reports/general_ledger` | General ledger report | ✅ `get_financial_report` |
+| GET | `/reports/journal_entries` | Journal entries report | ✅ `get_financial_report` |
+| GET | `/reports/ledger_accounts/{ledger_account_id}` | Ledger account report | ✅ `get_financial_report` |
+| GET | `/reports/profit_loss` | Profit loss report | ✅ `get_financial_report` |
+| GET | `/reports/revenue_by_contact` | Revenue by contact report | ✅ `get_financial_report` |
+| GET | `/reports/revenue_by_project` | Revenue by project report | ✅ `get_financial_report` |
+| GET | `/reports/subscriptions` | Subscriptions report | ✅ `get_financial_report` |
+| GET | `/reports/tax` | Tax report | ✅ `get_financial_report` |
+
+## Sales invoices
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/sales_invoices` | List all invoices | ✅ `list_sales_invoices` |
+| POST | `/sales_invoices` | Create a sales invoice | ✅ `prepare_create_sales_invoice_draft / prepare_batch_create_sales_invoices` |
+| DELETE | `/sales_invoices/{id}` | Delete a sales invoice | — |
+| GET | `/sales_invoices/{id}` | Get an invoice by id | ✅ `fetch("sales_invoice:<id>")` |
+| PATCH | `/sales_invoices/{id}` | Update a sales invoice | ✅ `prepare_batch_update_sales_invoices` |
+| POST | `/sales_invoices/{id}/attachments` | Add attachment to sales invoice | — |
+| GET | `/sales_invoices/{id}/download_packing_slip_pdf` | Download sales invoice packing slip PDF by id | 🔎 moneybird_request (generic GET) |
+| GET | `/sales_invoices/{id}/download_pdf` | Download sales invoice PDF by id | 🔎 moneybird_request (generic GET) |
+| GET | `/sales_invoices/{id}/download_ubl` | Download sales invoice UBL by id | 🔎 moneybird_request (generic GET) |
+| PATCH | `/sales_invoices/{id}/duplicate_creditinvoice` | Duplicate to credit invoice | ✅ `prepare_create_credit_invoice` |
+| PATCH | `/sales_invoices/{id}/mark_as_dubious` | Mark as dubious | — |
+| PATCH | `/sales_invoices/{id}/mark_as_uncollectible` | Mark as uncollectible | — |
+| POST | `/sales_invoices/{id}/pause` | Pause sales invoice | ✅ `prepare_pause_sales_invoice_workflow` |
+| PATCH | `/sales_invoices/{id}/register_payment_creditinvoice` | Register a payment for a creditinvoice | — |
+| PATCH | `/sales_invoices/{id}/register_payment` | Register a payment | ✅ `prepare_register_payment` |
+| POST | `/sales_invoices/{id}/resume` | Resume sales invoice | ✅ `prepare_resume_sales_invoice_workflow` |
+| PATCH | `/sales_invoices/{id}/send_invoice` | Sends an invoice | ✅ `prepare_send_sales_invoice` |
+| DELETE | `/sales_invoices/{sales_invoice_id}/attachments/{id}` | Delete an attachment | — |
+| GET | `/sales_invoices/{sales_invoice_id}/attachments/{id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| POST | `/sales_invoices/{sales_invoice_id}/notes` | Adds note to entity | — |
+| DELETE | `/sales_invoices/{sales_invoice_id}/notes/{id}` | Destroys note from entity | — |
+| POST | `/sales_invoices/{sales_invoice_id}/payments` | Create a payment | — |
+| DELETE | `/sales_invoices/{sales_invoice_id}/payments/{id}` | Delete a payment | — |
+| GET | `/sales_invoices/find_by_invoice_id/{invoice_id}` | Get an invoice by invoice_id | ✅ `client get_sales_invoice_by_invoice_id` |
+| GET | `/sales_invoices/find_by_reference/{reference}` | Get an invoice by reference | ✅ `client get_sales_invoice_by_reference` |
+| POST | `/sales_invoices/send_reminders` | Sends a reminder | — |
+| GET | `/sales_invoices/synchronization` | List all ids and versions | ✅ `sync_search_index` |
+| POST | `/sales_invoices/synchronization` | Fetch sales invoices with given ids | ✅ `sync_search_index` |
+
+## Subscription templates
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/subscription_templates` | List all subscription templates | 🔎 moneybird_request (generic GET) |
+| GET | `/subscription_templates/{id}/checkout_identifier` | Create online sales link [Deprecated] | 🔎 moneybird_request (generic GET) |
+| POST | `/subscription_templates/{id}/sales_link` | Create online sales link | — |
+
+## Subscriptions
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/subscriptions` | List all subscriptions | 🔎 moneybird_request (generic GET) |
+| POST | `/subscriptions` | Create a new subscription | — |
+| DELETE | `/subscriptions/{id}` | Cancel a subscription | — |
+| GET | `/subscriptions/{id}` | Get subscription | 🔎 moneybird_request (generic GET) |
+| PATCH | `/subscriptions/{id}` | Update a subscription | — |
+| GET | `/subscriptions/{id}/additional_charges` | Get additional charges | 🔎 moneybird_request (generic GET) |
+| POST | `/subscriptions/{id}/additional_charges` | Create an additional charge to be invoiced together with the subscription | — |
+| POST | `/subscriptions/{id}/create_and_schedule_one_off_sales_invoice` | Create and schedule an invoice to be sent together with the subscription | — |
+
+## Task list templates
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/task_list_templates` | List all task list templates of an administration | 🔎 moneybird_request (generic GET) |
+| POST | `/task_list_templates` | Creates a new task list template | — |
+| DELETE | `/task_list_templates/{id}` | Deletes a task list template | — |
+| GET | `/task_list_templates/{id}` | Returns information about a task list template | 🔎 moneybird_request (generic GET) |
+| PATCH | `/task_list_templates/{id}` | Updates a task list template | — |
+| POST | `/task_list_templates/{task_list_template_id}/groups` | Creates a new group in a task list template | — |
+
+## Task lists
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| DELETE | `/task_list_groups/{id}` | Deletes a task list group | — |
+| GET | `/task_list_groups/{id}` | Returns information about a task list group | 🔎 moneybird_request (generic GET) |
+| PATCH | `/task_list_groups/{id}` | Updates a task list group | — |
+| POST | `/task_list_groups/{task_list_group_id}/tasks` | Creates a new task in a group | — |
+| DELETE | `/task_list_tasks/{id}` | Deletes a task | — |
+| GET | `/task_list_tasks/{id}` | Returns information about a task | 🔎 moneybird_request (generic GET) |
+| PATCH | `/task_list_tasks/{id}` | Updates a task | — |
+| DELETE | `/task_list_tasks/{task_list_task_id}/assignment` | Unassigns the user from a task | — |
+| POST | `/task_list_tasks/{task_list_task_id}/assignment` | Assigns a user to a task | — |
+| DELETE | `/task_list_tasks/{task_list_task_id}/completion` | Reopens a task | — |
+| POST | `/task_list_tasks/{task_list_task_id}/completion` | Completes a task | — |
+| POST | `/task_list_tasks/{task_list_task_id}/notes` | Creates a note on a task | — |
+| POST | `/task_list_templates/{task_list_template_id}/task_lists` | Creates a task list from a template | — |
+| GET | `/task_lists` | List all task lists of an administration | 🔎 moneybird_request (generic GET) |
+| POST | `/task_lists` | Creates a new task list | — |
+| DELETE | `/task_lists/{id}` | Deletes a task list | — |
+| GET | `/task_lists/{id}` | Returns information about a task list | 🔎 moneybird_request (generic GET) |
+| PATCH | `/task_lists/{id}` | Updates a task list | — |
+| POST | `/task_lists/{task_list_id}/groups` | Creates a new group in a task list | — |
+
+## Tax rates
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/tax_rates` | List all available tax rates for the administration | ✅ `list_tax_rates` |
+
+## Time entries
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/time_entries` | List all time entries | ✅ `list_time_entries` |
+| POST | `/time_entries` | Create a time entry | — |
+| DELETE | `/time_entries/{id}` | Delete a time entry | — |
+| GET | `/time_entries/{id}` | Get a time entry by id | 🔎 moneybird_request (generic GET) |
+| PATCH | `/time_entries/{id}` | Update a time entry | — |
+| PATCH | `/time_entries/{id}/resume` | Resume a stopped timer | — |
+| PATCH | `/time_entries/{id}/stop` | Stops an active time entry | — |
+| POST | `/time_entries/{time_entry_id}/notes` | Adds note to entity | — |
+| DELETE | `/time_entries/{time_entry_id}/notes/{id}` | Destroys note from entity | — |
+
+## Users
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/users` | List all users | 🔎 moneybird_request (generic GET) |
+
+## Verifications
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/verifications` | Retrieve verifications | 🔎 moneybird_request (generic GET) |
+
+## Webhooks
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/webhooks` | List all webhooks | 🔎 moneybird_request (generic GET) |
+| POST | `/webhooks` | Create a webhook | — |
+| DELETE | `/webhooks/{id}` | Delete a webhook | — |
+| PATCH | `/webhooks/{id}/activate` | Activate a webhook | — |
+| PATCH | `/webhooks/{id}/deactivate` | Deactivate a webhook | — |
+
+## Workflows
+
+| Method | Endpoint | Summary | Server coverage |
+|---|---|---|---|
+| GET | `/workflows` | Retrieve available workflows | 🔎 moneybird_request (generic GET) |
+| GET | `/workflows/{id}` | Get a workflow by id | 🔎 moneybird_request (generic GET) |
