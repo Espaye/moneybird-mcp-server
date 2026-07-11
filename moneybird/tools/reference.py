@@ -1,7 +1,9 @@
 """Reference data: products, tax rates, ledger accounts, financial accounts, projects, time entries."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ..config import (
     READ_ONLY_ANNOTATIONS,
@@ -9,12 +11,13 @@ from ..config import (
 from ..formatting import (
     compact_financial_account_summary,
 )
+from ._params import FilterString, Limit, Page, Period
 from ._registry import mcp
 from . import _context as ctx
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def list_products(limit: int = 25, page: int = 1) -> dict[str, Any]:
+def list_products(limit: Limit = 25, page: Page = 1) -> dict[str, Any]:
     """Use this when you need Moneybird product defaults such as tax_rate_id and ledger_account_id."""
     client = ctx.get_client()
     products = client.list_products(limit=limit, page=page)
@@ -74,7 +77,7 @@ def list_ledger_accounts() -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def list_financial_accounts(limit: int = 25, page: int = 1) -> dict[str, Any]:
+def list_financial_accounts(limit: Limit = 25, page: Page = 1) -> dict[str, Any]:
     """Use this when you need the available Moneybird bank, cash, or intermediary accounts."""
     client = ctx.get_client()
     financial_accounts = client.list_financial_accounts(limit=limit, page=page)
@@ -88,7 +91,11 @@ def list_financial_accounts(limit: int = 25, page: int = 1) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def list_projects(limit: int = 25, page: int = 1, state: str = "") -> dict[str, Any]:
+def list_projects(
+    limit: Limit = 25,
+    page: Page = 1,
+    state: Annotated[str, Field(description="Project state filter: 'active', 'archived', or 'all'. Empty = Moneybird default (active).")] = "",
+) -> dict[str, Any]:
     """Use this to list Moneybird projects. Optional state filter: active, archived, or all."""
     client = ctx.get_client()
     projects = client.list_projects(limit=limit, page=page, state=state)
@@ -109,10 +116,10 @@ def list_projects(limit: int = 25, page: int = 1, state: str = "") -> dict[str, 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_time_entries(
-    limit: int = 25,
-    page: int = 1,
-    filter: str = "",
-    period: str = "",
+    limit: Limit = 25,
+    page: Page = 1,
+    filter: FilterString = "",
+    period: Period = "",
 ) -> dict[str, Any]:
     """Use this to list Moneybird time entries (logged hours).
 

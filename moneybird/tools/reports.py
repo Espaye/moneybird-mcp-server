@@ -11,12 +11,13 @@ from ..config import (
 from ..formatting import (
     report_title,
 )
+from ._params import Period, ReportName, ReportPage
 from ._registry import mcp
 from . import _context as ctx
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def get_profit_loss(period: str) -> dict[str, Any]:
+def get_profit_loss(period: Period) -> dict[str, Any]:
     """Use this when you need the Moneybird profit and loss report for a specific period."""
     client = ctx.get_client()
     report = client.get_report("profit_loss", period=period)
@@ -28,7 +29,7 @@ def get_profit_loss(period: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def get_balance_sheet(period: str) -> dict[str, Any]:
+def get_balance_sheet(period: Period) -> dict[str, Any]:
     """Use this when you need the Moneybird balance sheet report for a specific period."""
     client = ctx.get_client()
     report = client.get_report("balance_sheet", period=period)
@@ -40,7 +41,7 @@ def get_balance_sheet(period: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def get_general_ledger(period: str) -> dict[str, Any]:
+def get_general_ledger(period: Period) -> dict[str, Any]:
     """Use this when you need the Moneybird general ledger report for a specific period."""
     client = ctx.get_client()
     report = client.get_report("general_ledger", period=period)
@@ -52,7 +53,7 @@ def get_general_ledger(period: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def get_financial_report(report_name: str, period: str, page: int = 0) -> dict[str, Any]:
+def get_financial_report(report_name: ReportName, period: Period, page: ReportPage = 0) -> dict[str, Any]:
     """Use this for any Moneybird report: profit_loss, balance_sheet, general_ledger, cash_flow,
     tax (btw), debtors (openstaande verkoopfacturen), creditors (openstaande inkoopfacturen),
     debtors_aging / creditors_aging, revenue_by_contact, revenue_by_project,

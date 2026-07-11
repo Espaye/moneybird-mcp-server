@@ -1,7 +1,9 @@
 """Contact reads and guarded contact writes (create/update/archive, delivery method)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ..config import (
     MoneybirdError,
@@ -23,13 +25,14 @@ from ..safety import make_approval, pop_approval
 from ..invoicing import (
     build_invoice_delivery_audit,
 )
+from ._params import ApprovalId, ContactId, CustomerId, Limit, Page
 from ._registry import mcp
 from ._writes import run_approved_write, stage_write
 from . import _context as ctx
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def list_contacts(limit: int = 10, page: int = 1) -> dict[str, Any]:
+def list_contacts(limit: Limit = 10, page: Page = 1) -> dict[str, Any]:
     """Use this when you need a compact list of Moneybird contacts without opening each record."""
     client = ctx.get_client()
     contacts = client.list_contacts(limit=limit, page=page)
@@ -52,8 +55,8 @@ def list_contacts(limit: int = 10, page: int = 1) -> dict[str, Any]:
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def audit_invoice_delivery_settings(
-    include_archived_contacts: bool = False,
-    include_inactive_recurring: bool = False,
+    include_archived_contacts: Annotated[bool, Field(description="Also audit archived contacts.")] = False,
+    include_inactive_recurring: Annotated[bool, Field(description="Also audit inactive recurring invoice templates.")] = False,
 ) -> dict[str, Any]:
     """Use this to verify contacts and recurring sales invoices are configured for automatic invoice e-mail delivery."""
     client = ctx.get_client()
@@ -65,7 +68,7 @@ def audit_invoice_delivery_settings(
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def get_contact_by_customer_id(customer_id: str) -> dict[str, Any]:
+def get_contact_by_customer_id(customer_id: CustomerId) -> dict[str, Any]:
     """Use this when you have your own external customer id and need the matching Moneybird contact."""
     client = ctx.get_client()
     record = client.get_contact_by_customer_id(customer_id)
@@ -86,16 +89,16 @@ def get_contact_by_customer_id(customer_id: str) -> dict[str, Any]:
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_create_contact(
-    company_name: str = "",
+    company_name: Annotated[str, Field(description="Company name. Give this and/or firstname+lastname.")] = "",
     firstname: str = "",
     lastname: str = "",
-    email: str = "",
-    customer_id: str = "",
+    email: Annotated[str, Field(description="Email address; Moneybird also uses it for invoice delivery.")] = "",
+    customer_id: Annotated[str, Field(description="Optional human-facing customer number; empty = Moneybird assigns one.")] = "",
     phone: str = "",
-    address1: str = "",
+    address1: Annotated[str, Field(description="Street and house number.")] = "",
     zipcode: str = "",
     city: str = "",
-    country: str = "NL",
+    country: Annotated[str, Field(description="ISO 3166-1 alpha-2 country code.")] = "NL",
 ) -> dict[str, Any]:
     """Use this before creating a Moneybird contact. Do not execute the write until the user explicitly confirms."""
     ctx.get_client()  # Resolve and bind the active administration to the approval.
@@ -146,7 +149,7 @@ def _contact_result(client, record: dict[str, Any], status: str) -> dict[str, An
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def create_contact_from_approval(approval_id: str) -> dict[str, Any]:
+def create_contact_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared contact creation."""
     client = ctx.get_client()
     return run_approved_write(
@@ -165,7 +168,7 @@ def create_contact_from_approval(approval_id: str) -> dict[str, Any]:
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_set_contacts_delivery_method_email(
-    include_archived_contacts: bool = False,
+    include_archived_contacts: Annotated[bool, Field(description="Also fix archived contacts.")] = False,
 ) -> dict[str, Any]:
     """Use this before bulk-changing Moneybird contacts so invoice delivery_method becomes Email. Do not execute the write until the user explicitly confirms."""
     client = ctx.get_client()
@@ -208,7 +211,7 @@ def prepare_set_contacts_delivery_method_email(
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def set_contacts_delivery_method_email_from_approval(approval_id: str) -> dict[str, Any]:
+def set_contacts_delivery_method_email_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed bulk-updating contact invoice delivery methods to Email."""
     client = ctx.get_client()
     pending = pop_approval(approval_id, "set_contacts_delivery_method_email", administration_id=client.administration_id)
@@ -283,20 +286,20 @@ def set_contacts_delivery_method_email_from_approval(approval_id: str) -> dict[s
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_update_contact(
-    contact_id: str,
+    contact_id: ContactId,
     company_name: str = "",
     firstname: str = "",
     lastname: str = "",
     email: str = "",
     phone: str = "",
-    customer_id: str = "",
-    address1: str = "",
+    customer_id: Annotated[str, Field(description="New human-facing customer number.")] = "",
+    address1: Annotated[str, Field(description="Street and house number.")] = "",
     zipcode: str = "",
     city: str = "",
-    country: str = "",
-    send_invoices_to_email: str = "",
-    delivery_method: str = "",
-    clear_fields: list[str] | None = None,
+    country: Annotated[str, Field(description="ISO 3166-1 alpha-2 country code.")] = "",
+    send_invoices_to_email: Annotated[str, Field(description="Email address invoices are sent to (may differ from the main email).")] = "",
+    delivery_method: Annotated[str, Field(description="Invoice delivery method: 'Email', 'Simplerinvoicing', 'Post', or 'Manual'.")] = "",
+    clear_fields: Annotated[list[str] | None, Field(description="Field names to blank on the contact, e.g. ['send_invoices_to_email']. Empty fields elsewhere mean 'keep current value'.")] = None,
 ) -> dict[str, Any]:
     """Use this before updating a Moneybird contact. Do not execute the write until the user explicitly confirms."""
     allowed_clear_fields = {
@@ -353,7 +356,7 @@ def prepare_update_contact(
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def update_contact_from_approval(approval_id: str) -> dict[str, Any]:
+def update_contact_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared contact update."""
     client = ctx.get_client()
     return run_approved_write(
@@ -369,7 +372,7 @@ def update_contact_from_approval(approval_id: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
-def prepare_archive_contact(contact_id: str) -> dict[str, Any]:
+def prepare_archive_contact(contact_id: ContactId) -> dict[str, Any]:
     """Use this before archiving a Moneybird contact. Do not execute the archive until the user explicitly confirms."""
     client = ctx.get_client()
     record = client.get_contact(contact_id)
@@ -388,7 +391,7 @@ def _execute_archive_contact(client, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def archive_contact_from_approval(approval_id: str) -> dict[str, Any]:
+def archive_contact_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared contact archive."""
     client = ctx.get_client()
     return run_approved_write(

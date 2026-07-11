@@ -110,7 +110,11 @@ asset bundled on developer.moneybird.com.
   instance + server instructions; `_context.py` is the patchable indirection tests use
   (`mock.patch.object(moneybird.tools._context, "get_client", ...)`); `_writes.py` is
   the shared write machinery — new guarded writes use `stage_write` +
-  `run_approved_write`, don't hand-roll the approval/audit plumbing.
+  `run_approved_write`, don't hand-roll the approval/audit plumbing. `_params.py` holds
+  the shared `Annotated[..., Field(...)]` parameter types (Limit, Period, ApprovalId,
+  ReportName, ...) that give MCP clients per-parameter descriptions and enums — use them
+  in new tool signatures; its Literal enums are kept in sync with `config.py` by
+  `tests/test_tool_params.py`.
 - `moneybird/client.py` — HTTP client + endpoint methods. Every endpoint it calls is
   checked against `docs/moneybird_api_paths.json` by
   `tests/test_client_spec_conformance.py`, so a typo'd path fails the suite.

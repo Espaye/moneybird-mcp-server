@@ -1,7 +1,9 @@
 """Bank/cash mutations: reads plus guarded link/unlink of bookings (manual reconciliation)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ..config import (
     FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
@@ -23,6 +25,16 @@ from ..formatting import (
 from ..invoicing import (
     parse_decimal_number,
 )
+from ._params import (
+    ApprovalId,
+    FilterString,
+    FinancialMutationId,
+    Limit,
+    LinkBookingType,
+    Page,
+    Period,
+    UnlinkBookingType,
+)
 from ._registry import mcp
 from ._writes import run_approved_write, stage_write
 from .payments import _open_amount
@@ -31,10 +43,10 @@ from . import _context as ctx
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_financial_mutations(
-    limit: int = 10,
-    page: int = 1,
-    filter: str = "",
-    period: str = "",
+    limit: Limit = 10,
+    page: Page = 1,
+    filter: FilterString = "",
+    period: Period = "",
 ) -> dict[str, Any]:
     """Use this when you need a compact list of Moneybird bank or cash mutations."""
     client = ctx.get_client()
@@ -119,10 +131,16 @@ def _mutation_link_state(record: dict[str, Any]) -> dict[str, Any]:
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_link_bank_mutation_booking(
-    financial_mutation_id: str,
-    booking_type: str,
-    booking_id: str,
-    price: str = "",
+    financial_mutation_id: FinancialMutationId,
+    booking_type: LinkBookingType,
+    booking_id: Annotated[
+        str,
+        Field(description="Id of the record to link, matching booking_type (e.g. the sales invoice, document, or ledger account id)."),
+    ],
+    price: Annotated[
+        str,
+        Field(description="Optional partial amount as a decimal string, e.g. '121.00'. Empty = link the full open amount."),
+    ] = "",
 ) -> dict[str, Any]:
     """Use this before linking a bank/cash mutation to a booking: an open invoice or document
     (booking_type SalesInvoice or Document) or directly to a ledger category (LedgerAccount).
@@ -200,7 +218,7 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def link_bank_mutation_booking_from_approval(approval_id: str) -> dict[str, Any]:
+def link_bank_mutation_booking_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared bank mutation link."""
     client = ctx.get_client()
     return run_approved_write(
@@ -210,9 +228,12 @@ def link_bank_mutation_booking_from_approval(approval_id: str) -> dict[str, Any]
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_unlink_bank_mutation_booking(
-    financial_mutation_id: str,
-    booking_type: str,
-    booking_id: str,
+    financial_mutation_id: FinancialMutationId,
+    booking_type: UnlinkBookingType,
+    booking_id: Annotated[
+        str,
+        Field(description="Id of the payment or ledger-account-booking entry as shown on the mutation."),
+    ],
 ) -> dict[str, Any]:
     """Use this before unlinking a wrongly matched booking from a bank/cash mutation.
     booking_type is Payment (a linked invoice/document payment) or LedgerAccountBooking
@@ -293,7 +314,7 @@ def _execute_unlink_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def unlink_bank_mutation_booking_from_approval(approval_id: str) -> dict[str, Any]:
+def unlink_bank_mutation_booking_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared bank mutation unlink."""
     client = ctx.get_client()
     return run_approved_write(

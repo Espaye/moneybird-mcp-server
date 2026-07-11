@@ -1,7 +1,9 @@
 """Batch sales-invoice flows: batch create/update/schedule and the meter-usage run."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ..config import (
     MoneybirdError,
@@ -25,6 +27,7 @@ from ..invoicing import (
     list_scheduled_merge_candidates,
     summarize_batch_preview,
 )
+from ._params import ApprovalId, DateString, OptionalDateString
 from ._registry import mcp
 from . import _context as ctx
 
@@ -63,9 +66,12 @@ def _prepare_batch_create_sales_invoices(
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_batch_create_sales_invoices(
-    entries: list[dict[str, Any]],
-    skip_if_duplicate: bool = True,
-    fail_on_duplicate: bool = False,
+    entries: Annotated[
+        list[dict[str, Any]],
+        Field(description="One dict per invoice: contact_id or customer_id, details (invoice lines), and optional reference, invoice_date, scheduled_send_on."),
+    ],
+    skip_if_duplicate: Annotated[bool, Field(description="Silently skip entries whose fingerprint already succeeded per the audit log.")] = True,
+    fail_on_duplicate: Annotated[bool, Field(description="Raise instead of skipping when a duplicate is detected.")] = False,
 ) -> dict[str, Any]:
     """Use this before creating multiple sales invoices in one batch. It returns a preview table, duplicate warnings, and an automatic merge-compatibility check before any write happens."""
     return _prepare_batch_create_sales_invoices(
@@ -77,7 +83,7 @@ def prepare_batch_create_sales_invoices(
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def batch_create_sales_invoices_from_approval(approval_id: str) -> dict[str, Any]:
+def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared batch invoice creation."""
     client = ctx.get_client()
     pending = pop_approval(approval_id, "batch_create_sales_invoices", administration_id=client.administration_id)
@@ -190,7 +196,10 @@ def batch_create_sales_invoices_from_approval(approval_id: str) -> dict[str, Any
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_batch_update_sales_invoices(
-    entries: list[dict[str, Any]],
+    entries: Annotated[
+        list[dict[str, Any]],
+        Field(description="One dict per update: sales_invoice_id (or customer_id plus filters) and the fields to change, e.g. details_attributes line edits."),
+    ],
 ) -> dict[str, Any]:
     """Use this before updating one or more existing sales invoices, either by explicit invoice id or by customer lookup plus filters."""
     if not entries:
@@ -296,7 +305,7 @@ def prepare_batch_update_sales_invoices(
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def batch_update_sales_invoices_from_approval(approval_id: str) -> dict[str, Any]:
+def batch_update_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared batch invoice update."""
     client = ctx.get_client()
     pending = pop_approval(approval_id, "batch_update_sales_invoices", administration_id=client.administration_id)
@@ -347,7 +356,10 @@ def batch_update_sales_invoices_from_approval(approval_id: str) -> dict[str, Any
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_batch_schedule_sales_invoices(
-    entries: list[dict[str, Any]],
+    entries: Annotated[
+        list[dict[str, Any]],
+        Field(description="One dict per invoice: sales_invoice_id and invoice_date (the future send date), plus optional delivery_method, email_address, email_message."),
+    ],
 ) -> dict[str, Any]:
     """Prepare multiple existing draft invoices for future sending in one approval.
 
@@ -458,7 +470,7 @@ def prepare_batch_schedule_sales_invoices(
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def batch_schedule_sales_invoices_from_approval(approval_id: str) -> dict[str, Any]:
+def batch_schedule_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Schedule a prepared invoice batch and verify every resulting invoice."""
     client = ctx.get_client()
     pending = pop_approval(
@@ -557,16 +569,19 @@ def batch_schedule_sales_invoices_from_approval(approval_id: str) -> dict[str, A
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_meter_usage_sales_invoices(
-    rows: list[dict[str, Any]],
-    period_label: str,
-    invoice_date: str,
-    schedule_send_on: str = "",
-    minimum_usage_kwh: str = "0",
-    description_prefix: str = "Elektra",
-    default_unit_price: str = "",
-    default_tax_rate_id: str = "",
-    default_ledger_account_id: str = "",
-    skip_meters: list[str] | None = None,
+    rows: Annotated[
+        list[dict[str, Any]],
+        Field(description="One dict per meter: meter (name), optional customer_id, and either usage_kwh or begin_reading + end_reading; optional action ('skip', 'draft', 'schedule', 'merge', 'separate') and per-row price/tax/ledger overrides."),
+    ],
+    period_label: Annotated[str, Field(description="Human-readable usage period for the line description, e.g. 'juni 2026'.")],
+    invoice_date: DateString,
+    schedule_send_on: OptionalDateString = "",
+    minimum_usage_kwh: Annotated[str, Field(description="Meters at or below this usage are skipped (decimal string).")] = "0",
+    description_prefix: Annotated[str, Field(description="Line description prefix; also used to find the previous matching meter line for defaults.")] = "Elektra",
+    default_unit_price: Annotated[str, Field(description="Fallback price per kWh when no previous meter line supplies one.")] = "",
+    default_tax_rate_id: Annotated[str, Field(description="Fallback tax rate id when no previous meter line supplies one.")] = "",
+    default_ledger_account_id: Annotated[str, Field(description="Fallback ledger account id when no previous meter line supplies one.")] = "",
+    skip_meters: Annotated[list[str] | None, Field(description="Meter names to exclude from the run.")] = None,
 ) -> dict[str, Any]:
     """Prepare a complete metered-usage invoice run from readings or supplied usage.
 
@@ -635,7 +650,7 @@ def prepare_meter_usage_sales_invoices(
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def meter_usage_sales_invoices_from_approval(approval_id: str) -> dict[str, Any]:
+def meter_usage_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Execute an approved metered-usage run and return automatic verification."""
     return batch_create_sales_invoices_from_approval(approval_id)
 

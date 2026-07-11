@@ -1,7 +1,9 @@
 """Guarded payment registration on sales invoices, purchase invoices, and receipts."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ..config import (
     MoneybirdError,
@@ -22,6 +24,12 @@ from ..formatting import (
 )
 from ..invoicing import (
     parse_decimal_number,
+)
+from ._params import (
+    ApprovalId,
+    DateString,
+    PayableDocumentType,
+    PriceString,
 )
 from ._registry import mcp
 from ._writes import run_approved_write, stage_write
@@ -83,14 +91,29 @@ def _payable_record_summary(
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_register_payment(
-    document_type: str,
-    document_id: str,
-    payment_date: str,
-    price: str,
-    financial_account_id: str = "",
-    financial_mutation_id: str = "",
-    transaction_identifier: str = "",
-    manual_payment_action: str = "",
+    document_type: PayableDocumentType,
+    document_id: Annotated[
+        str,
+        Field(description="Id of the sales invoice, purchase invoice, or receipt (matching document_type)."),
+    ],
+    payment_date: DateString,
+    price: PriceString,
+    financial_account_id: Annotated[
+        str,
+        Field(description="Optional financial account the payment came from/went to, e.g. from list_financial_accounts."),
+    ] = "",
+    financial_mutation_id: Annotated[
+        str,
+        Field(description="Optional bank mutation id to associate; prefer prepare_link_bank_mutation_booking when the mutation exists."),
+    ] = "",
+    transaction_identifier: Annotated[
+        str,
+        Field(description="Optional bank transaction reference to store on the payment."),
+    ] = "",
+    manual_payment_action: Annotated[
+        str,
+        Field(description="Optional Moneybird manual_payment_action, e.g. 'private_payment', 'cash_payment', 'payment_without_proof', 'rounding_error'."),
+    ] = "",
 ) -> dict[str, Any]:
     """Use this before registering a payment on a sales invoice, purchase invoice, or receipt
     (mark it fully or partially paid). document_type is sales_invoice, purchase_invoice, or
@@ -189,7 +212,7 @@ def _execute_register_payment(client, payload: dict[str, Any]) -> dict[str, Any]
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def register_payment_from_approval(approval_id: str) -> dict[str, Any]:
+def register_payment_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared payment registration."""
     client = ctx.get_client()
     return run_approved_write(

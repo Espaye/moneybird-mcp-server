@@ -1,7 +1,9 @@
 """Sales-side reads and guarded single-invoice writes (draft, send, pause/resume, credit)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ..config import (
     MoneybirdError,
@@ -28,6 +30,16 @@ from ..invoicing import (
     list_scheduled_merge_candidates,
     resolve_contact_reference,
 )
+from ._params import (
+    ApprovalId,
+    ContactId,
+    FilterString,
+    Limit,
+    OptionalDateString,
+    Page,
+    Period,
+    SalesInvoiceId,
+)
 from ._registry import mcp
 from ._writes import run_approved_write, stage_write
 from . import _context as ctx
@@ -35,12 +47,12 @@ from . import _context as ctx
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_sales_invoices(
-    limit: int = 10,
-    page: int = 1,
-    state: str = "all",
-    reference: str = "",
-    contact_id: str = "",
-    period: str = "",
+    limit: Limit = 10,
+    page: Page = 1,
+    state: Annotated[str, Field(description="Invoice state: 'all', 'draft', 'open', 'scheduled', 'late', 'reminded', 'paid', or 'uncollectible'.")] = "all",
+    reference: Annotated[str, Field(description="Filter on the invoice reference text.")] = "",
+    contact_id: Annotated[str, Field(description="Only invoices for this contact id.")] = "",
+    period: Period = "",
 ) -> dict[str, Any]:
     """Use this when you need a compact list of Moneybird sales invoices filtered by state, reference, contact, or period."""
     client = ctx.get_client()
@@ -74,8 +86,8 @@ def list_sales_invoices(
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def audit_recent_sales_invoice_send_methods(
-    limit: int = 30,
-    page_scan_limit: int = 10,
+    limit: Annotated[int, Field(ge=1, le=200, description="How many recent sent invoices to audit.")] = 30,
+    page_scan_limit: Annotated[int, Field(ge=1, le=50, description="Maximum invoice pages to scan while collecting them.")] = 10,
 ) -> dict[str, Any]:
     """Use this to inspect whether recent Moneybird sales invoices were sent manually, by scheduled e-mail, or by e-invoice delivery."""
     client = ctx.get_client()
@@ -88,10 +100,10 @@ def audit_recent_sales_invoice_send_methods(
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_estimates(
-    limit: int = 10,
-    page: int = 1,
-    filter: str = "",
-    period: str = "",
+    limit: Limit = 10,
+    page: Page = 1,
+    filter: FilterString = "",
+    period: Period = "",
 ) -> dict[str, Any]:
     """Use this when you need a compact list of Moneybird estimates (offertes). filter accepts
     Moneybird query syntax such as state:open|late|accepted|rejected|billed. Fetch the full
@@ -122,9 +134,9 @@ def list_estimates(
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_recurring_sales_invoices(
-    limit: int = 10,
-    page: int = 1,
-    filter: str = "",
+    limit: Limit = 10,
+    page: Page = 1,
+    filter: FilterString = "",
 ) -> dict[str, Any]:
     """Use this when you need a compact list of Moneybird recurring sales invoice templates
     (periodieke facturen), e.g. to check frequency, next run date, or auto_send. Fetch the
@@ -155,8 +167,8 @@ def list_recurring_sales_invoices(
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def get_invoice_defaults_for_contact(
-    contact_id: str = "",
-    customer_id: str = "",
+    contact_id: Annotated[str, Field(description="Moneybird contact id; give this or customer_id.")] = "",
+    customer_id: Annotated[str, Field(description="Human-facing customer number; give this or contact_id.")] = "",
 ) -> dict[str, Any]:
     """Use this when you want the default workflow, document style, identity, tax, ledger, and send settings inferred from a contact's latest invoice."""
     client = ctx.get_client()
@@ -178,12 +190,15 @@ def get_invoice_defaults_for_contact(
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_create_sales_invoice_draft(
-    contact_id: str,
-    details: list[dict[str, Any]],
-    reference: str = "",
-    invoice_date: str = "",
-    due_date: str = "",
-    currency: str = "EUR",
+    contact_id: ContactId,
+    details: Annotated[
+        list[dict[str, Any]],
+        Field(description="Invoice lines. Each dict: description, price (decimal string, incl/excl VAT follows the administration setting), and optional amount, tax_rate_id, ledger_account_id, product_id, period."),
+    ],
+    reference: Annotated[str, Field(description="Reference text shown on the invoice.")] = "",
+    invoice_date: OptionalDateString = "",
+    due_date: OptionalDateString = "",
+    currency: Annotated[str, Field(description="ISO currency code.")] = "EUR",
 ) -> dict[str, Any]:
     """Use this before creating a draft Moneybird sales invoice. Do not execute the write until the user explicitly confirms."""
     if not details:
@@ -251,7 +266,7 @@ def _execute_create_sales_invoice_draft(client, payload: dict[str, Any]) -> dict
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def create_sales_invoice_draft_from_approval(approval_id: str) -> dict[str, Any]:
+def create_sales_invoice_draft_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared draft invoice creation."""
     client = ctx.get_client()
     return run_approved_write(
@@ -264,12 +279,12 @@ def create_sales_invoice_draft_from_approval(approval_id: str) -> dict[str, Any]
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_send_sales_invoice(
-    sales_invoice_id: str,
-    sending_scheduled: bool = False,
-    invoice_date: str = "",
-    delivery_method: str = "",
-    email_address: str = "",
-    email_message: str = "",
+    sales_invoice_id: SalesInvoiceId,
+    sending_scheduled: Annotated[bool, Field(description="True = schedule the send instead of sending immediately.")] = False,
+    invoice_date: OptionalDateString = "",
+    delivery_method: Annotated[str, Field(description="'Email', 'Simplerinvoicing', 'Post', or 'Manual'. Empty = the contact's configured method.")] = "",
+    email_address: Annotated[str, Field(description="Override recipient email; empty = the contact's invoice email.")] = "",
+    email_message: Annotated[str, Field(description="Custom message for the invoice email body.")] = "",
 ) -> dict[str, Any]:
     """Use this before sending or scheduling a Moneybird sales invoice. Do not execute the send until the user explicitly confirms. Scheduled sends automatically include a merge-compatibility check against other invoices already planned for that contact/date."""
     if sending_scheduled and not invoice_date:
@@ -353,7 +368,7 @@ def _execute_send_sales_invoice(client, payload: dict[str, Any]) -> dict[str, An
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def send_sales_invoice_from_approval(approval_id: str) -> dict[str, Any]:
+def send_sales_invoice_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared invoice send action."""
     client = ctx.get_client()
     return run_approved_write(
@@ -362,7 +377,7 @@ def send_sales_invoice_from_approval(approval_id: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
-def prepare_pause_sales_invoice_workflow(sales_invoice_id: str) -> dict[str, Any]:
+def prepare_pause_sales_invoice_workflow(sales_invoice_id: SalesInvoiceId) -> dict[str, Any]:
     """Use this before pausing a sales invoice workflow. This is the safe way to stop a scheduled send from going out automatically."""
     client = ctx.get_client()
     record = client.get_sales_invoice(sales_invoice_id)
@@ -394,7 +409,7 @@ def _workflow_state_result(client, record: dict[str, Any], status: str) -> dict[
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def pause_sales_invoice_workflow_from_approval(approval_id: str) -> dict[str, Any]:
+def pause_sales_invoice_workflow_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed pausing the invoice workflow."""
     client = ctx.get_client()
     return run_approved_write(
@@ -408,7 +423,7 @@ def pause_sales_invoice_workflow_from_approval(approval_id: str) -> dict[str, An
 
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
-def prepare_resume_sales_invoice_workflow(sales_invoice_id: str) -> dict[str, Any]:
+def prepare_resume_sales_invoice_workflow(sales_invoice_id: SalesInvoiceId) -> dict[str, Any]:
     """Use this before resuming a previously paused sales invoice workflow."""
     client = ctx.get_client()
     record = client.get_sales_invoice(sales_invoice_id)
@@ -421,7 +436,7 @@ def prepare_resume_sales_invoice_workflow(sales_invoice_id: str) -> dict[str, An
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def resume_sales_invoice_workflow_from_approval(approval_id: str) -> dict[str, Any]:
+def resume_sales_invoice_workflow_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed resuming the invoice workflow."""
     client = ctx.get_client()
     return run_approved_write(
@@ -435,7 +450,7 @@ def resume_sales_invoice_workflow_from_approval(approval_id: str) -> dict[str, A
 
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
-def prepare_create_credit_invoice(sales_invoice_id: str) -> dict[str, Any]:
+def prepare_create_credit_invoice(sales_invoice_id: SalesInvoiceId) -> dict[str, Any]:
     """Use this before crediting a sales invoice: Moneybird duplicates it into a new DRAFT
     credit invoice with negated amounts. Nothing is sent automatically; sending the credit
     invoice afterwards needs its own prepare_send_sales_invoice approval. Do not execute the
@@ -503,7 +518,7 @@ def _execute_create_credit_invoice(client, payload: dict[str, Any]) -> dict[str,
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def create_credit_invoice_from_approval(approval_id: str) -> dict[str, Any]:
+def create_credit_invoice_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared credit invoice."""
     client = ctx.get_client()
     return run_approved_write(

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ..config import (
     MoneybirdError,
@@ -30,6 +32,7 @@ from ..sync import (
 from ..invoicing import (
     find_contact_matches,
 )
+from ._params import FilterString, Limit
 from ._registry import mcp
 from . import _context as ctx
 
@@ -55,7 +58,10 @@ def list_administrations() -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def search(query: str, limit: int = 8) -> dict[str, Any]:
+def search(
+    query: Annotated[str, Field(description="Free-text search over the synced index: contacts, invoices, documents, and bank mutations.")],
+    limit: Limit = 8,
+) -> dict[str, Any]:
     """Use this when you want ChatGPT to search Moneybird records in a connector-friendly way."""
     client = ctx.get_client()
     results: list[dict[str, Any]] = []
@@ -212,7 +218,12 @@ def search(query: str, limit: int = 8) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def fetch(id: str) -> dict[str, Any]:
+def fetch(
+    id: Annotated[
+        str,
+        Field(description="Prefixed record id from search, e.g. 'contact:123', 'sales_invoice:123', 'purchase_invoice:123', 'receipt:123', 'financial_mutation:123'."),
+    ],
+) -> dict[str, Any]:
     """Use this when you already know a Moneybird record id from search and need the full record."""
     client = ctx.get_client()
 
@@ -320,7 +331,16 @@ def fetch(id: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def moneybird_request(path: str, query: dict[str, Any] | None = None) -> dict[str, Any]:
+def moneybird_request(
+    path: Annotated[
+        str,
+        Field(description="GET path relative to the administration, e.g. 'estimates', 'time_entries/123', or 'administrations' for the API root."),
+    ],
+    query: Annotated[
+        dict[str, Any] | None,
+        Field(description="Optional query-string params, e.g. {'filter': 'state:open', 'per_page': 50}."),
+    ] = None,
+) -> dict[str, Any]:
     """Read-only escape hatch for any Moneybird endpoint this server does not wrap explicitly.
 
     Performs a single GET within the configured administration. `path` is relative to the
@@ -342,10 +362,10 @@ def moneybird_request(path: str, query: dict[str, Any] | None = None) -> dict[st
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def sync_search_index(
-    invoice_filter: str = "state:all,period:this_year",
-    document_filter: str = "period:this_year",
-    financial_mutation_filter: str = "period:this_year",
-    force_full: bool = False,
+    invoice_filter: FilterString = "state:all,period:this_year",
+    document_filter: FilterString = "period:this_year",
+    financial_mutation_filter: FilterString = "period:this_year",
+    force_full: Annotated[bool, Field(description="True = rebuild the index from scratch instead of an incremental refresh.")] = False,
 ) -> dict[str, Any]:
     """Use this when you want to build or refresh a local cached Moneybird search index."""
     client = ctx.get_client()
@@ -359,7 +379,10 @@ def sync_search_index(
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def search_contacts(query: str, limit: int = 10) -> dict[str, Any]:
+def search_contacts(
+    query: Annotated[str, Field(description="Partial customer id, email, phone, city, or company/person name.")],
+    limit: Limit = 10,
+) -> dict[str, Any]:
     """Use this when you need a contact lookup by partial customer id, email, phone, city, or company/person name."""
     client = ctx.get_client()
     return {"contacts": find_contact_matches(client, query=query, limit=limit)}

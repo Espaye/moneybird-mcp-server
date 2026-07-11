@@ -10,16 +10,17 @@ from ..formatting import (
     compact_document_summary,
     compact_general_journal_summary,
 )
+from ._params import FilterString, Limit, Page, Period
 from ._registry import mcp
 from . import _context as ctx
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_purchase_invoices(
-    limit: int = 10,
-    page: int = 1,
-    filter: str = "",
-    period: str = "",
+    limit: Limit = 10,
+    page: Page = 1,
+    filter: FilterString = "",
+    period: Period = "",
 ) -> dict[str, Any]:
     """Use this when you need a compact list of Moneybird purchase invoices."""
     client = ctx.get_client()
@@ -42,10 +43,10 @@ def list_purchase_invoices(
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_receipts(
-    limit: int = 10,
-    page: int = 1,
-    filter: str = "",
-    period: str = "",
+    limit: Limit = 10,
+    page: Page = 1,
+    filter: FilterString = "",
+    period: Period = "",
 ) -> dict[str, Any]:
     """Use this when you need a compact list of Moneybird receipts and cash/other-account expense documents."""
     client = ctx.get_client()
@@ -68,10 +69,10 @@ def list_receipts(
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_general_journal_documents(
-    limit: int = 10,
-    page: int = 1,
-    filter: str = "",
-    period: str = "",
+    limit: Limit = 10,
+    page: Page = 1,
+    filter: FilterString = "",
+    period: Period = "",
 ) -> dict[str, Any]:
     """Use this when you need a compact list of Moneybird general journal documents."""
     client = ctx.get_client()

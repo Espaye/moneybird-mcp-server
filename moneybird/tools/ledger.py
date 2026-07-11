@@ -1,7 +1,9 @@
 """Ledger writes: ledger accounts, general journal documents, document-line reclassification."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ..config import (
     MoneybirdError,
@@ -21,6 +23,7 @@ from ..invoicing import (
     prepare_general_journal_entries,
     prepare_reclassification_batch,
 )
+from ._params import ApprovalId, DateString
 from ._registry import mcp
 from ._writes import run_approved_write, stage_write
 from . import _context as ctx
@@ -28,10 +31,10 @@ from . import _context as ctx
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_create_ledger_account(
-    name: str,
-    account_type: str,
-    account_id: str = "",
-    rgs_code: str = "",
+    name: Annotated[str, Field(description="Ledger account (category) name as it should appear in reports.")],
+    account_type: Annotated[str, Field(description="Moneybird account_type, e.g. 'expenses', 'revenue', 'direct_costs', 'current_assets', 'non_current_assets', 'current_liabilities', 'equity', 'other_income_expenses'.")],
+    account_id: Annotated[str, Field(description="Optional ledger account number (grootboeknummer).")] = "",
+    rgs_code: Annotated[str, Field(description="Optional Dutch RGS reference code.")] = "",
     active: bool = True,
 ) -> dict[str, Any]:
     """Use this before creating a Moneybird ledger account. Do not execute the write until the user explicitly confirms."""
@@ -90,7 +93,7 @@ def _execute_create_ledger_account(client, payload: dict[str, Any]) -> dict[str,
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def create_ledger_account_from_approval(approval_id: str) -> dict[str, Any]:
+def create_ledger_account_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared ledger account creation."""
     client = ctx.get_client()
     return run_approved_write(
@@ -100,9 +103,12 @@ def create_ledger_account_from_approval(approval_id: str) -> dict[str, Any]:
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_create_general_journal_document(
-    reference: str,
-    date: str,
-    entries: list[dict[str, Any]],
+    reference: Annotated[str, Field(description="Short reference/title for the journal entry (memoriaal).")],
+    date: DateString,
+    entries: Annotated[
+        list[dict[str, Any]],
+        Field(description="Journal lines. Each dict: ledger_account_id or ledger_account_name, debit and/or credit (decimal strings), and optional description, contact_id, project_id, tax_rate_id. Total debit must equal total credit."),
+    ],
     description: str = "",
 ) -> dict[str, Any]:
     """Use this before creating a Moneybird general journal document. Do not execute the write until the user explicitly confirms."""
@@ -159,7 +165,7 @@ def _execute_create_general_journal(client, payload: dict[str, Any]) -> dict[str
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def create_general_journal_document_from_approval(approval_id: str) -> dict[str, Any]:
+def create_general_journal_document_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared general journal creation."""
     client = ctx.get_client()
     return run_approved_write(
@@ -171,7 +177,12 @@ def create_general_journal_document_from_approval(approval_id: str) -> dict[str,
 
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
-def prepare_reclassify_document_lines(entries: list[dict[str, Any]]) -> dict[str, Any]:
+def prepare_reclassify_document_lines(
+    entries: Annotated[
+        list[dict[str, Any]],
+        Field(description="Line moves. Each dict: document_kind ('purchase_invoice' or 'receipt'), document_id, detail_id (or row_order) to pick the line, and target ledger_account_id or ledger_account_name."),
+    ],
+) -> dict[str, Any]:
     """Use this before reclassifying purchase invoice or receipt lines to other ledger accounts. It can optionally prepare balancing general journal documents for asset or liability moves."""
     client = ctx.get_client()
     prepared = prepare_reclassification_batch(client, entries)
@@ -186,7 +197,7 @@ def prepare_reclassify_document_lines(entries: list[dict[str, Any]]) -> dict[str
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
-def reclassify_document_lines_from_approval(approval_id: str) -> dict[str, Any]:
+def reclassify_document_lines_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared document line reclassification."""
     client = ctx.get_client()
     pending = pop_approval(approval_id, "reclassify_document_lines", administration_id=client.administration_id)
