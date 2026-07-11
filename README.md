@@ -97,6 +97,11 @@ MCP_AUTH_TOKEN=
 MONEYBIRD_MCP_DATA_DIR=
 # Optional: "sse" (default, endpoint /sse) or "http" (streamable HTTP, endpoint /mcp).
 MCP_TRANSPORT=sse
+# Optional: OAuth application credentials (register at
+# https://moneybird.com/user/applications/new); used by scripts/oauth_login.py as an
+# alternative to a personal MONEYBIRD_ACCESS_TOKEN.
+MONEYBIRD_OAUTH_CLIENT_ID=
+MONEYBIRD_OAUTH_CLIENT_SECRET=
 ```
 
 `MONEYBIRD_ADMINISTRATION_ID` can be left blank if your token only has access to one administration. If the token can see more than one, the server will ask you to choose one explicitly.
@@ -132,13 +137,25 @@ Notes and limits:
   and each entry records its `administration_id`. The duplicate-suppression check reads the
   tenant's own log (and the legacy shared log for back-compat), so tenants never share a write
   history.
-- **Not yet included:** a full OAuth flow and a server-side per-user token store. This header
-  model fits a small, trusted group; a public multi-user product would add OAuth + token storage
-  on top. The prerequisite that cannot be automated: register an OAuth application with
-  Moneybird (Instellingen → Ontwikkelaars, or via their partner program) to obtain a
-  client_id/client_secret; after that the server would implement the standard authorization-code
-  flow described at `https://developer.moneybird.com/authentication` and store per-user refresh
-  tokens next to the other server state.
+- **OAuth (authorization-code flow) is supported** as a third credential source, tried after
+  the header and the environment. One-time setup:
+  1. Register an application at `https://moneybird.com/user/applications/new` with redirect URI
+     `urn:ietf:wg:oauth:2.0:oob` (out-of-band: Moneybird displays the code in the browser, so no
+     public callback endpoint is needed). For a hosted deployment, also register a stable HTTPS
+     callback such as `https://<your-host>/oauth/callback`.
+  2. Put the credentials in `.env`: `MONEYBIRD_OAUTH_CLIENT_ID` and
+     `MONEYBIRD_OAUTH_CLIENT_SECRET`.
+  3. Run `python scripts/oauth_login.py`, authorize in the browser, and paste the code. Tokens
+     land in `moneybird_oauth_tokens.json` in the data dir (gitignored; contains secrets), the
+     script verifies them by listing the reachable administrations, and expired access tokens
+     are refreshed automatically from then on. The requested scopes are
+     `sales_invoices documents estimates bank time_entries settings`.
+
+  When `MONEYBIRD_ACCESS_TOKEN` is set it still wins over the OAuth store, so existing
+  personal-token setups behave exactly as before. Not yet included: a server-side *per-user*
+  token store keyed to inbound identity (a public multi-user product would put an OAuth consent
+  step in front and map each end user to their own Moneybird tokens; today the multi-tenant path
+  is the `X-Moneybird-Token` header).
 
 ## 3. Install and run
 

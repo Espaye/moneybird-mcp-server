@@ -20,6 +20,11 @@ scripts that import the package directly (see below).
   *and* next to the package, so **just `import moneybird...` and credentials are present**
   — regardless of where you run Python from. Do not parse `.env` yourself.
 - Real env vars always win (`setdefault`), so per-request headers / CI secrets are safe.
+- **OAuth**: `moneybird/oauth.py` implements the authorization-code flow (app credentials in
+  `.env` as `MONEYBIRD_OAUTH_CLIENT_ID`/`MONEYBIRD_OAUTH_CLIENT_SECRET`; interactive login via
+  `python scripts/oauth_login.py`, out-of-band redirect). Tokens persist in
+  `moneybird_oauth_tokens.json` in the data dir and are used automatically when
+  `MONEYBIRD_ACCESS_TOKEN` is absent (resolution order: request header → env → OAuth store).
 
 ## Running a one-off live query or fix
 

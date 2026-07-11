@@ -9,6 +9,8 @@ Resolution priority:
 2. **Environment** ``MONEYBIRD_ACCESS_TOKEN`` / ``MONEYBIRD_ADMINISTRATION_ID``.
    This preserves the original single-user / local behavior unchanged, and is what
    direct (non-HTTP) calls such as scripts and tests use.
+3. **Stored OAuth tokens** obtained via ``scripts/oauth_login.py`` (the "default"
+   profile in the data dir). Expired access tokens are refreshed transparently.
 
 The token is never logged. ``get_http_headers`` never raises and returns ``{}`` when
 there is no active HTTP request, so the environment path is used automatically off-HTTP.
@@ -72,13 +74,28 @@ def _credentials_from_environment() -> Credentials | None:
     return Credentials(token=token, administration_id=administration_id, source="environment")
 
 
+def _credentials_from_oauth_store() -> Credentials | None:
+    from . import oauth
+
+    token = oauth.get_access_token()
+    if not token:
+        return None
+    administration_id = os.environ.get("MONEYBIRD_ADMINISTRATION_ID", "").strip() or None
+    return Credentials(token=token, administration_id=administration_id, source="oauth")
+
+
 def resolve_credentials() -> Credentials:
     """Return the active tenant credentials, preferring per-request headers over env."""
-    credentials = _credentials_from_headers() or _credentials_from_environment()
+    credentials = (
+        _credentials_from_headers()
+        or _credentials_from_environment()
+        or _credentials_from_oauth_store()
+    )
     if credentials is None:
         raise MoneybirdError(
             "No Moneybird credentials found. Send an 'X-Moneybird-Token' header "
-            "(multi-tenant), optionally with 'X-Moneybird-Administration-Id', or set "
-            "MONEYBIRD_ACCESS_TOKEN in the environment for single-user / local use."
+            "(multi-tenant), optionally with 'X-Moneybird-Administration-Id', set "
+            "MONEYBIRD_ACCESS_TOKEN in the environment, or log in via OAuth with "
+            "scripts/oauth_login.py."
         )
     return credentials

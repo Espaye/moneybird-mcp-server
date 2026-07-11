@@ -13,3 +13,6 @@ outputs/
 
 # Durable approval store (state, not source)
 moneybird_approvals.sqlite3
+
+# OAuth access/refresh tokens obtained via scripts/oauth_login.py (secrets)
+moneybird_oauth_tokens.json
