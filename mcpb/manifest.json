@@ -1,0 +1,59 @@
+{
+  "manifest_version": "0.2",
+  "name": "moneybird-mcp",
+  "display_name": "Moneybird",
+  "version": "0.1.0",
+  "description": "Chat with your Moneybird bookkeeping: invoices, contacts, bank mutations and reports — changes only after a preview you approve.",
+  "long_description": "Connects Claude to your Moneybird administration. Read invoices, purchase documents, contacts, bank mutations and financial reports; create or change things only through a strict preview-and-approve flow (nothing is ever written without your explicit 'yes', and totals are verified after every change). Includes Dutch bookkeeping prompts such as 'koppel_banktransacties' and 'verwerk_achterstand'.",
+  "author": {
+    "name": "Espaye"
+  },
+  "license": "MIT",
+  "keywords": ["moneybird", "bookkeeping", "boekhouding", "accounting", "invoicing", "facturen"],
+  "server": {
+    "type": "python",
+    "entry_point": "server/main.py",
+    "mcp_config": {
+      "command": "python",
+      "args": ["${__dirname}/server/main.py"],
+      "env": {
+        "MONEYBIRD_ACCESS_TOKEN": "${user_config.access_token}",
+        "MONEYBIRD_ADMINISTRATION_ID": "${user_config.administration_id}",
+        "MONEYBIRD_MCP_DATA_DIR": "${user_config.data_dir}"
+      },
+      "platform_overrides": {
+        "darwin": { "command": "python3" },
+        "linux": { "command": "python3" }
+      }
+    }
+  },
+  "user_config": {
+    "access_token": {
+      "type": "string",
+      "title": "Moneybird API token",
+      "description": "Create one at https://moneybird.com/user/applications/new — choose 'Persoonlijk gebruik' (personal use) and copy the token shown.",
+      "sensitive": true,
+      "required": true
+    },
+    "administration_id": {
+      "type": "string",
+      "title": "Administration ID",
+      "description": "Optional. The long number in your Moneybird URL (moneybird.com/<this number>/...). Leave empty if your token has exactly one administration.",
+      "required": false,
+      "default": ""
+    },
+    "data_dir": {
+      "type": "directory",
+      "title": "Data folder",
+      "description": "Where the search index, approvals and audit log are stored on your computer.",
+      "required": false,
+      "default": "${HOME}/.moneybird-mcp"
+    }
+  },
+  "compatibility": {
+    "platforms": ["win32", "darwin", "linux"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  }
+}

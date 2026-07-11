@@ -11,8 +11,6 @@ It also re-exports the package's public helpers so existing imports such as
 """
 from __future__ import annotations
 
-import logging
-import os
 from decimal import Decimal
 
 from moneybird.auth import SharedSecretAuthMiddleware
@@ -45,8 +43,6 @@ from moneybird.safety import (
 from moneybird.sync import ensure_sync_index_shape
 from moneybird.tools import mcp
 
-logger = logging.getLogger("moneybird_mcp")
-
 # Names re-exported purely for backward compatibility (tests and ad-hoc imports).
 __all__ = [
     "mcp",
@@ -77,50 +73,9 @@ __all__ = [
 
 
 if __name__ == "__main__":
-    import uvicorn
-    from starlette.middleware import Middleware
+    from moneybird.server import main
 
-    # Bind to loopback by default. The cloudflared tunnel runs on the same host
-    # and connects to localhost, so this does not break tunnelling — it just
-    # stops the server from listening on every network interface. Set
-    # MCP_HOST=0.0.0.0 explicitly only if you genuinely need external binding
-    # (and then you really want MCP_AUTH_TOKEN set too).
-    host = os.environ.get("MCP_HOST", "127.0.0.1")
-    port = int(os.environ.get("MCP_PORT", "8000"))
-    auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
-    # "http" = streamable HTTP (current MCP transport, endpoint /mcp);
-    # "sse" = legacy SSE (endpoint /sse), kept as default for existing deployments.
-    transport = os.environ.get("MCP_TRANSPORT", "sse").strip().lower()
-    if transport not in {"sse", "http"}:
-        logger.error("MCP_TRANSPORT must be 'sse' or 'http', not %r.", transport)
-        raise SystemExit(1)
-
-    middleware = []
-    if auth_token:
-        middleware.append(Middleware(SharedSecretAuthMiddleware, token=auth_token))
-        logger.info("Shared-secret auth ENABLED on the MCP endpoint.")
-    else:
-        logger.warning(
-            "MCP_AUTH_TOKEN is not set: the MCP endpoint has NO authentication. "
-            "This is only safe because host=%s. Set MCP_AUTH_TOKEN before exposing "
-            "the server beyond loopback.",
-            host,
-        )
-        if host not in {"127.0.0.1", "localhost", "::1"}:
-            logger.error(
-                "Refusing to start: host=%s is non-loopback but MCP_AUTH_TOKEN is unset. "
-                "Set MCP_AUTH_TOKEN to allow non-loopback binding.",
-                host,
-            )
-            raise SystemExit(1)
-
-    app = mcp.http_app(transport=transport, middleware=middleware or None)
-    endpoint = "/sse" if transport == "sse" else "/mcp"
-    logger.info(
-        "Starting Moneybird MCP server on %s:%s (%s at %s)",
-        host,
-        port,
-        "legacy SSE" if transport == "sse" else "streamable HTTP",
-        endpoint,
-    )
-    uvicorn.run(app, host=host, port=port)
+    # Historical default: legacy SSE over HTTP, so existing deployments that run
+    # `python moneybird_mcp_server.py` keep working. The `moneybird-mcp` console
+    # script (moneybird/server.py) defaults to stdio for local MCP clients.
+    main(default_transport="sse")

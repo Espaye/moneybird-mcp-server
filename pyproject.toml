@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "moneybird-mcp"
+version = "0.1.0"
+description = "MCP server for Moneybird bookkeeping: read your administration, and make changes only through preview-and-approve flows."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Espaye" }]
+keywords = ["moneybird", "mcp", "model-context-protocol", "bookkeeping", "accounting", "invoicing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+# Keep in sync with requirements.txt (which stays for the git-clone workflow).
+dependencies = [
+    "fastmcp>=3.4,<4",
+    "uvicorn>=0.30",
+    "chardet>=5,<6",
+]
+
+[project.scripts]
+moneybird-mcp = "moneybird.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["moneybird"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "moneybird",
+    "moneybird_mcp_server.py",
+    "scripts",
+    "tests",
+    "docs",
+    "mcpb",
+    "README.md",
+    "CLAUDE.md",
+    ".env.example",
+]
+exclude = ["**/__pycache__"]

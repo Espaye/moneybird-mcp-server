@@ -115,6 +115,12 @@ asset bundled on developer.moneybird.com.
   ReportName, ...) that give MCP clients per-parameter descriptions and enums — use them
   in new tool signatures; its Literal enums are kept in sync with `config.py` by
   `tests/test_tool_params.py`.
+- `moneybird/server.py` — the runnable entrypoint (`build_config` + `main`). The
+  `moneybird-mcp` console script (see `pyproject.toml`) defaults to **stdio** for local
+  MCP clients and defaults server state to `~/.moneybird-mcp`; `python
+  moneybird_mcp_server.py` keeps the legacy SSE default for existing deployments.
+  `mcpb/` + `scripts/build_mcpb.py` build the Claude Desktop extension bundle
+  (`dist/*.mcpb`; platform-specific because dependencies are vendored into it).
 - `moneybird/client.py` — HTTP client + endpoint methods. Every endpoint it calls is
   checked against `docs/moneybird_api_paths.json` by
   `tests/test_client_spec_conformance.py`, so a typo'd path fails the suite.

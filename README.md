@@ -159,12 +159,48 @@ Notes and limits:
 
 ## 3. Install and run
 
+### Option A — local install for MCP clients (Claude Desktop, Claude Code, Cursor, ...)
+
+The package is published as `moneybird-mcp`; the console script speaks **stdio**,
+which is what desktop MCP clients spawn. With [uv](https://docs.astral.sh/uv/)
+installed, this client config is all you need:
+
+```json
+{
+  "mcpServers": {
+    "moneybird": {
+      "command": "uvx",
+      "args": ["moneybird-mcp"],
+      "env": {
+        "MONEYBIRD_ACCESS_TOKEN": "your-token-here",
+        "MONEYBIRD_ADMINISTRATION_ID": "optional"
+      }
+    }
+  }
+}
+```
+
+Or install it explicitly: `pip install moneybird-mcp`, then use `moneybird-mcp`
+as the command. On stdio, server state (approvals DB, audit log, search index)
+defaults to `~/.moneybird-mcp` instead of the working directory.
+
+### Option B — Claude Desktop extension (one file, no terminal)
+
+`python scripts/build_mcpb.py` produces `dist/moneybird-mcp-<version>-<platform>.mcpb`.
+Double-clicking it (or Claude Desktop → Settings → Extensions → Install) installs the
+server with a settings form for the API token — no Python packaging knowledge needed
+by the end user. The bundle vendors all dependencies, so it is specific to the
+platform + Python minor version it was built on; the user's machine still needs a
+system Python ≥ 3.11 on PATH.
+
+### Option C — run from a clone as an HTTP server (the original deployment)
+
 ```powershell
 python -m pip install -r requirements.txt
 python .\moneybird_mcp_server.py
 ```
 
-By default the server exposes a (legacy) SSE endpoint at:
+By default this exposes a (legacy) SSE endpoint at:
 
 ```text
 http://localhost:8000/sse
@@ -172,7 +208,8 @@ http://localhost:8000/sse
 
 Set `MCP_TRANSPORT=http` to serve the current MCP streamable-HTTP transport at
 `http://localhost:8000/mcp` instead — prefer this for new clients; `sse` remains
-the default only so existing deployments keep working.
+the default only so existing deployments keep working. The same is available via
+`moneybird-mcp --transport http` (add `--host`/`--port` as needed).
 
 ## Project layout
 
@@ -180,8 +217,11 @@ The server is split into a small package by concern; `moneybird_mcp_server.py`
 is just the entrypoint you run.
 
 ```text
-moneybird_mcp_server.py   # entrypoint: env-driven host/port/auth/transport
+moneybird_mcp_server.py   # legacy entrypoint: HTTP/SSE with env-driven host/port/auth
+pyproject.toml            # PyPI packaging: `moneybird-mcp` console script (stdio default)
+mcpb/                     # Claude Desktop extension: manifest + bundle entry script
 moneybird/
+  server.py               # shared entrypoint: stdio | http | sse (build_config + main)
   config.py               # constants, MoneybirdError, .env loading, data_dir()
   credentials.py          # per-request tenant credentials (headers) + env fallback
   client.py               # Moneybird REST client (HTTP, retry/backoff)
