@@ -2,6 +2,8 @@
 # Per-administration sync caches (financial data): .moneybird_sync_index.json and
 # .moneybird_sync_index_<administration_id>.json
 .moneybird_sync_index*.json
+# Derived FTS cache over the sync index (financial data, rebuildable)
+.moneybird_search_fts*.sqlite3
 # Per-administration audit logs: .moneybird_audit_log.jsonl and
 # .moneybird_audit_log_<administration_id>.jsonl
 .moneybird_audit_log*.jsonl

@@ -25,6 +25,7 @@ from ..formatting import (
     purchase_document_title,
     stringify_record,
 )
+from ..search_fts import refresh_fts_index, search_fts
 from ..sync import (
     load_sync_index,
     sync_search_index_data,
@@ -80,6 +81,22 @@ def search(
     )
 
     if use_index:
+        capped_limit = max(1, min(limit, 20))
+        # Ranked full-text match first (multi-word, any order, prefixes). The FTS
+        # cache derives from the sync index and rebuilds when updated_at changes.
+        if refresh_fts_index(index, client.administration_id):
+            fts_results = search_fts(client.administration_id, query, capped_limit)
+            if fts_results:
+                return {
+                    "results": fts_results,
+                    "source": "sync_index_fts",
+                    "updated_at": index.get("updated_at"),
+                    "invoice_filter": index.get("invoice_filter"),
+                    "document_filter": index.get("document_filter"),
+                    "financial_mutation_filter": index.get("financial_mutation_filter"),
+                }
+        # Substring fallback: catches mid-word fragments FTS prefix matching cannot,
+        # and any environment whose sqlite lacks FTS5.
         cached_records: list[dict[str, Any]] = []
         for bucket in indexed_buckets:
             cached_records.extend(index[bucket]["records"].values())
@@ -94,7 +111,7 @@ def search(
                 )
         if results:
             return {
-                "results": results[: max(1, min(limit, 20))],
+                "results": results[:capped_limit],
                 "source": "sync_index",
                 "updated_at": index.get("updated_at"),
                 "invoice_filter": index.get("invoice_filter"),

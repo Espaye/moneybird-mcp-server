@@ -121,6 +121,9 @@ asset bundled on developer.moneybird.com.
 - `moneybird/config.py` — constants, `MoneybirdError`, `.env` loading, and `data_dir()`
   (where approvals DB / audit logs / sync caches live; override with
   `MONEYBIRD_MCP_DATA_DIR`). Approvals are persisted in SQLite and survive restarts.
+- `moneybird/search_fts.py` — SQLite FTS5 layer derived from the JSON sync index (the
+  durable store stays JSON; the FTS file is a rebuildable cache keyed on `updated_at`).
+  `search` tries FTS (AND then OR prefix match, bm25-ranked), then substring, then live.
 - `moneybird/playbooks/boekhoud_playbook.md` — btw rules, categorization, consistency
   checklist, bank-mutation diagnosis. Read it before a bookkeeping task.
 - `scripts/` — runnable read-only/reclassify scripts (good examples of the patterns above).
