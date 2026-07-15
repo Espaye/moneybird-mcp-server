@@ -42,6 +42,15 @@ KNOWN LIMITS:
   fields (state, payments, ledger_account_bookings) and from created_at vs processed_at timing,
   say plainly what you cannot see, and point the user to Moneybird's Boekingsregels settings.
   See playbook recipe E and the diagnose_bankmutatie prompt.
+- The same booking rules also auto-fill incoming PURCHASE invoices, and they apply
+  inconsistently: a supplier's invoice can arrive one month with its usual multi-line split and
+  the next as a single catch-all line, still in 'new' state, sometimes with prices_are_incl_tax
+  flipped. You cannot see or fix the rule, only the result. Use review_purchase_invoices to find
+  invoices that are still 'new' or deviate from the same supplier's usual booking, then
+  prepare_reconcile_purchase_invoice to reproduce a known-good reference invoice's line structure
+  on the botched one (line prices are scaled to keep the document total to the cent; when totals
+  differ the per-line split is a flagged assumption). To read the real split off the invoice PDF,
+  see docs/reading_pdf_attachments.md.
 - list_financial_mutations rejects a wide period with HTTP 400 ("too many ... use sync API");
   query per month (period:"JJJJMM01..JJJJMMnn") or use the sync index.
 - The cash_flow, tax, debtors, and creditors reports accept at most ONE month of period

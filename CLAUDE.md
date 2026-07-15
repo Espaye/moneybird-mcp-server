@@ -74,6 +74,18 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   `list_documents("purchase_invoice", ...)` / `("receipt", ...)`, then filter by
   `contact.id`. Sales-invoice filters take `contact_id`; the document endpoints don't, so
   fetch a period and filter client-side on the contact.
+- **Moneybird's boekingsregels vullen ook inkoopfacturen automatisch in — inconsistent.**
+  Dezelfde regels die bankmutaties boeken, vullen inkomende inkoopfacturen in, maar niet
+  betrouwbaar: dezelfde leverancier komt de ene maand met de vaste meerregelige splitsing binnen
+  en de volgende als één verzamelregel, nog in status `new`, soms met `prices_are_incl_tax`
+  omgedraaid. De regel zelf zie/repareer je niet (niet in de API), alleen het resultaat. Gebruik
+  `review_purchase_invoices` om afwijkers te vinden (nog `new`, minder regels dan gebruikelijk,
+  ontbrekende grootboeken, of een afwijkende btw-vlag) en `prepare_reconcile_purchase_invoice`
+  → `reconcile_purchase_invoice_from_approval` om de vaste boeking van een goede referentiefactuur
+  te reproduceren. Regelprijzen worden naar het doeltotaal geschaald zodat het documenttotaal tot
+  op de cent gelijk blijft; wijken de totalen af, dan is de regel-voor-regel-splitsing een (in de
+  preview gemarkeerde) aanname. De echte splitsing uit de PDF lezen kan later — zie
+  `docs/reading_pdf_attachments.md`. (Logica: `moneybird/purchase_reconcile.py`.)
 - **Document line prices are entered *incl btw*** in this administration. So a "40% / 60%"
   split is 40% / 60% of the **incl-tax total**, and the invoice total incl = sum of line
   `price` values. `total_price_excl_tax_with_discount` on a line is back-calculated
@@ -124,6 +136,11 @@ asset bundled on developer.moneybird.com.
 - `moneybird/client.py` — HTTP client + endpoint methods. Every endpoint it calls is
   checked against `docs/moneybird_api_paths.json` by
   `tests/test_client_spec_conformance.py`, so a typo'd path fails the suite.
+- `moneybird/purchase_reconcile.py` — supplier-pattern logic behind the purchase tools:
+  `scan_purchase_invoices_for_attention` (the `review_purchase_invoices` detector) and
+  `build_reconcile_purchase_invoice` (reproduces a reference invoice's split, scales prices to
+  the target total, maps onto existing lines). Pure functions over a client; tested in
+  `tests/test_purchase_reconcile.py`. PDF-reading design note: `docs/reading_pdf_attachments.md`.
 - `moneybird/config.py` — constants, `MoneybirdError`, `.env` loading, and `data_dir()`
   (where approvals DB / audit logs / sync caches live; override with
   `MONEYBIRD_MCP_DATA_DIR`). Approvals are persisted in SQLite and survive restarts.
