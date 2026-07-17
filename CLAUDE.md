@@ -153,6 +153,9 @@ asset bundled on developer.moneybird.com.
 - `scripts/` — runnable read-only/reclassify scripts (good examples of the patterns above).
 - `docs/releasing.md` — the release checklist (version bump in pyproject **and**
   mcpb/manifest.json, build, twine check, PyPI upload, mcpb bundle).
+- `docs/hosted_gateway_design.md` — architecture for the hosted web-app product
+  (gateway owns users/tokens and injects the tenant headers; this server stays
+  unmodified). Read it before any hosted/multi-tenant work.
 - `README.md` — setup, deployment, ChatGPT connection, tool descriptions.
 
 ## Tests

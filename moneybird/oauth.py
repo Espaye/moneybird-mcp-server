@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -81,6 +82,47 @@ def build_authorize_url(
     if state:
         params["state"] = state
     return f"{OAUTH_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
+
+
+def generate_state() -> str:
+    """A cryptographically random CSRF ``state`` value for :func:`build_authorize_url`.
+
+    Hosted (redirect-URI) flows must generate this per login attempt, keep it in the
+    user's session, and pass it to :func:`parse_authorization_callback`.
+    """
+    return secrets.token_urlsafe(32)
+
+
+def parse_authorization_callback(
+    callback_url: str,
+    *,
+    expected_state: str = "",
+) -> str:
+    """Extract the authorization code from an OAuth redirect callback URL.
+
+    Raises :class:`MoneybirdError` when the provider reported an error (e.g. the
+    user denied consent), when ``expected_state`` is given and does not match the
+    callback's ``state`` (CSRF), or when no code is present. Hosted flows must
+    always pass ``expected_state``; it is optional only for local development.
+    """
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(callback_url).query)
+    error = (query.get("error") or [""])[0]
+    if error:
+        description = (query.get("error_description") or [""])[0]
+        raise MoneybirdError(
+            f"Moneybird authorization failed: {error} {description}".strip()
+        )
+    if expected_state:
+        state = (query.get("state") or [""])[0]
+        if not secrets.compare_digest(state, expected_state):
+            raise MoneybirdError(
+                "OAuth state mismatch on the callback: possible CSRF; "
+                "not exchanging the authorization code."
+            )
+    code = (query.get("code") or [""])[0].strip()
+    if not code:
+        raise MoneybirdError("The callback URL contains no authorization code.")
+    return code
 
 
 def _token_request(form: dict[str, str]) -> dict[str, Any]:

@@ -44,6 +44,41 @@ class AuthorizeUrlTests(unittest.TestCase):
         self.assertIn("moneybird.com/user/applications/new", str(ctx.exception))
 
 
+class AuthorizationCallbackTests(unittest.TestCase):
+    def test_code_is_extracted_when_state_matches(self) -> None:
+        state = oauth.generate_state()
+        url = f"https://gateway.example/callback?code=abc123&state={state}"
+        self.assertEqual(
+            oauth.parse_authorization_callback(url, expected_state=state), "abc123"
+        )
+
+    def test_state_mismatch_raises_without_leaking_the_code(self) -> None:
+        url = "https://gateway.example/callback?code=abc123&state=forged"
+        with self.assertRaises(MoneybirdError) as caught:
+            oauth.parse_authorization_callback(url, expected_state="expected")
+        self.assertIn("state mismatch", str(caught.exception))
+        self.assertNotIn("abc123", str(caught.exception))
+
+    def test_provider_error_is_reported(self) -> None:
+        url = (
+            "https://gateway.example/callback?error=access_denied"
+            "&error_description=The+user+denied+access"
+        )
+        with self.assertRaises(MoneybirdError) as caught:
+            oauth.parse_authorization_callback(url)
+        self.assertIn("access_denied", str(caught.exception))
+
+    def test_missing_code_raises(self) -> None:
+        with self.assertRaises(MoneybirdError):
+            oauth.parse_authorization_callback("https://gateway.example/callback?state=x")
+
+    def test_generate_state_is_random_and_urlsafe(self) -> None:
+        first, second = oauth.generate_state(), oauth.generate_state()
+        self.assertNotEqual(first, second)
+        self.assertGreaterEqual(len(first), 32)
+        self.assertEqual(first, urllib.parse.quote(first, safe="-_"))
+
+
 class TokenRequestTests(unittest.TestCase):
     def test_exchange_sends_authorization_code_grant(self) -> None:
         with mock.patch.dict(os.environ, FAKE_APP):
