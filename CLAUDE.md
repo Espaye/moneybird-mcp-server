@@ -84,8 +84,9 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   → `reconcile_purchase_invoice_from_approval` om de vaste boeking van een goede referentiefactuur
   te reproduceren. Regelprijzen worden naar het doeltotaal geschaald zodat het documenttotaal tot
   op de cent gelijk blijft; wijken de totalen af, dan is de regel-voor-regel-splitsing een (in de
-  preview gemarkeerde) aanname. De echte splitsing uit de PDF lezen kan later — zie
-  `docs/reading_pdf_attachments.md`. (Logica: `moneybird/purchase_reconcile.py`.)
+  preview gemarkeerde) aanname. De echte splitsing lees je van de factuur-PDF met
+  `read_document_attachment` (tekstlaag via pypdf; ontwerp in
+  `docs/reading_pdf_attachments.md`). (Logica: `moneybird/purchase_reconcile.py`.)
 - **Document line prices are entered *incl btw*** in this administration. So a "40% / 60%"
   split is 40% / 60% of the **incl-tax total**, and the invoice total incl = sum of line
   `price` values. `total_price_excl_tax_with_discount` on a line is back-calculated

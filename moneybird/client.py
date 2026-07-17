@@ -78,6 +78,21 @@ def is_retryable_http_status(status_code: int) -> bool:
     return status_code in RETRYABLE_HTTP_STATUS_CODES
 
 
+class _StopRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse automatic redirects so the caller can re-request without credentials.
+
+    urllib's default handler forwards all original headers — including
+    Authorization — to the redirect target. Attachment downloads redirect to a
+    signed third-party storage URL, which must never see the Moneybird token.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
+
+
 
 
 class MoneybirdClient:
@@ -568,6 +583,77 @@ class MoneybirdClient:
             f"/{self.administration_id}/{config['collection_path']}/synchronization.json",
             body={"ids": ids},
             retry_safe=True,
+        )
+
+    def _binary_request(self, method: str, path: str) -> tuple[bytes, str]:
+        """Fetch a non-JSON endpoint (attachment download); returns (bytes, content_type).
+
+        Moneybird serves attachment bytes either directly or via a redirect to a
+        short-lived signed storage URL. The redirect is followed manually and
+        *without* the Authorization header: the signed URL doesn't need it, and
+        the bearer token must not leak to the storage host (which may also
+        reject authorized requests outright).
+        """
+        url = f"{self.base_url}{path}"
+        opener = urllib.request.build_opener(_StopRedirects)
+        for attempt in range(DEFAULT_RETRY_ATTEMPTS + 1):
+            request = urllib.request.Request(url=url, method=method)
+            request.add_header("Authorization", f"Bearer {self.token}")
+            try:
+                with opener.open(request, timeout=self.timeout) as response:
+                    content_type = response.headers.get("Content-Type") or "application/octet-stream"
+                    return response.read(), content_type
+            except urllib.error.HTTPError as exc:
+                if exc.code in _REDIRECT_STATUS_CODES:
+                    location = exc.headers.get("Location")
+                    if not location:
+                        raise MoneybirdError(
+                            f"Moneybird redirected {path} without a Location header."
+                        ) from exc
+                    signed_url = urllib.parse.urljoin(url, location)
+                    signed_request = urllib.request.Request(url=signed_url, method="GET")
+                    try:
+                        with urllib.request.urlopen(
+                            signed_request, timeout=self.timeout
+                        ) as response:
+                            content_type = (
+                                response.headers.get("Content-Type")
+                                or "application/octet-stream"
+                            )
+                            return response.read(), content_type
+                    except urllib.error.HTTPError as signed_exc:
+                        raise MoneybirdError(
+                            f"Attachment storage returned HTTP {signed_exc.code} for {path}."
+                        ) from signed_exc
+                if attempt < DEFAULT_RETRY_ATTEMPTS and is_retryable_http_status(exc.code):
+                    time.sleep(
+                        retry_delay_seconds(
+                            attempt=attempt,
+                            retry_after_header=exc.headers.get("Retry-After"),
+                        )
+                    )
+                    continue
+                body_text = exc.read().decode("utf-8", errors="replace")
+                raise MoneybirdError(
+                    f"Moneybird returned HTTP {exc.code} for {path}: {body_text}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                if attempt < DEFAULT_RETRY_ATTEMPTS:
+                    time.sleep(retry_delay_seconds(attempt=attempt))
+                    continue
+                raise MoneybirdError(f"Could not reach Moneybird: {exc.reason}.") from exc
+
+    def download_attachment(
+        self,
+        kind: str,
+        document_id: str,
+        attachment_id: str,
+    ) -> tuple[bytes, str]:
+        """Download a document attachment's raw bytes; returns (data, content_type)."""
+        config = document_kind_config(kind)
+        return self._binary_request(
+            "GET",
+            f"/{self.administration_id}/{config['collection_path']}/{document_id}/attachments/{attachment_id}/download",
         )
 
     def list_financial_mutations(

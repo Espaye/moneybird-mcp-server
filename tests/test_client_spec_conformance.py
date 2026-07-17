@@ -41,10 +41,10 @@ def _spec_operations() -> set[tuple[str, str]]:
 
 
 def _client_operations() -> list[tuple[str, str, str]]:
-    """(method, normalized_path, raw_snippet) for every _request call in client.py."""
+    """(method, normalized_path, raw_snippet) for every _request/_binary_request call in client.py."""
     source = CLIENT_SOURCE.read_text(encoding="utf-8")
     calls = re.findall(
-        r"_request\(\s*\"(GET|POST|PATCH|PUT|DELETE)\",\s*f?\"([^\"]+)\"",
+        r"_(?:binary_)?request\(\s*\"(GET|POST|PATCH|PUT|DELETE)\",\s*f?\"([^\"]+)\"",
         source,
     )
     operations: list[tuple[str, str, str]] = []

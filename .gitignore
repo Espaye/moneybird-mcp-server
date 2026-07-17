@@ -23,3 +23,6 @@ moneybird_oauth_tokens.json
 dist/
 build/
 *.egg-info/
+
+# Attachment downloads saved by read_document_attachment (financial data)
+attachments/

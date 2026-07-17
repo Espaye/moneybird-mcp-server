@@ -1,10 +1,11 @@
 # Reading a purchase-invoice PDF attachment
 
-Status: **not wired up as a tool.** This is a design note so that if someone later
-wants an AI to actually read the PDF behind a purchase invoice (for example to
-derive the real stroom/gas split of an Eneco *termijnnota* instead of assuming it
-from the previous month), the path is already known and nothing has to be
-rediscovered.
+Status: **implemented.** The MCP tool is `read_document_attachment`
+(`moneybird/tools/purchases.py`): it downloads the attachment via
+`MoneybirdClient.download_attachment`, saves the file under the data dir
+(`attachments/`), and returns the PDF's text layer when `pypdf` is installed
+(the `moneybird-mcp[pdf]` extra). This note remains as the design record —
+why it exists, the API path, and what is deliberately left out (OCR).
 
 ## Why it matters
 
@@ -65,23 +66,24 @@ storage URL that does **not** accept the `Authorization` header. `urllib` follow
 redirects automatically; if a redirect ever 401s, re-request the `Location` URL
 *without* the bearer header.
 
+## How it is implemented
+
+1. `MoneybirdClient._binary_request` fetches the endpoint without JSON decoding,
+   refuses automatic redirects, and re-requests the signed `Location` URL
+   **without** the Authorization header (the bearer token must never reach the
+   storage host). `download_attachment(kind, document_id, attachment_id)` wraps it;
+   the path is checked against `docs/moneybird_api_paths.json` like every other
+   endpoint (`tests/test_client_spec_conformance.py` also scans `_binary_request`).
+2. Extraction is read-only and separate: `moneybird/attachments.py::extract_pdf_text`
+   reads the text layer with `pypdf` when installed and otherwise explains what is
+   missing. Results are surfaced for confirmation — never auto-written.
+3. Any resulting change goes through `prepare_reconcile_purchase_invoice`, so the
+   total-preservation check and the approval flow still apply.
+
 ## What is deliberately left out
 
-- **Parsing / OCR.** Turning `pdf_bytes` into structured numbers (a text-layer read
-  with `pypdf`, or OCR for scanned invoices) is not implemented and adds heavy
-  dependencies. That is the piece to build if this ever becomes a tool.
-- **A guarded write from parsed values.** Once real per-line amounts are extracted,
-  they would feed the existing `prepare_reconcile_purchase_invoice` flow by passing
-  an explicit `target_total` and/or a hand-built reference — no new write machinery
-  is needed, only a trustworthy source for the numbers.
-
-## If you turn this into a tool
-
-1. Add a `download_attachment(kind, document_id, attachment_id) -> bytes` method on
-   `MoneybirdClient` (mirror `_request`, but return `response.read()` without JSON
-   decoding), and check the path against `docs/moneybird_api_paths.json` like every
-   other endpoint (`tests/test_client_spec_conformance.py`).
-2. Keep extraction read-only and separate: a helper that takes bytes and returns
-   candidate line amounts, surfaced for confirmation — never auto-written.
-3. Route any resulting change through `prepare_reconcile_purchase_invoice` so the
-   total-preservation check and the approval flow still apply.
+- **OCR.** Scanned invoices without a text layer report a clear note instead;
+  OCR would add heavy dependencies and stays out of the server.
+- **A direct write from parsed values.** Extracted amounts feed the existing
+  `prepare_reconcile_purchase_invoice` flow (an explicit `target_total` and/or a
+  hand-picked reference) — no new write machinery.

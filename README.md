@@ -13,6 +13,8 @@ It exposes these tools:
 - `list_purchase_invoices`
 - `list_receipts`
 - `list_general_journal_documents`
+- `read_document_attachment`
+- `review_purchase_invoices`
 - `list_financial_mutations`
 - `list_administrations`
 - `get_contact_by_customer_id`
@@ -70,6 +72,8 @@ It exposes these tools:
 - `unlink_bank_mutation_booking_from_approval`
 - `prepare_create_credit_invoice`
 - `create_credit_invoice_from_approval`
+- `prepare_reconcile_purchase_invoice`
+- `reconcile_purchase_invoice_from_approval`
 
 The first two are the important ones if you want ChatGPT deep research or ChatGPT developer mode to treat Moneybird like a data source. The `prepare_*` and `*_from_approval` pairs are the guarded write path.
 
@@ -311,6 +315,8 @@ Then use the public URL ending in `/sse`.
 - `list_purchase_invoices(limit=10, page=1, filter="", period="")`: compact inkoopfactuuroverzicht.
 - `list_receipts(limit=10, page=1, filter="", period="")`: compact bonnen-/overige uitgavenoverzicht.
 - `list_general_journal_documents(limit=10, page=1, filter="", period="")`: compact memoriaaloverzicht.
+- `read_document_attachment(document_id, attachment_id="", kind="purchase_invoice")`: downloads the (PDF) attachment behind a purchase invoice, receipt, or general journal document, saves it under the data dir, and returns the PDF text layer (requires the `pdf` extra: `pip install 'moneybird-mcp[pdf]'`) — so the real per-line amounts can be read off the actual invoice instead of assumed.
+- `review_purchase_invoices(period="", limit=100, contact_id="", kind="purchase_invoice")`: finds purchase invoices that need attention — still `new`, booked with fewer lines than the supplier usually gets, missing ledger accounts, or a flipped incl/excl-btw flag — and suggests a reference invoice to reconcile against.
 - `list_financial_mutations(limit=10, page=1, filter="", period="")`: compact bank- en kasmutatieoverzicht.
 - `list_administrations()`: useful during setup if the token can access multiple administrations.
 - `get_contact_by_customer_id(customer_id)`: fetches a contact by your own external identifier.
@@ -368,6 +374,8 @@ Then use the public URL ending in `/sse`.
 - `unlink_bank_mutation_booking_from_approval(approval_id)`: executes the unlink and verifies the booking is gone.
 - `prepare_create_credit_invoice(sales_invoice_id)`: stages duplicating an invoice into a draft credit invoice (negated amounts, nothing sent).
 - `create_credit_invoice_from_approval(approval_id)`: executes the credit duplication and verifies the credit total negates the original.
+- `prepare_reconcile_purchase_invoice(document_id, reference_document_id="", kind="purchase_invoice", target_total="", relabel_period=True)`: stages reproducing a supplier's established line structure (descriptions, ledgers, tax rates) on a botched invoice, scaling prices so the document total stays fixed to the cent; when totals differ, the proportional split is flagged as an assumption in the preview.
+- `reconcile_purchase_invoice_from_approval(approval_id)`: executes the staged reconcile and verifies the resulting total matches the expected amount to the cent.
 
 ## 5b. Prompts and the playbook (the "skill" layer)
 

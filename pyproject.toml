@@ -30,6 +30,11 @@ dependencies = [
     "chardet>=5,<6",
 ]
 
+[project.optional-dependencies]
+# PDF text-layer extraction for read_document_attachment; without it the tool
+# still downloads and saves the file but cannot return the text.
+pdf = ["pypdf>=5"]
+
 [project.urls]
 Homepage = "https://github.com/Espaye/moneybird-mcp-server"
 Repository = "https://github.com/Espaye/moneybird-mcp-server"

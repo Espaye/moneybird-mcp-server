@@ -5,3 +5,6 @@ fastmcp>=3.4,<4
 uvicorn>=0.30
 # FastMCP imports requests; keep the optional detector within requests' supported range.
 chardet>=5,<6
+# PDF text-layer extraction for read_document_attachment (optional in the wheel
+# as the [pdf] extra; installed by default in the git-clone workflow).
+pypdf>=5

@@ -38,7 +38,8 @@ def main() -> None:
 
     print("Installing moneybird-mcp and dependencies into the bundle ...")
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--quiet", "--target", str(lib), str(ROOT)],
+        # Include the [pdf] extra so the Desktop bundle can read attachment text layers.
+        [sys.executable, "-m", "pip", "install", "--quiet", "--target", str(lib), f"{ROOT}[pdf]"],
         check=True,
     )
 

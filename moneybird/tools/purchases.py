@@ -111,6 +111,97 @@ PurchaseTemplateKind = Annotated[
     Field(description="Document kind to reconcile: 'purchase_invoice' (default) or 'receipt'."),
 ]
 
+AttachmentDocumentKind = Annotated[
+    str,
+    Field(
+        description=(
+            "Document kind the attachment belongs to: 'purchase_invoice' (default), "
+            "'receipt', or 'general_journal_document'."
+        )
+    ),
+]
+
+
+@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
+def read_document_attachment(
+    document_id: Annotated[
+        str, Field(description="Id of the document whose attachment to read.")
+    ],
+    attachment_id: Annotated[
+        str,
+        Field(
+            description=(
+                "Id of the attachment (from the document's 'attachments' array). Leave "
+                "empty when the document has exactly one attachment; with several, the "
+                "tool returns the list so you can pick."
+            )
+        ),
+    ] = "",
+    kind: AttachmentDocumentKind = "purchase_invoice",
+) -> dict[str, Any]:
+    """Use this to read the actual (PDF) attachment behind a purchase invoice or receipt —
+    for example to get the real per-line amounts of a supplier invoice instead of assuming
+    them from a prior month. Downloads the file, saves it locally, and returns the PDF's
+    text layer when one exists. Read-only; it never changes anything. Extracted amounts
+    feed prepare_reconcile_purchase_invoice as an explicit target, never a direct write."""
+    from ..attachments import extract_pdf_text, safe_attachment_filename
+    from ..config import data_dir
+
+    client = ctx.get_client()
+    document = client.get_document(kind, document_id)
+    attachments = document.get("attachments") or []
+    listing = [
+        {
+            "id": str(item.get("id")),
+            "filename": item.get("filename"),
+            "content_type": item.get("content_type"),
+            "size": item.get("size"),
+        }
+        for item in attachments
+    ]
+    if not attachments:
+        return {
+            "document_id": str(document.get("id")),
+            "document_kind": kind,
+            "attachments": [],
+            "note": "This document has no attachments.",
+        }
+    if not attachment_id and len(attachments) > 1:
+        return {
+            "document_id": str(document.get("id")),
+            "document_kind": kind,
+            "attachments": listing,
+            "note": "Multiple attachments; call again with the attachment_id you want.",
+        }
+    wanted = str(attachment_id) if attachment_id else listing[0]["id"]
+    selected = next((item for item in listing if item["id"] == wanted), None)
+    if selected is None:
+        return {
+            "document_id": str(document.get("id")),
+            "document_kind": kind,
+            "attachments": listing,
+            "note": f"Attachment {wanted} not found on this document; pick one of the listed ids.",
+        }
+
+    data, content_type = client.download_attachment(kind, document_id, wanted)
+
+    target_dir = data_dir() / "attachments"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename = safe_attachment_filename(selected.get("filename") or "")
+    saved_path = target_dir / f"{document.get('id')}_{wanted}_{filename}"
+    saved_path.write_bytes(data)
+
+    return {
+        "document_id": str(document.get("id")),
+        "document_kind": kind,
+        "reference": document.get("reference"),
+        "attachment": selected,
+        "content_type": content_type,
+        "size_bytes": len(data),
+        "saved_path": str(saved_path),
+        "text": extract_pdf_text(data),
+    }
+
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def review_purchase_invoices(

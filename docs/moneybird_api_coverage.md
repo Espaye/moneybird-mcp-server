@@ -121,7 +121,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 | PATCH | `/documents/general_journal_documents/{id}` | Update a general journal document | — |
 | POST | `/documents/general_journal_documents/{id}/attachments` | Add attachment to general journal document | — |
 | DELETE | `/documents/general_journal_documents/{id}/attachments/{attachment_id}` | Delete an attachment | — |
-| GET | `/documents/general_journal_documents/{id}/attachments/{attachment_id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/documents/general_journal_documents/{id}/attachments/{attachment_id}/download` | Download attachment | ✅ read_document_attachment |
 | GET | `/documents/general_journal_documents/synchronization` | List ids and versions of general journal documents | ✅ `sync_search_index` |
 | POST | `/documents/general_journal_documents/synchronization` | Fetch general journal documents with given ids | ✅ `sync_search_index` |
 
@@ -136,7 +136,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 | PATCH | `/documents/purchase_invoices/{id}` | Update purchase invoice | ✅ `prepare_reclassify_document_lines` |
 | POST | `/documents/purchase_invoices/{id}/attachments` | Add attachment to purchase invoice | — |
 | DELETE | `/documents/purchase_invoices/{id}/attachments/{attachment_id}` | Delete an attachment | — |
-| GET | `/documents/purchase_invoices/{id}/attachments/{attachment_id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/documents/purchase_invoices/{id}/attachments/{attachment_id}/download` | Download attachment | ✅ read_document_attachment |
 | POST | `/documents/purchase_invoices/{id}/payments` | Create a payment | — |
 | DELETE | `/documents/purchase_invoices/{id}/payments/{payment_id}` | Delete a payment | — |
 | PATCH | `/documents/purchase_invoices/{id}/register_payment` | Register a payment for a purchase invoice | ✅ `prepare_register_payment` |
@@ -156,7 +156,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 | PATCH | `/documents/receipts/{id}` | Update a receipt | ✅ `prepare_reclassify_document_lines` |
 | POST | `/documents/receipts/{id}/attachments` | Add attachment to receipt | — |
 | DELETE | `/documents/receipts/{id}/attachments/{attachment_id}` | Delete an attachment | — |
-| GET | `/documents/receipts/{id}/attachments/{attachment_id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/documents/receipts/{id}/attachments/{attachment_id}/download` | Download attachment | ✅ read_document_attachment |
 | POST | `/documents/receipts/{id}/payments` | Create a payment | — |
 | DELETE | `/documents/receipts/{id}/payments/{payment_id}` | Delete a payment | — |
 | PATCH | `/documents/receipts/{id}/register_payment` | Register a payment for a receipt | ✅ `prepare_register_payment` |
