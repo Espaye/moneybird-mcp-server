@@ -151,6 +151,8 @@ asset bundled on developer.moneybird.com.
 - `moneybird/playbooks/boekhoud_playbook.md` — btw rules, categorization, consistency
   checklist, bank-mutation diagnosis. Read it before a bookkeeping task.
 - `scripts/` — runnable read-only/reclassify scripts (good examples of the patterns above).
+- `docs/releasing.md` — the release checklist (version bump in pyproject **and**
+  mcpb/manifest.json, build, twine check, PyPI upload, mcpb bundle).
 - `README.md` — setup, deployment, ChatGPT connection, tool descriptions.
 
 ## Tests

@@ -80,3 +80,18 @@ class BuildConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PackagingVersionSyncTests(unittest.TestCase):
+    """The wheel (pyproject) and the Claude Desktop bundle (mcpb manifest) must
+    always release the same version number."""
+
+    def test_pyproject_and_mcpb_manifest_versions_match(self) -> None:
+        import json
+        import tomllib
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        manifest = json.loads((root / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(pyproject["project"]["version"], manifest["version"])

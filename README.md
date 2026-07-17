@@ -1,6 +1,25 @@
-# Moneybird MCP Scaffold
+# Moneybird MCP server
 
-This repo is a minimal MCP bridge between ChatGPT and Moneybird with read tools plus guarded write tools.
+Chat with your [Moneybird](https://www.moneybird.nl) bookkeeping from Claude, ChatGPT, or any
+other MCP client: read invoices, contacts, bank mutations, and reports; make changes only
+through a strict preview-and-approve flow. Nothing is ever written without your explicit
+"yes", and document totals are verified to the cent after every change.
+
+- **Read everything that matters**: contacts, sales and purchase invoices, receipts, bank
+  mutations, and every Moneybird report (P&L, balance sheet, btw, aging, ...), plus ranked
+  full-text search over a local sync index.
+- **Write safely**: every change is staged by a `prepare_*` tool that returns a preview and
+  an `approval_id`; only the matching `*_from_approval` tool executes it, verifies the result,
+  and appends to an audit log. Approvals survive server restarts.
+- **Dutch bookkeeping smarts built in**: btw rules and categorization playbook, bank-mutation
+  diagnosis, purchase-invoice reconciliation against a supplier's usual booking, meter-usage
+  invoicing, and PDF attachment reading to check the real invoice split.
+
+Quick start for MCP clients: `pip install moneybird-mcp` and run the `moneybird-mcp` console
+script (stdio). See **Install and run** below for the Claude Desktop one-file extension and
+the HTTP/SSE deployment used with ChatGPT.
+
+## Tool surface
 
 It exposes these tools:
 

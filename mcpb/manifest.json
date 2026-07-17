@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "moneybird-mcp",
   "display_name": "Moneybird",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Chat with your Moneybird bookkeeping: invoices, contacts, bank mutations and reports — changes only after a preview you approve.",
   "long_description": "Connects Claude to your Moneybird administration. Read invoices, purchase documents, contacts, bank mutations and financial reports; create or change things only through a strict preview-and-approve flow (nothing is ever written without your explicit 'yes', and totals are verified after every change). Includes Dutch bookkeeping prompts such as 'koppel_banktransacties' and 'verwerk_achterstand'.",
   "author": {
