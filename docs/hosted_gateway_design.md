@@ -97,9 +97,13 @@ end user's MCP client (Claude/ChatGPT)
 
 1. **M0 (done):** library is gateway-ready — multi-tenant headers, per-administration
    state, redirect-capable OAuth with state validation.
-2. **M1:** localhost end-to-end demo: a minimal web page that runs the redirect OAuth
-   flow, stores the token under a profile, and proxies MCP requests with injected
-   headers to a locally running `moneybird-mcp`.
+2. **M1 (done):** localhost end-to-end demo — the `gateway/` package
+   (`python -m gateway`, loopback-only). A minimal web page runs the redirect OAuth
+   flow, stores tokens under per-user OAuth profiles, issues a gateway key, and
+   dispatches `/u/<key>/mcp` into the in-process MCP app with tenant headers injected
+   (client-supplied tenant headers are stripped). Live-verified: a real MCP client
+   listed all 70 tools and called `list_tax_rates` through a gateway key. Tests:
+   `tests/test_gateway_demo.py`. The package is deliberately not part of the wheel.
 3. **M2:** deploy that demo behind TLS on the chosen domain with per-user keys and an
    encrypted token store; invite-only alpha.
 4. **M3:** accounts, billing, administration picker UI, revocation; public beta.

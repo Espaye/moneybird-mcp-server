@@ -26,3 +26,6 @@ build/
 
 # Attachment downloads saved by read_document_attachment (financial data)
 attachments/
+
+# Gateway demo user/key store (secrets)
+gateway_demo_users.json

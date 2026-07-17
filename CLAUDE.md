@@ -156,6 +156,9 @@ asset bundled on developer.moneybird.com.
 - `docs/hosted_gateway_design.md` — architecture for the hosted web-app product
   (gateway owns users/tokens and injects the tenant headers; this server stays
   unmodified). Read it before any hosted/multi-tenant work.
+- `gateway/` — the M1 localhost demo of that design (`python -m gateway`, loopback-only,
+  not in the wheel): OAuth onboarding pages + tenant-injecting dispatch to the
+  in-process MCP app. Tests in `tests/test_gateway_demo.py`.
 - `README.md` — setup, deployment, ChatGPT connection, tool descriptions.
 
 ## Tests
