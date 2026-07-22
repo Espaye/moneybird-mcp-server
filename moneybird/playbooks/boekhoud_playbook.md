@@ -60,7 +60,9 @@ Belangrijk om te weten:
 ## 2. De standaard-werkwijze voor elke schrijfactie
 
 1. **Lezen** — haal de relevante documenten/regels op (`list_*`, `search`, `fetch`,
-   `moneybird_request` voor niet-gewrapte endpoints).
+   `moneybird_request` voor niet-gewrapte endpoints). Geeft de gebruiker een exact
+   inkoopfactuurnummer, gebruik dan `get_purchase_invoice_by_reference`; zo voorkom je een brede,
+   onvolledige live-search.
 2. **Analyseren** — bepaal per regel wat er moet veranderen en waarom.
 3. **Voorbereiden** — roep de juiste `prepare_*`-tool aan; die geeft een `approval_id` +
    preview terug.
@@ -70,6 +72,13 @@ Belangrijk om te weten:
 6. **Uitvoeren** — roep de `*_from_approval`-tool aan met het `approval_id`.
 7. **Verifiëren** — haal het bijgewerkte document op, controleer totaal en versie, en meld het
    resultaat eerlijk (ook als er iets misging).
+
+Bij een afwijkende inkoopfactuur: lees eerst de PDF met `read_document_attachment`. Als de PDF
+de echte regelbedragen bevat, geef die als exacte `desired_lines` aan
+`prepare_reconcile_purchase_invoice` met een korte `source_note`. Gebruik alleen de
+referentiefactuurmodus wanneer de actuele regels niet uit de bron zijn af te leiden; proportioneel
+schalen blijft dan een expliciet te bevestigen aanname. De approval bevat een documentversie en
+wordt bij tussentijdse wijzigingen veilig geweigerd.
 
 ---
 

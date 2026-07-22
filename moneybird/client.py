@@ -549,6 +549,45 @@ class MoneybirdClient:
             f"/{self.administration_id}/{config['collection_path']}/{document_id}.json",
         )
 
+    def get_document_by_reference(self, kind: str, reference: str) -> dict[str, Any]:
+        """Return the one document whose reference exactly matches ``reference``.
+
+        Moneybird has dedicated find-by-reference endpoints for sales invoices but
+        not for purchase documents. The document collection does support a
+        server-side ``reference:`` filter, so use that instead of a broad search
+        across contacts, documents, and financial mutations.
+        """
+        normalized_reference = str(reference or "").strip()
+        if not normalized_reference:
+            raise MoneybirdError("reference is required.")
+
+        candidates = self.list_documents(
+            kind,
+            limit=100,
+            page=1,
+            filter=f"reference:{normalized_reference}",
+        )
+        exact = [
+            document
+            for document in candidates
+            if str(document.get("reference") or "").strip() == normalized_reference
+        ]
+        if not exact:
+            raise MoneybirdError(
+                f"No {kind} with reference '{normalized_reference}' was found."
+            )
+        if len(exact) > 1:
+            ids = ", ".join(str(document.get("id") or "") for document in exact)
+            raise MoneybirdError(
+                f"Reference '{normalized_reference}' matches multiple {kind} documents "
+                f"({ids}); use the internal document id."
+            )
+
+        document = exact[0]
+        if "details" not in document or "attachments" not in document:
+            return self.get_document(kind, str(document.get("id")))
+        return document
+
     def update_document(
         self,
         kind: str,

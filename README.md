@@ -30,6 +30,7 @@ It exposes these tools:
 - `list_sales_invoices`
 - `audit_recent_sales_invoice_send_methods`
 - `list_purchase_invoices`
+- `get_purchase_invoice_by_reference`
 - `list_receipts`
 - `list_general_journal_documents`
 - `read_document_attachment`
@@ -332,10 +333,11 @@ Then use the public URL ending in `/sse`.
 - `list_sales_invoices(limit=10, page=1, state="all", reference="", contact_id="", period="")`: compact invoice overview with extra filtering.
 - `audit_recent_sales_invoice_send_methods(limit=30, page_scan_limit=10)`: controleert recente verkoopfacturen en classificeert het oorspronkelijke verzend-event als handmatig, handmatig per e-mail, automatische e-mail, of e-factuur/SI.
 - `list_purchase_invoices(limit=10, page=1, filter="", period="")`: compact inkoopfactuuroverzicht.
+- `get_purchase_invoice_by_reference(reference)`: resolves an exact supplier invoice number directly through Moneybird's purchase-document filter and returns its current lines with ledger/tax names, attachments, payments, and version; use this instead of broad `search` when the user names an inkoopfactuur.
 - `list_receipts(limit=10, page=1, filter="", period="")`: compact bonnen-/overige uitgavenoverzicht.
 - `list_general_journal_documents(limit=10, page=1, filter="", period="")`: compact memoriaaloverzicht.
 - `read_document_attachment(document_id, attachment_id="", kind="purchase_invoice")`: downloads the (PDF) attachment behind a purchase invoice, receipt, or general journal document, saves it under the data dir, and returns the PDF text layer (requires the `pdf` extra: `pip install 'moneybird-mcp[pdf]'`) — so the real per-line amounts can be read off the actual invoice instead of assumed.
-- `review_purchase_invoices(period="", limit=100, contact_id="", kind="purchase_invoice")`: finds purchase invoices that need attention — still `new`, booked with fewer lines than the supplier usually gets, missing ledger accounts, or a flipped incl/excl-btw flag — and suggests a reference invoice to reconcile against.
+- `review_purchase_invoices(period="", limit=100, contact_id="", kind="purchase_invoice")`: finds purchase invoices that need attention — still `new`, booked with fewer lines than the supplier usually gets, missing ledger accounts, a flipped incl/excl-btw flag, or a familiar line description mapped to a different ledger/tax destination. A contact-specific review uses the complete versioned document synchronization feed (paginated list fallback) so older supplier history is not lost after the first page or current-book-year default.
 - `list_financial_mutations(limit=10, page=1, filter="", period="")`: compact bank- en kasmutatieoverzicht.
 - `list_administrations()`: useful during setup if the token can access multiple administrations.
 - `get_contact_by_customer_id(customer_id)`: fetches a contact by your own external identifier.
@@ -393,8 +395,8 @@ Then use the public URL ending in `/sse`.
 - `unlink_bank_mutation_booking_from_approval(approval_id)`: executes the unlink and verifies the booking is gone.
 - `prepare_create_credit_invoice(sales_invoice_id)`: stages duplicating an invoice into a draft credit invoice (negated amounts, nothing sent).
 - `create_credit_invoice_from_approval(approval_id)`: executes the credit duplication and verifies the credit total negates the original.
-- `prepare_reconcile_purchase_invoice(document_id, reference_document_id="", kind="purchase_invoice", target_total="", relabel_period=True)`: stages reproducing a supplier's established line structure (descriptions, ledgers, tax rates) on a botched invoice, scaling prices so the document total stays fixed to the cent; when totals differ, the proportional split is flagged as an assumption in the preview.
-- `reconcile_purchase_invoice_from_approval(approval_id)`: executes the staged reconcile and verifies the resulting total matches the expected amount to the cent.
+- `prepare_reconcile_purchase_invoice(document_id, reference_document_id="", kind="purchase_invoice", target_total="", relabel_period=True, desired_lines=None, prices_are_incl_tax=None, source_note="")`: stages a purchase-invoice repair. With `desired_lines`, it validates exact PDF-derived descriptions, prices, ledger ids, and tax-rate ids and refuses any split that changes the current total; without them it reproduces and proportionally scales a reference invoice. Both modes store the document version in the approval.
+- `reconcile_purchase_invoice_from_approval(approval_id)`: aborts if the document changed after the preview, otherwise executes the staged reconcile and re-fetches the invoice to verify the total, exact line set, tax-price mode, and resulting version.
 
 ## 5b. Prompts and the playbook (the "skill" layer)
 

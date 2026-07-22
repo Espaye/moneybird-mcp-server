@@ -13,9 +13,10 @@ why it exists, the API path, and what is deliberately left out (OCR).
 reference invoice's lines to the target total. When the totals differ, the per-line
 split (e.g. stroom vs gas) is an **assumption** copied from the reference — it is
 flagged as a warning in the preview. The only way to remove that assumption is to
-read the numbers off the actual invoice PDF. Those bytes are retrievable today;
-what is missing is the parsing/OCR step, which is deliberately out of scope for the
-server.
+read the numbers off the actual invoice PDF and pass them as `desired_lines`. The
+prepare tool validates every ledger/tax id, calculates the proposed inclusive total,
+and refuses to stage a change unless it matches the current invoice total to the cent.
+Automatic parsing/OCR remains deliberately out of scope for the server.
 
 ## The API path (already available)
 
@@ -77,13 +78,16 @@ redirects automatically; if a redirect ever 401s, re-request the `Location` URL
 2. Extraction is read-only and separate: `moneybird/attachments.py::extract_pdf_text`
    reads the text layer with `pypdf` when installed and otherwise explains what is
    missing. Results are surfaced for confirmation — never auto-written.
-3. Any resulting change goes through `prepare_reconcile_purchase_invoice`, so the
-   total-preservation check and the approval flow still apply.
+3. Any resulting change goes through `prepare_reconcile_purchase_invoice`. Pass exact
+   attachment values through `desired_lines` together with `prices_are_incl_tax` and a
+   short `source_note`; the normal preview/approval flow, optimistic version check, and
+   post-write total/line verification still apply.
 
 ## What is deliberately left out
 
 - **OCR.** Scanned invoices without a text layer report a clear note instead;
   OCR would add heavy dependencies and stays out of the server.
-- **A direct write from parsed values.** Extracted amounts feed the existing
-  `prepare_reconcile_purchase_invoice` flow (an explicit `target_total` and/or a
-  hand-picked reference) — no new write machinery.
+- **An automatic write from parsed values.** Extracted amounts can feed
+  `prepare_reconcile_purchase_invoice(desired_lines=[...])`, but the tool never infers
+  ledger/tax choices or writes immediately: it requires exact ids, produces a preview,
+  and still needs the matching explicit approval call.

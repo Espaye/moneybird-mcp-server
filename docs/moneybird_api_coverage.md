@@ -129,11 +129,11 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 
 | Method | Endpoint | Summary | Server coverage |
 |---|---|---|---|
-| GET | `/documents/purchase_invoices` | Get purchase invoices | ✅ `list_purchase_invoices` |
+| GET | `/documents/purchase_invoices` | Get purchase invoices | ✅ `list_purchase_invoices`, `get_purchase_invoice_by_reference` (`reference:` filter) |
 | POST | `/documents/purchase_invoices` | Create a new purchase invoice | — |
 | DELETE | `/documents/purchase_invoices/{id}` | Delete a purchase invoices | — |
 | GET | `/documents/purchase_invoices/{id}` | Get purchase invoice | ✅ `fetch("purchase_invoice:<id>")` |
-| PATCH | `/documents/purchase_invoices/{id}` | Update purchase invoice | ✅ `prepare_reclassify_document_lines` |
+| PATCH | `/documents/purchase_invoices/{id}` | Update purchase invoice | ✅ `prepare_reclassify_document_lines`, `prepare_reconcile_purchase_invoice` |
 | POST | `/documents/purchase_invoices/{id}/attachments` | Add attachment to purchase invoice | — |
 | DELETE | `/documents/purchase_invoices/{id}/attachments/{attachment_id}` | Delete an attachment | — |
 | GET | `/documents/purchase_invoices/{id}/attachments/{attachment_id}/download` | Download attachment | ✅ read_document_attachment |

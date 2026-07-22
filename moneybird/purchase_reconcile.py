@@ -1,4 +1,4 @@
-"""Purchase-invoice reconciliation against a supplier's established booking pattern.
+"""Build safe purchase-document reconciliation payloads.
 
 Moneybird's *boekingsregels* (booking rules) auto-fill an incoming purchase
 invoice, but they are not exposed by the API and they apply inconsistently: one
@@ -8,25 +8,25 @@ lands as a single catch-all line, in ``new`` state, sometimes with
 the manual "compare six months and rebuild the lines by hand" chore into
 repeatable operations:
 
-* :func:`scan_purchase_invoices_for_attention` — read-only detector that flags
-  invoices which are still ``new`` or deviate from the same supplier's usual
-  booking (fewer lines, different ledgers, or a different incl/excl-tax flag).
 * :func:`build_reconcile_purchase_invoice` — reproduces a known-good reference
   invoice's line structure onto the target invoice, scaling line prices to the
   target total so the document total stays fixed to the cent. The output feeds
   the guarded ``prepare_* -> *_from_approval`` write flow.
+* :func:`build_explicit_purchase_invoice_reconcile` — validates an exact line
+  allocation transcribed from the actual invoice attachment, without proportional
+  scaling, and refuses any split that changes the total.
 
 Neither function writes anything; the tool layer stages the write and only the
 ``*_from_approval`` tool executes it after explicit user confirmation.
 """
 from __future__ import annotations
 
-from collections import Counter
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from .config import MoneybirdError
 from .formatting import money_decimal, normalize_document_kind
+from .purchase_review import list_documents_for_contact
 
 CENT = Decimal("0.01")
 
@@ -36,7 +36,6 @@ _DUTCH_MONTHS = [
 ]
 
 _TEMPLATE_KINDS = {"purchase_invoice", "receipt"}
-
 
 def dutch_month_label(date_str: Any) -> str:
     """Return a Dutch 'maand jaar' label for an ISO date, or '' if unparseable.
@@ -83,6 +82,28 @@ def _document_signature(document: dict[str, Any]) -> tuple:
         bool(document.get("prices_are_incl_tax")),
         tuple(sorted(_line_signature(d) for d in details)),
     )
+
+
+def _version_snapshot(document: dict[str, Any]) -> dict[str, str]:
+    """Return optimistic-lock fields that survive JSON approval persistence."""
+    snapshot: dict[str, str] = {}
+    if document.get("version") not in (None, ""):
+        snapshot["expected_version"] = str(document.get("version"))
+    if document.get("updated_at"):
+        snapshot["expected_updated_at"] = str(document.get("updated_at"))
+    return snapshot
+
+
+def _expected_lines(desired: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {
+            "description": str(line.get("description") or ""),
+            "price": f'{money_decimal(line.get("price")):.2f}',
+            "ledger_account_id": _line_ledger(line),
+            "tax_rate_id": _line_tax(line),
+        }
+        for line in desired
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -175,12 +196,16 @@ def _pick_reference_document(
             "Pass reference_document_id explicitly."
         )
 
-    listed = client.list_documents(kind, limit=100)
+    listed, _scan = list_documents_for_contact(
+        client,
+        kind,
+        contact_id=contact_id,
+        limit=100,
+    )
     same_contact = [
         item
         for item in listed
-        if str((item.get("contact") or {}).get("id") or "") == contact_id
-        and str(item.get("id") or "") != target_id
+        if str(item.get("id") or "") != target_id
     ]
     if not same_contact:
         raise MoneybirdError(
@@ -347,7 +372,10 @@ def build_reconcile_purchase_invoice(
         "document_id": document_id,
         "details_attributes": details_attributes,
         "prices_are_incl_tax": prices_are_incl_tax,
+        "expected_total_before": f"{current_total:.2f}",
         "expected_total_incl_tax": f"{resolved_total:.2f}",
+        "expected_lines": _expected_lines(desired),
+        **_version_snapshot(target),
     }
     preview = {
         "document_id": document_id,
@@ -360,6 +388,7 @@ def build_reconcile_purchase_invoice(
         "reference_reference": reference.get("reference"),
         "target_reference": target.get("reference"),
         "target_state": target.get("state"),
+        "target_version": target.get("version"),
         "total_before": f"{current_total:.2f}",
         "total_after": f"{resolved_total:.2f}",
         "total_unchanged": current_total == resolved_total,
@@ -375,153 +404,185 @@ def build_reconcile_purchase_invoice(
     }
     return {"payload": payload, "preview": preview}
 
-
-# --------------------------------------------------------------------------- #
-# Detecting invoices that need attention
-# --------------------------------------------------------------------------- #
-
-def _canonical_pattern(documents: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Modal line-count / ledger-set / incl-tax flag for a supplier's invoices.
-
-    Uses the most common ('modal') values across the supplier's invoices as the
-    expected booking. Returns ``None`` when there is not enough history (fewer
-    than two invoices) to establish a pattern.
-    """
-    if len(documents) < 2:
-        return None
-
-    line_counts = Counter(len(doc.get("details") or []) for doc in documents)
-    ledger_sets = Counter(
-        frozenset(_line_ledger(d) for d in (doc.get("details") or []))
-        for doc in documents
-    )
-    incl_flags = Counter(bool(doc.get("prices_are_incl_tax")) for doc in documents)
-
-    modal_line_count = line_counts.most_common(1)[0][0]
-    modal_ledgers = ledger_sets.most_common(1)[0][0]
-    modal_incl = incl_flags.most_common(1)[0][0]
-
-    # A canonical example invoice: one that matches the modal line count, most
-    # recent first, to suggest as the reconcile reference.
-    example = None
-    for doc in sorted(documents, key=lambda d: str(d.get("date") or ""), reverse=True):
-        if len(doc.get("details") or []) == modal_line_count:
-            example = doc
-            break
-
-    return {
-        "modal_line_count": modal_line_count,
-        "modal_ledgers": modal_ledgers,
-        "modal_prices_are_incl_tax": modal_incl,
-        "example_document_id": str(example.get("id")) if example else "",
-    }
-
-
-def _needs_details(documents: list[dict[str, Any]]) -> bool:
-    return any("details" not in doc for doc in documents)
-
-
-def scan_purchase_invoices_for_attention(
+def build_explicit_purchase_invoice_reconcile(
     client: Any,
     *,
-    kind: str = "purchase_invoice",
-    period: str = "",
-    limit: int = 100,
-    contact_id: str = "",
+    document_id: str,
+    desired_lines: list[dict[str, Any]],
+    document_kind: str = "purchase_invoice",
+    prices_are_incl_tax: bool | None = None,
+    source_note: str = "",
 ) -> dict[str, Any]:
-    """Flag purchase invoices that are still ``new`` or deviate from their supplier's pattern.
+    """Build an exact, total-preserving line allocation from an invoice source.
 
-    Read-only. For each supplier with enough history it derives the modal booking
-    (line count, ledger set, incl/excl-tax flag) and flags invoices that fall
-    short, plus any invoice still in ``new`` state. Each flagged invoice carries a
-    suggested reconcile reference (a canonical prior invoice from the same
-    supplier).
+    This is the non-proportional companion to :func:`build_reconcile_purchase_invoice`.
+    It is intended for amounts transcribed from the actual PDF attachment. The
+    caller supplies the exact descriptions, prices, ledger ids, and tax-rate ids;
+    the builder validates every id and refuses to stage a split whose calculated
+    total differs from the current document total.
     """
-    normalized_kind = normalize_document_kind(kind)
-    if normalized_kind not in _TEMPLATE_KINDS:
+    kind = normalize_document_kind(document_kind)
+    if kind not in _TEMPLATE_KINDS:
         raise MoneybirdError(
-            "Attention scan supports purchase_invoice and receipt documents only."
+            "Explicit reconciliation supports purchase_invoice and receipt documents only."
         )
 
-    documents = client.list_documents(normalized_kind, limit=limit, period=period)
-    if contact_id:
-        documents = [
-            doc
-            for doc in documents
-            if str((doc.get("contact") or {}).get("id") or "") == str(contact_id)
-        ]
+    normalized_document_id = str(document_id or "").strip()
+    if not normalized_document_id:
+        raise MoneybirdError("document_id is required.")
+    if not desired_lines:
+        raise MoneybirdError("desired_lines must contain at least one exact invoice line.")
 
-    # Ensure each document carries its detail lines (the index endpoint usually
-    # includes them; fall back to per-document fetches only when it does not).
-    if _needs_details(documents):
-        documents = [
-            doc if "details" in doc else client.get_document(normalized_kind, str(doc.get("id")))
-            for doc in documents
-        ]
+    target = client.get_document(kind, normalized_document_id)
+    resolved_incl_flag = (
+        bool(target.get("prices_are_incl_tax"))
+        if prices_are_incl_tax is None
+        else bool(prices_are_incl_tax)
+    )
+    current_total = money_decimal(target.get("total_price_incl_tax"))
 
-    by_contact: dict[str, list[dict[str, Any]]] = {}
-    for doc in documents:
-        cid = str((doc.get("contact") or {}).get("id") or "")
-        by_contact.setdefault(cid, []).append(doc)
+    ledger_accounts = {
+        str(account.get("id")): account for account in client.list_ledger_accounts()
+    }
+    tax_rates = {str(rate.get("id")): rate for rate in client.list_tax_rates()}
 
-    patterns = {cid: _canonical_pattern(docs) for cid, docs in by_contact.items()}
+    desired: list[dict[str, Any]] = []
+    calculated_total_incl = Decimal("0.00")
+    for index, raw_line in enumerate(desired_lines, start=1):
+        description = str(raw_line.get("description") or "").strip()
+        if not description:
+            raise MoneybirdError(f"desired_lines[{index}] requires a description.")
+        if raw_line.get("price") in (None, ""):
+            raise MoneybirdError(f"desired_lines[{index}] requires a price.")
 
-    flagged: list[dict[str, Any]] = []
-    for doc in documents:
-        cid = str((doc.get("contact") or {}).get("id") or "")
-        pattern = patterns.get(cid)
-        details = doc.get("details") or []
-        reasons: list[str] = []
+        amount = str(raw_line.get("amount") or "1").strip()
+        if amount not in {"1", "1.0", "1.00", "1 x"}:
+            raise MoneybirdError(
+                f"desired_lines[{index}] amount must be 1; split the PDF into one "
+                "explicit total per desired line."
+            )
+        price = money_decimal(raw_line.get("price"))
+        ledger_id = str(raw_line.get("ledger_account_id") or "").strip()
+        tax_id = str(raw_line.get("tax_rate_id") or "").strip()
 
-        if str(doc.get("state") or "") == "new":
-            reasons.append("state is 'new' (not booked yet)")
+        ledger = ledger_accounts.get(ledger_id)
+        if ledger is None:
+            raise MoneybirdError(
+                f"desired_lines[{index}] ledger_account_id {ledger_id or '(empty)'} "
+                "does not exist."
+            )
+        if ledger.get("active") is False:
+            raise MoneybirdError(
+                f"desired_lines[{index}] ledger account {ledger_id} is inactive."
+            )
+        allowed_types = set(ledger.get("allowed_document_types") or [])
+        ledger_document_type = "purchase_invoice" if kind == "receipt" else kind
+        if allowed_types and ledger_document_type not in allowed_types:
+            raise MoneybirdError(
+                f"desired_lines[{index}] ledger account {ledger_id} does not allow {kind}."
+            )
 
-        if pattern is not None:
-            if pattern["modal_line_count"] > 1 and len(details) < pattern["modal_line_count"]:
-                reasons.append(
-                    f"has {len(details)} line(s); this supplier usually has "
-                    f"{pattern['modal_line_count']}"
-                )
-            ledgers = frozenset(_line_ledger(d) for d in details)
-            if ledgers != pattern["modal_ledgers"] and pattern["modal_ledgers"]:
-                missing = pattern["modal_ledgers"] - ledgers
-                if missing:
-                    reasons.append(
-                        f"missing usual ledger account(s): {', '.join(sorted(missing))}"
-                    )
-            if bool(doc.get("prices_are_incl_tax")) != pattern["modal_prices_are_incl_tax"]:
-                reasons.append(
-                    f"prices_are_incl_tax={bool(doc.get('prices_are_incl_tax'))}, "
-                    f"supplier usually {pattern['modal_prices_are_incl_tax']}"
-                )
+        tax_rate = tax_rates.get(tax_id)
+        if tax_rate is None:
+            raise MoneybirdError(
+                f"desired_lines[{index}] tax_rate_id {tax_id or '(empty)'} does not exist."
+            )
+        if tax_rate.get("active") is False:
+            raise MoneybirdError(
+                f"desired_lines[{index}] tax rate {tax_id} is inactive."
+            )
+        tax_type = str(tax_rate.get("tax_rate_type") or "")
+        if tax_type and tax_type not in {kind, "purchase_invoice"}:
+            raise MoneybirdError(
+                f"desired_lines[{index}] tax rate {tax_id} is for {tax_type}, not {kind}."
+            )
 
-        if not reasons:
-            continue
-
-        suggestion = ""
-        if pattern and pattern["example_document_id"] and pattern["example_document_id"] != str(doc.get("id")):
-            suggestion = pattern["example_document_id"]
-
-        flagged.append(
+        desired.append(
             {
-                "document_id": str(doc.get("id")),
-                "document_kind": normalized_kind,
-                "date": doc.get("date"),
-                "reference": doc.get("reference"),
-                "contact": (doc.get("contact") or {}).get("company_name")
-                or (doc.get("contact") or {}).get("name"),
-                "state": doc.get("state"),
-                "total_price_incl_tax": doc.get("total_price_incl_tax"),
-                "line_count": len(details),
-                "reasons": reasons,
-                "suggested_reference_document_id": suggestion,
+                "description": description,
+                "price": price,
+                "ledger_account_id": ledger_id,
+                "tax_rate_id": tax_id,
             }
         )
 
-    flagged.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
-    return {
-        "flagged": flagged,
-        "count": len(flagged),
-        "scanned": len(documents),
-        "period": period,
+        line_total_incl = price
+        if not resolved_incl_flag:
+            percentage = Decimal(str(tax_rate.get("percentage") or "0"))
+            line_total_incl = (price * (Decimal("1") + percentage / Decimal("100"))).quantize(
+                CENT,
+                rounding=ROUND_HALF_UP,
+            )
+        calculated_total_incl += line_total_incl
+
+    calculated_total_incl = calculated_total_incl.quantize(CENT, rounding=ROUND_HALF_UP)
+    if abs(calculated_total_incl - current_total) >= Decimal("0.005"):
+        raise MoneybirdError(
+            "The explicit line allocation would change the invoice total: "
+            f"calculated {calculated_total_incl:.2f}, current {current_total:.2f}. "
+            "Correct the PDF amounts or prices_are_incl_tax before preparing the write."
+        )
+
+    details_attributes = _map_lines(target.get("details") or [], desired)
+    desired_document = {
+        "prices_are_incl_tax": resolved_incl_flag,
+        "details": desired,
     }
+    already_consistent = _document_signature(target) == _document_signature(desired_document)
+    before_lines = [
+        {
+            "id": str(detail.get("id") or ""),
+            "description": str(detail.get("description") or ""),
+            "price": f'{money_decimal(detail.get("price")):.2f}',
+            "ledger_account_id": _line_ledger(detail),
+            "tax_rate_id": _line_tax(detail),
+        }
+        for detail in (target.get("details") or [])
+    ]
+    after_lines = _expected_lines(desired)
+
+    warnings = [
+        "Exact line amounts were supplied explicitly; confirm them against the invoice attachment."
+    ]
+    if bool(target.get("prices_are_incl_tax")) != resolved_incl_flag:
+        warnings.append(
+            f"prices_are_incl_tax will change from {bool(target.get('prices_are_incl_tax'))} "
+            f"to {resolved_incl_flag}."
+        )
+    if already_consistent:
+        warnings.append("The target invoice already matches the explicit line allocation.")
+
+    payload = {
+        "document_kind": kind,
+        "document_id": normalized_document_id,
+        "details_attributes": details_attributes,
+        "prices_are_incl_tax": resolved_incl_flag,
+        "expected_total_before": f"{current_total:.2f}",
+        "expected_total_incl_tax": f"{current_total:.2f}",
+        "expected_lines": after_lines,
+        **_version_snapshot(target),
+    }
+    preview = {
+        "mode": "explicit_lines",
+        "source_note": str(source_note or "").strip(),
+        "document_id": normalized_document_id,
+        "document_kind": kind,
+        "target_reference": target.get("reference"),
+        "target_date": target.get("date"),
+        "target_state": target.get("state"),
+        "target_version": target.get("version"),
+        "contact": (target.get("contact") or {}).get("company_name")
+        or (target.get("contact") or {}).get("name"),
+        "total_before": f"{current_total:.2f}",
+        "total_after": f"{calculated_total_incl:.2f}",
+        "total_unchanged": calculated_total_incl == current_total,
+        "prices_are_incl_tax_before": bool(target.get("prices_are_incl_tax")),
+        "prices_are_incl_tax_after": resolved_incl_flag,
+        "line_count_before": len(before_lines),
+        "line_count_after": len(after_lines),
+        "before_lines": before_lines,
+        "after_lines": after_lines,
+        "already_consistent": already_consistent,
+        "warnings": warnings,
+    }
+    return {"payload": payload, "preview": preview}

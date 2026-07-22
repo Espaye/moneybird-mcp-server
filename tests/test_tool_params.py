@@ -56,6 +56,23 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertEqual(set(schema["document_type"]["enum"]), PAYABLE_DOCUMENT_KINDS)
         self.assertIn("YYYY-MM-DD", schema["payment_date"]["description"])
 
+    def test_purchase_reconcile_exposes_exact_pdf_line_mode(self) -> None:
+        schema = self._tool_schema("prepare_reconcile_purchase_invoice")["properties"]
+        self.assertIn("desired_lines", schema)
+        self.assertIn("actual invoice/PDF", schema["desired_lines"]["description"])
+        self.assertIn("prices_are_incl_tax", schema)
+
+    def test_purchase_review_exposes_optional_description_checks(self) -> None:
+        schema = self._tool_schema("review_purchase_invoices")["properties"]
+        option = schema["include_description_mapping_checks"]
+        self.assertTrue(option["default"])
+        self.assertIn("advisory", option["description"])
+
+    def test_direct_purchase_reference_lookup_registers(self) -> None:
+        schema = self._tool_schema("get_purchase_invoice_by_reference")["properties"]
+        self.assertIn("reference", schema)
+        self.assertIn("Exact supplier invoice number", schema["reference"]["description"])
+
     def test_all_tools_still_register(self) -> None:
         from moneybird.tools import mcp
 

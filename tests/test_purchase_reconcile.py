@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from decimal import Decimal
+from unittest import mock
 
 os.environ.setdefault(
     "MONEYBIRD_MCP_DATA_DIR",
@@ -9,74 +10,63 @@ os.environ.setdefault(
 )
 
 from moneybird.purchase_reconcile import (
+    build_explicit_purchase_invoice_reconcile,
     build_reconcile_purchase_invoice,
     dutch_month_label,
-    scan_purchase_invoices_for_attention,
     _map_lines,
 )
-
-LEDGER_ZAK = "470383517976495829"   # Gas, water en elektriciteit (P&L)
-TAX_21 = "463484441733366960"       # 21% btw
-LEDGER_PRIV = "470713678791967922"  # Onttrekkingen (private)
-TAX_GEEN = "470712958464296361"     # Geen btw
-
-
-def _line(detail_id, description, price, ledger, tax):
-    return {
-        "id": detail_id,
-        "description": description,
-        "price": str(price),
-        "amount": "1",
-        "ledger_account_id": ledger,
-        "tax_rate_id": tax,
-    }
+from purchase_test_support import (
+    FakeClient,
+    LEDGER_PRIV,
+    LEDGER_ZAK,
+    TAX_21,
+    TAX_GEEN,
+    line as _line,
+    reference_june as _reference_june,
+    target_july as _target_july,
+)
 
 
-def _reference_june(doc_id="ref"):
-    return {
-        "id": doc_id,
-        "date": "2026-06-19",
-        "state": "paid",
-        "reference": "1163421300",
-        "prices_are_incl_tax": True,
-        "total_price_incl_tax": "825.0",
-        "contact": {"id": "C1", "company_name": "Eneco Services B.V."},
-        "details": [
-            _line("r1", "Eneco termijnnota juni 2026 – stroom zakelijk (60%)", "296.54", LEDGER_ZAK, TAX_21),
-            _line("r2", "Eneco termijnnota juni 2026 – gas zakelijk (25%)", "82.70", LEDGER_ZAK, TAX_21),
-            _line("r3", "Eneco termijnnota juni 2026 – stroom privé (40%)", "197.68", LEDGER_PRIV, TAX_GEEN),
-            _line("r4", "Eneco termijnnota juni 2026 – gas privé (75%)", "248.08", LEDGER_PRIV, TAX_GEEN),
-        ],
-    }
+class PurchaseInvoiceReferenceLookupTests(unittest.TestCase):
+    def test_uses_server_side_reference_filter_and_exact_match(self):
+        from moneybird.client import MoneybirdClient
 
+        client = MoneybirdClient("token", "admin")
+        document = {
+            "id": "doc-1",
+            "reference": "2112179204",
+            "details": [],
+            "attachments": [],
+        }
+        with mock.patch.object(
+            client,
+            "list_documents",
+            return_value=[document],
+        ) as list_documents:
+            found = client.get_document_by_reference(
+                "purchase_invoice",
+                "2112179204",
+            )
 
-def _target_july(doc_id="tgt", total="825.0"):
-    return {
-        "id": doc_id,
-        "date": "2026-07-19",
-        "state": "new",
-        "reference": "1168011272",
-        "prices_are_incl_tax": False,
-        "total_price_incl_tax": total,
-        "contact": {"id": "C1", "company_name": "Eneco Services B.V."},
-        "details": [
-            _line("L1", "Eneco termijnnota juli 2026 – gas en stroom", "681.82", LEDGER_ZAK, TAX_21),
-            _line("L2", "Eneco termijnnota juli 2026 – stroom privé (40%)", "0.0", LEDGER_PRIV, TAX_GEEN),
-        ],
-    }
+        self.assertIs(found, document)
+        list_documents.assert_called_once_with(
+            "purchase_invoice",
+            limit=100,
+            page=1,
+            filter="reference:2112179204",
+        )
 
+    def test_rejects_ambiguous_exact_reference(self):
+        from moneybird.client import MoneybirdClient
 
-class FakeClient:
-    def __init__(self, documents):
-        # documents: {id: doc}
-        self.administration_id = "ADMIN"
-        self._docs = {str(d["id"]): d for d in documents}
-
-    def get_document(self, kind, document_id):
-        return self._docs[str(document_id)]
-
-    def list_documents(self, kind, *, limit=100, page=1, filter="", period=""):
-        return list(self._docs.values())
+        client = MoneybirdClient("token", "admin")
+        matches = [
+            {"id": "doc-1", "reference": "same"},
+            {"id": "doc-2", "reference": "same"},
+        ]
+        with mock.patch.object(client, "list_documents", return_value=matches):
+            with self.assertRaisesRegex(Exception, "matches multiple"):
+                client.get_document_by_reference("purchase_invoice", "same")
 
 
 def _sum_prices(ops):
@@ -127,7 +117,10 @@ class BuildReconcileTests(unittest.TestCase):
         preview = built["preview"]
 
         self.assertTrue(payload["prices_are_incl_tax"])
+        self.assertEqual(payload["expected_total_before"], "825.00")
         self.assertEqual(payload["expected_total_incl_tax"], "825.00")
+        self.assertEqual(payload["expected_version"], "20")
+        self.assertEqual(len(payload["expected_lines"]), 4)
 
         ops = payload["details_attributes"]
         self.assertEqual(len(ops), 4)
@@ -158,6 +151,7 @@ class BuildReconcileTests(unittest.TestCase):
             client, document_id="tgt", reference_document_id="ref", target_total="800.00"
         )
         payload = built["payload"]
+        self.assertEqual(payload["expected_total_before"], "825.00")
         self.assertEqual(payload["expected_total_incl_tax"], "800.00")
         self.assertEqual(_sum_prices(payload["details_attributes"]), Decimal("800.00"))
         self.assertTrue(built["preview"]["scaled"])
@@ -206,37 +200,204 @@ class BuildReconcileTests(unittest.TestCase):
         self.assertEqual(len(built["preview"]["after_lines"]), 4)
 
 
-class ScanAttentionTests(unittest.TestCase):
-    def _history(self):
-        docs = []
-        for idx, month in enumerate(("03", "04", "05")):
-            doc = _reference_june(f"good{idx}")
-            doc["date"] = f"2026-{month}-19"
-            docs.append(doc)
-        docs.append(_target_july("bad"))  # 2 lines, incl False, state new
-        return docs
+class BuildExplicitReconcileTests(unittest.TestCase):
+    def test_exact_pdf_split_preserves_total_without_reference_scaling(self):
+        target = {
+            "id": "wetterskip-2026",
+            "version": 42,
+            "updated_at": "2026-07-22T13:31:48Z",
+            "date": "2026-04-30",
+            "state": "pending_payment",
+            "reference": "2112179204",
+            "prices_are_incl_tax": False,
+            "total_price_incl_tax": "1207.60",
+            "contact": {"id": "W1", "company_name": "Wetterskip"},
+            "details": [
+                _line("private", "wrong private", "654.02", LEDGER_PRIV, TAX_GEEN),
+                _line("business", "wrong business", "553.58", LEDGER_ZAK, TAX_GEEN),
+            ],
+        }
+        client = FakeClient([target])
+        built = build_explicit_purchase_invoice_reconcile(
+            client,
+            document_id="wetterskip-2026",
+            desired_lines=[
+                {
+                    "description": "Ingezetenen en verontreinigingsheffing (privé)",
+                    "price": "344.61",
+                    "ledger_account_id": LEDGER_PRIV,
+                    "tax_rate_id": TAX_GEEN,
+                },
+                {
+                    "description": "Gebouwd en ongebouwd (zakelijk)",
+                    "price": "862.99",
+                    "ledger_account_id": LEDGER_ZAK,
+                    "tax_rate_id": TAX_GEEN,
+                },
+            ],
+            prices_are_incl_tax=True,
+            source_note="PDF page 2",
+        )
 
-    def test_flags_the_deviating_new_invoice(self):
-        client = FakeClient(self._history())
-        result = scan_purchase_invoices_for_attention(client, period="202601..202612")
-        self.assertEqual(result["count"], 1)
-        flagged = result["flagged"][0]
-        self.assertEqual(flagged["document_id"], "bad")
-        reasons = " ".join(flagged["reasons"])
-        self.assertIn("new", reasons)
-        self.assertIn("usually has 4", reasons)
-        self.assertIn("prices_are_incl_tax", reasons)
-        self.assertIn(flagged["suggested_reference_document_id"], {"good0", "good1", "good2"})
+        self.assertEqual(built["preview"]["mode"], "explicit_lines")
+        self.assertEqual(built["preview"]["source_note"], "PDF page 2")
+        self.assertTrue(built["preview"]["total_unchanged"])
+        self.assertEqual(built["payload"]["expected_total_incl_tax"], "1207.60")
+        self.assertEqual(built["payload"]["expected_version"], "42")
+        self.assertEqual(_sum_prices(built["payload"]["details_attributes"]), Decimal("1207.60"))
 
-    def test_healthy_history_flags_nothing(self):
-        docs = []
-        for idx, month in enumerate(("03", "04", "05", "06")):
-            doc = _reference_june(f"ok{idx}")
-            doc["date"] = f"2026-{month}-19"
-            docs.append(doc)
-        client = FakeClient(docs)
-        result = scan_purchase_invoices_for_attention(client, period="202601..202612")
-        self.assertEqual(result["count"], 0)
+    def test_receipt_accepts_purchase_invoice_ledger_account_type(self):
+        client = FakeClient([_target_july("receipt-target")])
+
+        built = build_explicit_purchase_invoice_reconcile(
+            client,
+            document_id="receipt-target",
+            document_kind="receipt",
+            desired_lines=[
+                {
+                    "description": "Exact receipt total",
+                    "price": "825.00",
+                    "ledger_account_id": LEDGER_PRIV,
+                    "tax_rate_id": TAX_GEEN,
+                }
+            ],
+            prices_are_incl_tax=True,
+        )
+
+        self.assertEqual(built["payload"]["document_kind"], "receipt")
+
+    def test_rejects_explicit_split_that_changes_total(self):
+        client = FakeClient([_target_july(total="825.00")])
+        with self.assertRaisesRegex(Exception, "would change the invoice total"):
+            build_explicit_purchase_invoice_reconcile(
+                client,
+                document_id="tgt",
+                desired_lines=[
+                    {
+                        "description": "Incomplete PDF split",
+                        "price": "800.00",
+                        "ledger_account_id": LEDGER_PRIV,
+                        "tax_rate_id": TAX_GEEN,
+                    }
+                ],
+                prices_are_incl_tax=True,
+            )
+
+
+class ReconcileExecutionSafetyTests(unittest.TestCase):
+    def test_executes_and_verifies_total_lines_tax_mode_and_version(self):
+        from moneybird.tools.purchases import _execute_reconcile
+
+        client = FakeClient([_reference_june(), _target_july()])
+        payload = build_reconcile_purchase_invoice(
+            client,
+            document_id="tgt",
+            reference_document_id="ref",
+        )["payload"]
+
+        result = _execute_reconcile(client, payload)
+
+        self.assertEqual(result["_status"], "completed")
+        self.assertTrue(result["verified_total_unchanged"])
+        self.assertTrue(result["verified_lines_match"])
+        self.assertTrue(result["verified_prices_are_incl_tax"])
+        self.assertEqual(result["version_before"], "20")
+        self.assertEqual(result["version_after"], 21)
+
+    def test_aborts_before_write_when_document_version_changed(self):
+        from moneybird.tools.purchases import _execute_reconcile
+
+        client = FakeClient([_reference_june(), _target_july()])
+        payload = build_reconcile_purchase_invoice(
+            client,
+            document_id="tgt",
+            reference_document_id="ref",
+        )["payload"]
+        client._docs["tgt"]["version"] = 21
+
+        with self.assertRaisesRegex(Exception, "changed after the preview"):
+            _execute_reconcile(client, payload)
+
+        self.assertEqual(client.update_calls, 0)
+
+    def test_target_total_change_uses_prewrite_total_for_concurrency_check(self):
+        from moneybird.tools.purchases import _execute_reconcile
+
+        client = FakeClient([_reference_june(), _target_july()])
+        payload = build_reconcile_purchase_invoice(
+            client,
+            document_id="tgt",
+            reference_document_id="ref",
+            target_total="800.00",
+        )["payload"]
+
+        result = _execute_reconcile(client, payload)
+
+        self.assertEqual(client.update_calls, 1)
+        self.assertEqual(result["total_after"], "800.00")
+        self.assertTrue(result["verified_total_unchanged"])
+
+    def test_full_explicit_prepare_approve_verify_flow(self):
+        from moneybird import safety, tools
+        from moneybird.credentials import set_active_administration_id
+        from moneybird.tools import _context as tool_context
+
+        target = {
+            "id": "wetterskip-2026",
+            "version": 42,
+            "updated_at": "2026-07-22T13:31:48Z",
+            "date": "2026-04-30",
+            "state": "pending_payment",
+            "reference": "2112179204",
+            "prices_are_incl_tax": False,
+            "total_price_incl_tax": "1207.60",
+            "contact": {"id": "W1", "company_name": "Wetterskip"},
+            "details": [
+                _line("private", "wrong private", "654.02", LEDGER_PRIV, TAX_GEEN),
+                _line("business", "wrong business", "553.58", LEDGER_ZAK, TAX_GEEN),
+            ],
+        }
+        client = FakeClient([target])
+
+        def get_fake_client(*args, **kwargs):
+            set_active_administration_id(client.administration_id)
+            return client
+
+        safety.clear_pending_approvals()
+        with (
+            mock.patch.object(tool_context, "get_client", side_effect=get_fake_client),
+            mock.patch.object(tool_context, "audit_log_contains_success", return_value=False),
+            mock.patch.object(tool_context, "append_audit_log"),
+            mock.patch.object(tool_context, "append_failed_audit_log"),
+        ):
+            prepared = tools.prepare_reconcile_purchase_invoice(
+                document_id="wetterskip-2026",
+                desired_lines=[
+                    {
+                        "description": "Ingezetenen en verontreinigingsheffing (privé)",
+                        "price": "344.61",
+                        "ledger_account_id": LEDGER_PRIV,
+                        "tax_rate_id": TAX_GEEN,
+                    },
+                    {
+                        "description": "Gebouwd en ongebouwd (zakelijk)",
+                        "price": "862.99",
+                        "ledger_account_id": LEDGER_ZAK,
+                        "tax_rate_id": TAX_GEEN,
+                    },
+                ],
+                prices_are_incl_tax=True,
+                source_note="PDF page 2",
+            )
+            self.assertEqual(prepared["preview"]["mode"], "explicit_lines")
+            result = tools.reconcile_purchase_invoice_from_approval(
+                prepared["approval_id"]
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["verified_total_unchanged"])
+        self.assertTrue(result["verified_lines_match"])
+        self.assertEqual(result["total_after"], "1207.60")
 
 
 if __name__ == "__main__":
