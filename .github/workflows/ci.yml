@@ -1,0 +1,82 @@
+name: CI
+
+# Runs on main and on every pull request. Feature branches without a PR can be
+# checked on demand via the "Run workflow" button (workflow_dispatch); change the
+# push trigger to `branches: ["**"]` if you'd rather have every branch build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ubuntu covers the full supported version range from pyproject.toml.
+        # The extra Windows cell runs the *oldest* supported Python, because
+        # day-to-day development already exercises the newest one on Windows.
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python-version: "3.11"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Run tests
+        env:
+          # No .env and no MONEYBIRD_* credentials here: the suite is fully
+          # mocked and must stay that way. Keep the approvals DB / audit log /
+          # sync cache in the runner's scratch space rather than ~/.moneybird-mcp.
+          MONEYBIRD_MCP_DATA_DIR: ${{ runner.temp }}/moneybird-mcp-state
+        run: python -m pytest -q
+
+  package:
+    name: Build and inspect distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: twine check
+        run: python -m twine check dist/*
+
+      - name: Assert no credentials or local state are packaged
+        run: python scripts/check_dist_hygiene.py
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-ci
+          path: dist/
+          retention-days: 7

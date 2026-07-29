@@ -221,8 +221,19 @@ asset bundled on developer.moneybird.com.
 - `moneybird/playbooks/boekhoud_playbook.md` — btw rules, categorization, consistency
   checklist, bank-mutation diagnosis. Read it before a bookkeeping task.
 - `scripts/` — runnable read-only/reclassify scripts (good examples of the patterns above).
-- `docs/releasing.md` — the release checklist (version bump in pyproject **and**
-  mcpb/manifest.json, build, twine check, PyPI upload, mcpb bundle).
+- `docs/releasing.md` — the release checklist. Releases are **version-driven**: a
+  commit on `main` that bumps `version` in pyproject **and** mcpb/manifest.json is
+  the release trigger. Never bump the version as a drive-by edit.
+- `.github/workflows/` — `ci.yml` runs the suite on main + PRs (Ubuntu 3.11–3.14 plus
+  Windows 3.11) and builds/inspects the distributions. `release.yml` runs on every
+  push to main but only acts when `pyproject.toml`'s version is not yet on PyPI: then
+  it tests, builds, publishes via Trusted Publishing (no API token in the repo;
+  configured publisher = owner `Espaye`, repo `moneybird-mcp-server`, workflow
+  `release.yml`, environment `pypi`), and creates tag `vX.Y.Z` + the GitHub release.
+  Both workflows gate on `scripts/check_dist_hygiene.py`, which asserts the wheel
+  ships only the `moneybird` package and that no `.env`/tokens/approvals DB/sync
+  cache/audit log is packaged. CI never has credentials — keep the suite fully
+  mocked (verified: the whole suite passes in a checkout without `.env`).
 - `docs/hosted_gateway_design.md` — architecture for the hosted web-app product
   (gateway owns users/tokens and injects the tenant headers; this server stays
   unmodified). Read it before any hosted/multi-tenant work.

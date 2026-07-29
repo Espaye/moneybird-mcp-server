@@ -1,0 +1,154 @@
+name: Release
+
+# Version-driven releases: the version in pyproject.toml is the trigger, not a tag.
+# Push a commit to main that bumps it (mcpb/manifest.json must match -- the suite
+# enforces that) and this workflow runs the tests, builds, publishes to PyPI via
+# Trusted Publishing, then tags the commit and creates the GitHub release.
+#
+# Pushes that don't change the version are a no-op: the `check` job sees the version
+# is already on PyPI and everything after it is skipped, so main stays green.
+#
+# The trade-off to know: PyPI versions are immutable. A bump that lands on main is a
+# release you cannot replace, only yank. If you want a hand on the brake, add
+# required reviewers to the `pypi` environment in the repo settings -- the publish
+# job then waits for your approval. See docs/releasing.md.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel a publish that is already under way.
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Is this a new version?
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - id: check
+        name: Compare pyproject version against PyPI
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, tomllib, urllib.error, urllib.request
+
+          version = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
+          url = "https://pypi.org/pypi/moneybird-mcp/json"
+          try:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  published = set(json.load(response)["releases"])
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              published = set()  # project does not exist on PyPI yet
+
+          new = version not in published
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"version={version}\n")
+              out.write(f"release={'true' if new else 'false'}\n")
+
+          state = "not on PyPI yet -> releasing" if new else "already on PyPI -> nothing to do"
+          print(f"pyproject version {version}: {state}")
+          print(f"published versions: {', '.join(sorted(published)) or 'none'}")
+          PY
+
+  build:
+    name: Verify and build ${{ needs.check.outputs.version }}
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest build twine
+
+      # Gate the publish on the suite even though ci.yml also runs it: this is the
+      # last checkpoint before an immutable upload. Also covers the pyproject <->
+      # mcpb/manifest.json version sync (PackagingVersionSyncTests).
+      - name: Run tests
+        env:
+          MONEYBIRD_MCP_DATA_DIR: ${{ runner.temp }}/moneybird-mcp-state
+        run: python -m pytest -q
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: twine check
+        run: python -m twine check dist/*
+
+      - name: Assert no credentials or local state are packaged
+        run: python scripts/check_dist_hygiene.py
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ needs.check.outputs.version }}
+          path: dist/
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    # Trusted Publishing: PyPI mints a short-lived token from this job's OIDC
+    # identity, so there is no API token secret in the repo. The publisher on
+    # pypi.org names this workflow file and this environment.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/moneybird-mcp
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-${{ needs.check.outputs.version }}
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  tag-and-release:
+    name: Tag and create GitHub release
+    needs: [check, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-${{ needs.check.outputs.version }}
+          path: dist/
+
+      # Creates the tag at this commit as well, so releases stay tagged without
+      # anyone pushing tags by hand. The .mcpb bundle is platform-specific
+      # (dependencies are vendored in), so it is still built on the dev machine
+      # with `python scripts/build_mcpb.py` and uploaded to this release after.
+      - name: Create release with the wheel and sdist attached
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --generate-notes
