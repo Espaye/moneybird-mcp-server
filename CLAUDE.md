@@ -252,8 +252,11 @@ prompt-name set).
 
 - Voor een opdracht die uitsluitend om **commit en push** vraagt, is Git zelf de bron van
   waarheid: controleer remote/branch en voer `git push` uit. Blokkeer zo'n opdracht niet op
-  alleen een mislukte `gh auth status`; Git Credential Manager en de Git credential-chain
-  kunnen nog geldig zijn terwijl de afzonderlijke GitHub CLI/API-sessie verlopen is.
+  alleen een mislukte `gh auth status`.
+- `gh auth status` valideert de credential via het netwerk. In een gesandboxte omgeving kan
+  geblokkeerde netwerktoegang daardoor misleidend als een ongeldige token worden gerapporteerd.
+  Behandel dat niet als bewijs van verlopen authenticatie: herhaal de controle met toegestane
+  netwerktoegang en verifieer zo nodig read-only met `gh api user --jq .login`.
 - Vereis een geldige `gh`-sessie alleen wanneer de gebruiker ook een pull request, issue,
   release of andere GitHub-API-actie vraagt. Test in dat geval `gh auth status` en laat zo
   nodig `gh auth login -h github.com` uitvoeren.
