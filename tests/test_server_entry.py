@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import os
+import runpy
+import sys
 import tempfile
 import unittest
 from unittest import mock
+from pathlib import Path
 
 os.environ.setdefault(
     "MONEYBIRD_MCP_DATA_DIR",
@@ -19,7 +22,15 @@ def _clean_environ() -> dict[str, str]:
     return {
         key: value
         for key, value in os.environ.items()
-        if key not in {"MCP_TRANSPORT", "MCP_HOST", "MCP_PORT", "MCP_AUTH_TOKEN"}
+        if key
+        not in {
+            "MCP_TRANSPORT",
+            "MCP_HOST",
+            "MCP_PORT",
+            "MCP_AUTH_TOKEN",
+            "MCP_TOOL_DISCOVERY",
+            "MONEYBIRD_TOOL_DISCOVERY",
+        }
     }
 
 
@@ -32,6 +43,7 @@ class BuildConfigTests(unittest.TestCase):
     def test_console_script_defaults_to_stdio(self) -> None:
         config = build_config([])
         self.assertEqual(config.transport, "stdio")
+        self.assertEqual(config.tool_discovery, "search")
 
     def test_legacy_entrypoint_default_is_preserved(self) -> None:
         config = build_config([], default_transport="sse")
@@ -47,6 +59,16 @@ class BuildConfigTests(unittest.TestCase):
         os.environ["MCP_TRANSPORT"] = "sse"
         config = build_config(["--transport", "http"])
         self.assertEqual(config.transport, "http")
+
+    def test_tool_discovery_flag_beats_env(self) -> None:
+        os.environ["MCP_TOOL_DISCOVERY"] = "full"
+        config = build_config(["--tool-discovery", "search"])
+        self.assertEqual(config.tool_discovery, "search")
+
+    def test_invalid_tool_discovery_env_refuses_to_start(self) -> None:
+        os.environ["MCP_TOOL_DISCOVERY"] = "everything"
+        with self.assertRaises(SystemExit):
+            build_config([])
 
     def test_invalid_env_transport_refuses_to_start(self) -> None:
         os.environ["MCP_TRANSPORT"] = "websocket"
@@ -76,6 +98,23 @@ class BuildConfigTests(unittest.TestCase):
 
     def test_transports_constant_matches_argparse_choices(self) -> None:
         self.assertEqual(set(TRANSPORTS), {"stdio", "http", "sse"})
+
+    def test_legacy_entrypoint_defers_tool_import_to_shared_main(self) -> None:
+        import moneybird.server as server_module
+
+        entrypoint = Path(__file__).resolve().parent.parent / "moneybird_mcp_server.py"
+        with (
+            mock.patch.object(server_module, "main") as main,
+            mock.patch.object(
+                sys,
+                "argv",
+                [str(entrypoint), "--tool-discovery", "full"],
+            ),
+        ):
+            runpy.run_path(str(entrypoint), run_name="__main__")
+
+        main.assert_called_once_with(default_transport="sse")
+        self.assertNotIn("MONEYBIRD_TOOL_DISCOVERY", os.environ)
 
 
 if __name__ == "__main__":

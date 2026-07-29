@@ -1,7 +1,7 @@
+import copy
 import os
 import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -354,6 +354,36 @@ class MoneybirdHelperTests(unittest.TestCase):
                         administration_id=admin,
                     )
                 )
+                safety.append_audit_log(
+                    {
+                        "action": "batch_create_sales_invoices",
+                        "fingerprint": fingerprint,
+                        "result": "failed",
+                    },
+                    administration_id=admin,
+                )
+                self.assertTrue(
+                    safety.audit_log_contains_success(
+                        "batch_create_sales_invoices",
+                        fingerprint,
+                        administration_id=admin,
+                    )
+                )
+                safety.append_audit_log(
+                    {
+                        "action": "batch_create_sales_invoices",
+                        "fingerprint": fingerprint,
+                        "result": "invalidated",
+                    },
+                    administration_id=admin,
+                )
+                self.assertFalse(
+                    safety.audit_log_contains_success(
+                        "batch_create_sales_invoices",
+                        fingerprint,
+                        administration_id=admin,
+                    )
+                )
                 # A different tenant must not see this administration's audit entry.
                 self.assertFalse(
                     safety.audit_log_contains_success(
@@ -587,15 +617,47 @@ class ClientRetrySafetyTests(unittest.TestCase):
         import moneybird.client as client_module
 
         client = client_module.MoneybirdClient("token", "admin")
+        pooled_client = mock.Mock()
+        pooled_client.request.side_effect = client_module.httpx.ConnectError(
+            "lost response"
+        )
         with mock.patch.object(
-            client_module.urllib.request,
-            "urlopen",
-            side_effect=urllib.error.URLError("lost response"),
-        ) as urlopen:
+            client_module,
+            "get_shared_http_client",
+            return_value=pooled_client,
+        ):
             with self.assertRaises(server.MoneybirdError) as raised:
                 client._request("POST", "/admin/sales_invoices.json", body={"x": 1})
-        self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(pooled_client.request.call_count, 1)
         self.assertIn("ambiguous", str(raised.exception))
+
+    def test_bank_booking_link_translates_price_to_price_base(self) -> None:
+        import moneybird.client as client_module
+
+        client = client_module.MoneybirdClient("token", "admin")
+        with mock.patch.object(
+            client,
+            "_request",
+            return_value={"id": "mutation-1"},
+        ) as request:
+            client.link_financial_mutation_booking(
+                "mutation-1",
+                {
+                    "booking_type": "LedgerAccount",
+                    "booking_id": "ledger-1",
+                    "price": "-10.00",
+                },
+            )
+
+        request.assert_called_once_with(
+            "PATCH",
+            "/admin/financial_mutations/mutation-1/link_booking.json",
+            body={
+                "booking_type": "LedgerAccount",
+                "booking_id": "ledger-1",
+                "price_base": "10.00",
+            },
+        )
 
 
 class MeterUsageTests(unittest.TestCase):
@@ -859,6 +921,28 @@ class RegisterPaymentTests(unittest.TestCase):
         self.assertTrue(verification["payment_visible_on_document"])
         self.assertEqual(verification["open_amount_after"], "0.00")
 
+    def test_generic_executor_dispatches_pending_action(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_register_payment(
+                document_type="sales_invoice",
+                document_id="inv-1",
+                payment_date="2026-06-15",
+                price="121.00",
+            )
+            result = tools.execute_approved_action(prepared["approval_id"])
+        self.assertEqual(result["status"], "payment_registered")
+        self.assertTrue(
+            result["verification"]["payment_visible_on_document"]
+        )
+        with self.assertRaises(server.MoneybirdError):
+            safety.peek_approval(
+                prepared["approval_id"],
+                administration_id="admin",
+            )
+
     def test_overpayment_warns_in_preview(self) -> None:
         from moneybird import tools
 
@@ -944,6 +1028,7 @@ class LinkBankMutationTests(unittest.TestCase):
                 prepared["approval_id"]
             )
         self.assertTrue(result["verification"]["new_link_visible_on_mutation"])
+        self.assertTrue(result["verification"]["fully_verified"])
         self.assertEqual(result["verification"]["after"]["state"], "processed")
 
     def test_rejects_invalid_booking_type(self) -> None:
@@ -955,6 +1040,243 @@ class LinkBankMutationTests(unittest.TestCase):
                 booking_type="Invoice",
                 booking_id="inv-1",
             )
+
+
+class ReclassifyBankMutationBookingsTests(unittest.TestCase):
+    class FakeClient:
+        administration_id = "admin"
+
+        def __init__(self, *, fail_target_link: bool = False):
+            self.fail_target_link = fail_target_link
+            self.next_booking = 2
+            self.calls = {
+                "list_ledger_accounts": 0,
+                "fetch_financial_mutations_by_ids": 0,
+                "get_financial_mutation": 0,
+                "unlink": 0,
+                "link": 0,
+            }
+            self.ledgers = [
+                {
+                    "id": "ledger-vat",
+                    "account_id": "16221",
+                    "name": "Betaalde en/of ontvangen btw",
+                    "account_type": "current_liabilities",
+                    "active": True,
+                },
+                {
+                    "id": "ledger-private-tax",
+                    "account_id": "5519.01",
+                    "name": "Inkomstenbelasting en ZVW",
+                    "account_type": "equity",
+                    "active": True,
+                },
+            ]
+            self.mutation = {
+                "id": "mut-tax",
+                "date": "2026-02-11",
+                "version": 7,
+                "state": "processed",
+                "amount": "-842.00",
+                "amount_open": "0.00",
+                "message": "",
+                "contra_account_name": "Belastingdienst",
+                "sepa_fields": {"strd_remi": "2124886207560014"},
+                "payments": [],
+                "ledger_account_bookings": [
+                    {
+                        "id": "booking-vat",
+                        "ledger_account_id": "ledger-vat",
+                        "price": "-842.00",
+                        "description": None,
+                    }
+                ],
+            }
+
+        def list_ledger_accounts(self):
+            self.calls["list_ledger_accounts"] += 1
+            return copy.deepcopy(self.ledgers)
+
+        def fetch_financial_mutations_by_ids(self, ids):
+            self.calls["fetch_financial_mutations_by_ids"] += 1
+            return [copy.deepcopy(self.mutation)] if "mut-tax" in ids else []
+
+        def get_financial_mutation(self, mutation_id):
+            self.calls["get_financial_mutation"] += 1
+            return copy.deepcopy(self.mutation)
+
+        def unlink_financial_mutation_booking(
+            self, mutation_id, *, booking_type, booking_id
+        ):
+            self.calls["unlink"] += 1
+            self.mutation["ledger_account_bookings"] = [
+                booking
+                for booking in self.mutation["ledger_account_bookings"]
+                if booking["id"] != booking_id
+            ]
+            self.mutation["amount_open"] = self.mutation["amount"]
+            self.mutation["state"] = "unprocessed"
+            self.mutation["version"] += 1
+            return copy.deepcopy(self.mutation)
+
+        def link_financial_mutation_booking(self, mutation_id, booking):
+            self.calls["link"] += 1
+            if (
+                self.fail_target_link
+                and booking["booking_id"] == "ledger-private-tax"
+            ):
+                raise server.MoneybirdError("simulated target link failure")
+            booking_id = f"booking-{self.next_booking}"
+            self.next_booking += 1
+            self.mutation["ledger_account_bookings"].append(
+                {
+                    "id": booking_id,
+                    "ledger_account_id": booking["booking_id"],
+                    "price": booking["price"],
+                    "description": None,
+                }
+            )
+            self.mutation["amount_open"] = "0.00"
+            self.mutation["state"] = "processed"
+            self.mutation["version"] += 1
+            return copy.deepcopy(self.mutation)
+
+    @staticmethod
+    def _entry():
+        return {
+            "financial_mutation_id": "mut-tax",
+            "ledger_account_booking_id": "booking-vat",
+            "target_ledger_account_id": "ledger-private-tax",
+        }
+
+    def test_batch_reclassifies_and_verifies(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_reclassify_bank_mutation_bookings(
+                [self._entry()]
+            )
+            row = prepared["preview"]["rows"][0]
+            self.assertIn("16221", row["source_ledger_account"])
+            self.assertIn("5519.01", row["target_ledger_account"])
+            result = tools.reclassify_bank_mutation_bookings_from_approval(
+                prepared["approval_id"]
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["fully_verified"])
+        self.assertEqual(result["not_started_count"], 0)
+        self.assertTrue(
+            result["completed"][0]["verification"][
+                "new_target_booking_visible"
+            ]
+        )
+        self.assertEqual(
+            fake.mutation["ledger_account_bookings"][0]["ledger_account_id"],
+            "ledger-private-tax",
+        )
+        self.assertEqual(
+            fake.calls,
+            {
+                "list_ledger_accounts": 2,
+                "fetch_financial_mutations_by_ids": 3,
+                "get_financial_mutation": 0,
+                "unlink": 1,
+                "link": 1,
+            },
+        )
+        self.assertEqual(
+            result["completed"][0]["verification_source"],
+            "independent_batch_refetch",
+        )
+
+    def test_combined_workflow_uses_single_parent_approval(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_bookkeeping_correction_batch(
+                bank_reclassifications=[self._entry()]
+            )
+            self.assertEqual(prepared["preview"]["action_count"], 1)
+            result = tools.execute_approved_action(prepared["approval_id"])
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["fully_verified"])
+        self.assertEqual(
+            result["completed"][0]["action"],
+            "reclassify_bank_mutation_bookings",
+        )
+        self.assertEqual(safety.pending_approval_count(), 0)
+
+    def test_target_link_failure_restores_source_booking(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient(fail_target_link=True)
+        with _ToolPatches(fake):
+            prepared = tools.prepare_reclassify_bank_mutation_bookings(
+                [self._entry()]
+            )
+            result = tools.reclassify_bank_mutation_bookings_from_approval(
+                prepared["approval_id"]
+            )
+
+        self.assertEqual(result["status"], "completed_with_errors")
+        self.assertFalse(result["fully_verified"])
+        self.assertTrue(result["failures"][0]["restore"]["source_restored"])
+        self.assertEqual(
+            fake.mutation["ledger_account_bookings"][0]["ledger_account_id"],
+            "ledger-vat",
+        )
+
+    def test_restore_does_not_confuse_existing_sibling_with_source(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient(fail_target_link=True)
+        fake.mutation["ledger_account_bookings"].append(
+            {
+                "id": "booking-sibling",
+                "ledger_account_id": "ledger-vat",
+                "price": "-842.00",
+                "description": None,
+            }
+        )
+        with _ToolPatches(fake):
+            prepared = tools.prepare_reclassify_bank_mutation_bookings(
+                [self._entry()]
+            )
+            result = tools.reclassify_bank_mutation_bookings_from_approval(
+                prepared["approval_id"]
+            )
+
+        self.assertTrue(result["failures"][0]["restore"]["source_restored"])
+        self.assertEqual(fake.calls["link"], 2)
+        self.assertEqual(
+            sum(
+                booking["ledger_account_id"] == "ledger-vat"
+                for booking in fake.mutation["ledger_account_bookings"]
+            ),
+            2,
+        )
+
+    def test_batch_aborts_before_writes_when_version_changed(self) -> None:
+        from moneybird import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_reclassify_bank_mutation_bookings(
+                [self._entry()]
+            )
+            fake.mutation["version"] += 1
+            with self.assertRaises(server.MoneybirdError):
+                tools.reclassify_bank_mutation_bookings_from_approval(
+                    prepared["approval_id"]
+                )
+        self.assertEqual(
+            fake.mutation["ledger_account_bookings"][0]["id"],
+            "booking-vat",
+        )
 
 
 class UnlinkBankMutationTests(unittest.TestCase):

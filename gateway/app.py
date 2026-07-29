@@ -254,6 +254,10 @@ def build_gateway_app(mcp_app: Any | None = None) -> GatewayDispatcher:
     """The complete demo app. ``mcp_app`` is injectable for tests; by default the
     real Moneybird MCP streamable-HTTP app is mounted in-process."""
     if mcp_app is None:
+        os.environ.setdefault(
+            "MONEYBIRD_TOOL_DISCOVERY",
+            os.environ.get("MCP_TOOL_DISCOVERY", "search"),
+        )
         from moneybird.tools import mcp
 
         mcp_app = mcp.http_app(transport="http")

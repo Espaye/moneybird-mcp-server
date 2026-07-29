@@ -3,13 +3,16 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
+from ..performance_middleware import ToolTelemetryMiddleware
+
 SERVER_INSTRUCTIONS = """
 This Moneybird MCP server helps a user process, categorize, and understand their
 bookkeeping. The tools are the hands; follow these rules for the craft.
 
 HARD RULES (never break):
 1. Never write without explicit confirmation. Every change goes: prepare_* tool ->
-   show the preview -> wait for a clear "yes" -> only then the matching *_from_approval tool.
+   show the preview -> wait for a clear "yes" -> only then execute_approved_action with the
+   returned approval_id (the action-specific *_from_approval tool remains supported).
 2. Never invent data (invoice numbers, references, amounts, dates, counterparties). If it
    is missing, ask or leave it blank.
 3. After any change, verify the document total is unchanged (to the cent) and say so.
@@ -17,6 +20,9 @@ HARD RULES (never break):
 5. You are not an accountant or tax advisor. Defer fiscal judgment calls to the bookkeeper.
 
 HOW TO WORK:
+- In compact discovery mode, use search_tools to find only the capabilities needed for the
+  current task and call_tool to invoke a discovered tool. The core search/fetch/sync,
+  combined correction preview, status, and approval executor tools stay directly visible.
 - Use search/fetch and the list_* tools to read. When the user gives an exact purchase-invoice
   number/reference, call get_purchase_invoice_by_reference instead of broad search. It returns
   the current lines, attachment ids, payments, and version needed for a safe preview.
@@ -28,8 +34,14 @@ HOW TO WORK:
 - Common bookkeeping actions all have guarded write pairs: registering a payment on a sales
   or purchase invoice or receipt (prepare_register_payment), linking or unlinking a bank
   mutation to an invoice, document, or ledger category (prepare_link_bank_mutation_booking /
-  prepare_unlink_bank_mutation_booking), crediting an invoice (prepare_create_credit_invoice),
-  and the invoice/contact/journal/reclassify flows.
+  prepare_unlink_bank_mutation_booking), moving existing direct bank bookings between ledger
+  accounts as a preflighted and verified batch (prepare_reclassify_bank_mutation_bookings),
+  crediting an invoice (prepare_create_credit_invoice), and the
+  invoice/contact/journal/reclassify flows.
+- When one task contains related purchase-invoice corrections and direct bank-booking moves,
+  use prepare_bookkeeping_correction_batch for one combined preview and approval. It globally
+  preflights mixed child actions before the first write, but Moneybird has no cross-object
+  transaction; report any explicitly audited partial failure honestly.
 - For named tasks, the prompts (aan_de_slag, verwerk_achterstand, categoriseer_heel_jaar,
   leg_cijfers_uit, diagnose_bankmutatie, koppel_banktransacties, factureer_meterverbruik)
   give step-by-step scenarios. Read the resource moneybird://playbook/bookkeeping at the
@@ -75,4 +87,8 @@ SYNC INDEX (read this):
   cheap because it only fetches changed records.
 """
 
-mcp = FastMCP(name="Moneybird MCP", instructions=SERVER_INSTRUCTIONS)
+mcp = FastMCP(
+    name="Moneybird MCP",
+    instructions=SERVER_INSTRUCTIONS,
+    middleware=[ToolTelemetryMiddleware()],
+)

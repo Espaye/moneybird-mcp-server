@@ -69,9 +69,18 @@ Belangrijk om te weten:
 4. **Tonen** — laat de preview als tabel zien: wat verandert, van → naar, en het effect op
    het totaal (moet gelijk blijven bij herclassificatie).
 5. **Bevestigen** — wacht op een expliciet "ja" van de gebruiker.
-6. **Uitvoeren** — roep de `*_from_approval`-tool aan met het `approval_id`.
+6. **Uitvoeren** — roep `execute_approved_action` aan met het `approval_id` (de
+   actie-specifieke `*_from_approval`-tool blijft ook geldig).
 7. **Verifiëren** — haal het bijgewerkte document op, controleer totaal en versie, en meld het
    resultaat eerlijk (ook als er iets misging).
+
+Bestaat één opdracht uit zowel correcties op inkoopfacturen als herclassificaties van directe
+bankboekingen, maak dan één taakpreview met `prepare_bookkeeping_correction_batch`. De workflow
+hergebruikt de bestaande guarded acties, controleert bij een gemengde batch alle versies en
+bronboekingen vóór de eerste write en levert één `approval_id`. Na het expliciete akkoord voert
+`execute_approved_action` die exacte combinatie uit. Moneybird biedt geen transactie over
+verschillende objecten; rapporteer `completed_with_errors` en de geaudite partial progress dus
+als herstelstatus, niet als volledig succes.
 
 Bij een afwijkende inkoopfactuur: lees eerst de PDF met `read_document_attachment`. Als de PDF
 de echte regelbedragen bevat, geef die als exacte `desired_lines` aan
@@ -223,6 +232,26 @@ Een veelgestelde vraag. Een bankmutatie is "verwerkt" als hij gekoppeld is aan e
    **niet** kunt (de letterlijke regelinstelling). Verwijs de gebruiker voor de regelinstelling
    naar Moneybird zelf: **Instellingen → Boekhouding → Boekingsregels** (staat de regel op
    "automatisch verwerken" of op "voorstel doen"?).
+
+Moeten meerdere reeds verwerkte bankmutaties van het ene rechtstreekse grootboek naar het
+andere, gebruik dan `prepare_reclassify_bank_mutation_bookings` in plaats van losse
+unlink/link-approvals. Selecteer per mutatie de exacte `ledger_account_booking_id`. De batch
+controleert alle mutatieversies en bronboekingen voordat de eerste write plaatsvindt, behoudt het
+ondertekende bedrag, verifieert `state` en `amount_open`, en probeert bij een mislukte doelkoppeling
+de bronboeking te herstellen. Moneybird heeft hiervoor geen API-transactie over meerdere
+mutaties; behandel `completed_with_errors` daarom als een expliciete herstelstatus, nooit als
+succes.
+
+Hoort die bankcorrectie bij een correctie van de onderliggende inkoopfactuur (bijvoorbeeld één
+boekhoudersmail over beide), zet de factuurreconciliatie en bankherclassificatie samen in
+`prepare_bookkeeping_correction_batch`. Zo krijgt de gebruiker één controleerbare preview en
+worden alle onderdelen van de gemengde taak vóór de eerste wijziging opnieuw gecontroleerd.
+
+Technische valkuil: Moneybird verwacht bij `link_booking` een positieve `price_base`, maar geeft
+de nieuwe boeking terug met een ondertekend `price`. De MCP-client vertaalt dit automatisch.
+Controleer na elke koppeling niet alleen dat er een nieuwe booking-id is, maar ook dat het
+teruggegeven bedrag/teken klopt, `amount_open` de verwachte waarde heeft en een volledig gesloten
+mutatie weer `processed` is.
 
 > Periode-valkuil: `list_financial_mutations` met een ruime `period` geeft HTTP 400
 > ("Too many financial mutations ... use sync API"). Vraag per **maand** op

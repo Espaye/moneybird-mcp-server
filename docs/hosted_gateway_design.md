@@ -1,10 +1,10 @@
 # Hosted gateway design — Moneybird MCP for non-technical users
 
-Status: **design only, nothing built.** This is the architecture for the possible paid
-product: a web app where a non-technical Moneybird user connects their bookkeeping in a
-few clicks and gets a working MCP connection for Claude/ChatGPT — no pip, no config
-files, no tokens to paste. The local-first distribution (PyPI wheel, `.mcpb` bundle)
-remains the free, self-hosted path and the adoption funnel.
+Status: **M1 localhost demo built; production hosting (M2+) is not built.** This is the
+architecture for the possible paid product: a web app where a non-technical Moneybird user
+connects their bookkeeping in a few clicks and gets a working MCP connection for
+Claude/ChatGPT — no pip, no config files, no tokens to paste. The local-first distribution
+(PyPI wheel, `.mcpb` bundle) remains the free, self-hosted path and the adoption funnel.
 
 ## Constraints (decided)
 
@@ -36,6 +36,9 @@ The MCP server is **already multi-tenant and gateway-ready**; the hosted product
    local-dev special case of the same flow.
 4. **Transports.** FastMCP serves stdio (local), SSE, and streamable HTTP; the HTTP
    modes are what the gateway fronts.
+5. **Compact discovery.** The runnable server and the M1 gateway expose the compact Tool
+   Search profile by default: seven pinned Moneybird tools plus `search_tools`/`call_tool`.
+   Full discovery remains available for compatibility, but is not the scalable hosted default.
 
 ## Architecture
 
@@ -101,8 +104,10 @@ end user's MCP client (Claude/ChatGPT)
    (`python -m gateway`, loopback-only). A minimal web page runs the redirect OAuth
    flow, stores tokens under per-user OAuth profiles, issues a gateway key, and
    dispatches `/u/<key>/mcp` into the in-process MCP app with tenant headers injected
-   (client-supplied tenant headers are stripped). Live-verified: a real MCP client
-   listed all 70 tools and called `list_tax_rates` through a gateway key. Tests:
+   (client-supplied tenant headers are stripped). The initial demo was live-verified with a
+   real MCP client listing the then-complete catalog and calling `list_tax_rates` through a
+   gateway key; the gateway now defaults to the compact Tool Search profile (9 initially
+   visible tools, with the full catalog searchable on demand). Tests:
    `tests/test_gateway_demo.py`. The package is deliberately not part of the wheel.
 3. **M2:** deploy that demo behind TLS on the chosen domain with per-user keys and an
    encrypted token store; invite-only alpha.

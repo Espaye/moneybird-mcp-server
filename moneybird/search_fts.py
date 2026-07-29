@@ -59,7 +59,14 @@ def refresh_fts_index(index: dict[str, Any], administration_id: str | None) -> b
     if connection is None:
         return False
     try:
-        updated_at = str(index.get("updated_at") or "")
+        # A no-change sync refreshes ``updated_at`` to record freshness, but
+        # leaves ``content_updated_at`` stable. Avoid rebuilding the complete
+        # FTS database when no searchable record changed.
+        updated_at = str(
+            index.get("content_updated_at")
+            or index.get("updated_at")
+            or ""
+        )
         row = connection.execute(
             "SELECT value FROM meta WHERE key = 'sync_index_updated_at'"
         ).fetchone()

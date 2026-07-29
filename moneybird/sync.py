@@ -1,8 +1,13 @@
 """Local search-index sync (versioned buckets cached on disk)."""
 from __future__ import annotations
 
+import contextvars
 import json
+import os
 import re
+import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +29,15 @@ from .formatting import (
 # each other. The legacy single-file path is migrated transparently on first use.
 SYNC_INDEX_BASENAME = ".moneybird_sync_index"
 LEGACY_SYNC_INDEX_PATH = Path(f"{SYNC_INDEX_BASENAME}.json")
+
+_SYNC_LOCKS: dict[str, threading.RLock] = {}
+_SYNC_LOCKS_GUARD = threading.Lock()
+
+
+def _sync_lock(administration_id: str | None) -> threading.RLock:
+    key = str(administration_id or "default")
+    with _SYNC_LOCKS_GUARD:
+        return _SYNC_LOCKS.setdefault(key, threading.RLock())
 
 
 def sync_index_path(administration_id: str | None) -> Path:
@@ -48,6 +62,7 @@ def ensure_sync_index_shape(index: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(index)
     normalized.setdefault("administration_id", None)
     normalized.setdefault("updated_at", None)
+    normalized.setdefault("content_updated_at", normalized.get("updated_at"))
     normalized.setdefault("invoice_filter", "")
     normalized.setdefault("document_filter", "")
     normalized.setdefault("financial_mutation_filter", "")
@@ -108,10 +123,23 @@ def save_sync_index(index: dict[str, Any], administration_id: str | None = None)
     index = ensure_sync_index_shape(index)
     administration_id = administration_id or index.get("administration_id")
     path = sync_index_path(administration_id)
-    path.write_text(
-        json.dumps(index, indent=2, ensure_ascii=True, sort_keys=True),
-        encoding="utf-8",
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(index, indent=2, ensure_ascii=True, sort_keys=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
     )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
 
     # One-time cleanup: once this administration has a per-admin file, drop the legacy
     # single-file cache if it belonged to the same administration, so search never reads
@@ -275,53 +303,88 @@ def sync_search_index_data(
     financial_mutation_filter: str = "period:this_year",
     force_full: bool = False,
 ) -> dict[str, Any]:
+    with _sync_lock(client.administration_id):
+        return _sync_search_index_data_locked(
+            client,
+            invoice_filter=invoice_filter,
+            document_filter=document_filter,
+            financial_mutation_filter=financial_mutation_filter,
+            force_full=force_full,
+        )
+
+
+def _sync_search_index_data_locked(
+    client: MoneybirdClient,
+    *,
+    invoice_filter: str,
+    document_filter: str,
+    financial_mutation_filter: str,
+    force_full: bool,
+) -> dict[str, Any]:
     index = load_sync_index(client.administration_id)
     if force_full or index.get("administration_id") != client.administration_id:
         index = ensure_sync_index_shape({"administration_id": client.administration_id})
 
-    contact_stats = update_contact_sync_index(index, client)
-    invoice_stats = update_sales_invoice_sync_index(
-        index,
-        client,
-        invoice_filter=invoice_filter,
+    jobs = {
+        "contacts": lambda: update_contact_sync_index(index, client),
+        "sales_invoices": lambda: update_sales_invoice_sync_index(
+            index,
+            client,
+            invoice_filter=invoice_filter,
+        ),
+        "purchase_invoices": lambda: update_document_sync_index(
+            index,
+            client,
+            kind="purchase_invoice",
+            document_filter=document_filter,
+        ),
+        "receipts": lambda: update_document_sync_index(
+            index,
+            client,
+            kind="receipt",
+            document_filter=document_filter,
+        ),
+        "general_journal_documents": lambda: update_document_sync_index(
+            index,
+            client,
+            kind="general_journal_document",
+            document_filter=document_filter,
+        ),
+        "financial_mutations": lambda: update_financial_mutation_sync_index(
+            index,
+            client,
+            mutation_filter=financial_mutation_filter,
+        ),
+    }
+    stats: dict[str, dict[str, int]] = {}
+    with ThreadPoolExecutor(
+        max_workers=3,
+        thread_name_prefix="moneybird-sync",
+    ) as executor:
+        futures = {
+            name: executor.submit(contextvars.copy_context().run, job)
+            for name, job in jobs.items()
+        }
+        for name, future in futures.items():
+            stats[name] = future.result()
+
+    content_changed = force_full or any(
+        bucket.get("changed", 0) or bucket.get("removed", 0)
+        for bucket in stats.values()
     )
-    purchase_invoice_stats = update_document_sync_index(
-        index,
-        client,
-        kind="purchase_invoice",
-        document_filter=document_filter,
-    )
-    receipt_stats = update_document_sync_index(
-        index,
-        client,
-        kind="receipt",
-        document_filter=document_filter,
-    )
-    general_journal_stats = update_document_sync_index(
-        index,
-        client,
-        kind="general_journal_document",
-        document_filter=document_filter,
-    )
-    financial_mutation_stats = update_financial_mutation_sync_index(
-        index,
-        client,
-        mutation_filter=financial_mutation_filter,
-    )
+    now = iso_now()
     index["administration_id"] = client.administration_id
-    index["updated_at"] = iso_now()
+    index["updated_at"] = now
+    if content_changed or not index.get("content_updated_at"):
+        index["content_updated_at"] = now
     index["document_filter"] = document_filter
     index["financial_mutation_filter"] = financial_mutation_filter
     save_sync_index(index, client.administration_id)
 
     return {
         "updated_at": index["updated_at"],
-        "contacts": contact_stats,
-        "sales_invoices": invoice_stats,
-        "purchase_invoices": purchase_invoice_stats,
-        "receipts": receipt_stats,
-        "general_journal_documents": general_journal_stats,
-        "financial_mutations": financial_mutation_stats,
+        "content_updated_at": index["content_updated_at"],
+        **stats,
         "invoice_filter": invoice_filter,
         "document_filter": document_filter,
         "financial_mutation_filter": financial_mutation_filter,

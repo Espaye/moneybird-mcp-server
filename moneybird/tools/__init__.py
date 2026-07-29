@@ -18,9 +18,18 @@ from .sales_batches import *  # noqa: F401,F403
 from .ledger import *  # noqa: F401,F403
 from .payments import *  # noqa: F401,F403
 from .bank import *  # noqa: F401,F403
+from .workflows import *  # noqa: F401,F403
+from .approvals import *  # noqa: F401,F403
 
 # Register the guidance layer (playbook resource + scenario prompts) last, so the
 # mcp instance and all tools already exist; guidance.py imports nothing from here.
 from ..guidance import register_guidance
 
 register_guidance(mcp)
+
+# Direct Python imports retain the complete catalogue by default. The runnable
+# server sets MONEYBIRD_TOOL_DISCOVERY before importing this package and defaults
+# to the compact search mode.
+from ..tool_discovery import configure_tool_discovery
+
+configure_tool_discovery(mcp)

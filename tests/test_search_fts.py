@@ -105,6 +105,37 @@ class FtsSearchTests(unittest.TestCase):
         results = search_fts.search_fts(ADMIN, "gloednieuw", limit=5)
         self.assertEqual([item["id"] for item in results], ["contact:3"])
 
+    def test_freshness_timestamp_does_not_force_content_rebuild(self) -> None:
+        index = _index()
+        index["content_updated_at"] = "2026-07-11T12:00:00+00:00"
+        search_fts.refresh_fts_index(index, ADMIN)
+        index["contacts"]["records"]["3"] = {
+            "id": "contact:3",
+            "title": "Nieuw",
+            "url": "https://example/contacts/3",
+            "search_text": "alleen na inhoudswijziging",
+        }
+        index["updated_at"] = "2026-07-11T13:00:00+00:00"
+        search_fts.refresh_fts_index(index, ADMIN)
+        self.assertEqual(
+            search_fts.search_fts(ADMIN, "inhoudswijziging", limit=5),
+            [],
+        )
+
+        index["content_updated_at"] = "2026-07-11T13:00:00+00:00"
+        search_fts.refresh_fts_index(index, ADMIN)
+        self.assertEqual(
+            [
+                item["id"]
+                for item in search_fts.search_fts(
+                    ADMIN,
+                    "inhoudswijziging",
+                    limit=5,
+                )
+            ],
+            ["contact:3"],
+        )
+
     def test_special_characters_in_query_do_not_break_match_syntax(self) -> None:
         search_fts.refresh_fts_index(_index(), ADMIN)
         for query in ('vitens "water"', "vitens*", "vitens:water", "12,34"):

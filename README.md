@@ -21,8 +21,15 @@ the HTTP/SSE deployment used with ChatGPT.
 
 ## Tool surface
 
-It exposes these tools:
+The runnable server defaults to compact **Tool Search** discovery: it exposes seven core
+Moneybird tools plus FastMCP's `search_tools` and `call_tool`. The model searches the catalog
+for the few tools needed by the current task instead of receiving every schema on every
+connection. Use `--tool-discovery full` (or `MCP_TOOL_DISCOVERY=full`) for an older MCP client
+that cannot use Tool Search.
 
+The full native catalog contains these tools:
+
+- `get_server_status`
 - `search`
 - `fetch`
 - `list_contacts`
@@ -86,6 +93,8 @@ It exposes these tools:
 - `archive_contact_from_approval`
 - `prepare_register_payment`
 - `register_payment_from_approval`
+- `prepare_reclassify_bank_mutation_bookings`
+- `reclassify_bank_mutation_bookings_from_approval`
 - `prepare_link_bank_mutation_booking`
 - `link_bank_mutation_booking_from_approval`
 - `prepare_unlink_bank_mutation_booking`
@@ -94,8 +103,14 @@ It exposes these tools:
 - `create_credit_invoice_from_approval`
 - `prepare_reconcile_purchase_invoice`
 - `reconcile_purchase_invoice_from_approval`
+- `prepare_bookkeeping_correction_batch`
+- `bookkeeping_correction_batch_from_approval`
+- `execute_approved_action`
 
-The first two are the important ones if you want ChatGPT deep research or ChatGPT developer mode to treat Moneybird like a data source. The `prepare_*` and `*_from_approval` pairs are the guarded write path.
+`search` and `fetch` are the important data-source tools for ChatGPT deep research or
+developer mode. The `prepare_*` tools create exact guarded previews.
+`execute_approved_action(approval_id)` is the stable executor for every prepared action, so a
+client does not need to discover a different execution schema after the user says yes.
 
 ## 1. Create a fresh Moneybird token
 
@@ -121,6 +136,8 @@ MCP_AUTH_TOKEN=
 MONEYBIRD_MCP_DATA_DIR=
 # Optional: "sse" (default, endpoint /sse) or "http" (streamable HTTP, endpoint /mcp).
 MCP_TRANSPORT=sse
+# Optional: "search" (default, compact on-demand Tool Search) or "full".
+MCP_TOOL_DISCOVERY=search
 # Optional: OAuth application credentials (register at
 # https://moneybird.com/user/applications/new); used by scripts/oauth_login.py as an
 # alternative to a personal MONEYBIRD_ACCESS_TOKEN.
@@ -233,7 +250,9 @@ http://localhost:8000/sse
 Set `MCP_TRANSPORT=http` to serve the current MCP streamable-HTTP transport at
 `http://localhost:8000/mcp` instead — prefer this for new clients; `sse` remains
 the default only so existing deployments keep working. The same is available via
-`moneybird-mcp --transport http` (add `--host`/`--port` as needed).
+`moneybird-mcp --transport http` (add `--host`/`--port` as needed). The runnable entrypoints
+use compact Tool Search by default; add `--tool-discovery full` only for a client that needs
+every tool schema up front.
 
 ## Project layout
 
@@ -248,12 +267,17 @@ moneybird/
   server.py               # shared entrypoint: stdio | http | sse (build_config + main)
   config.py               # constants, MoneybirdError, .env loading, data_dir()
   credentials.py          # per-request tenant credentials (headers) + env fallback
-  client.py               # Moneybird REST client (HTTP, retry/backoff)
+  client.py               # Moneybird REST client (pooled HTTP, retry/backoff)
+  http_transport.py       # process-wide keep-alive pool; no default tenant credentials
+  task_context.py         # per-tool cache + batch loading for known record ids
+  telemetry.py            # bounded privacy-safe API/tool performance counters
+  performance_middleware.py # FastMCP timing middleware
+  tool_discovery.py       # compact BM25 Tool Search profile
   formatting.py           # pure helpers: titles, money, search-record shaping
   safety.py               # write guards: durable approvals (SQLite) + audit log
-  sync.py                 # local search-index sync (cached on disk)
+  sync.py                 # bounded-parallel, atomic local search-index sync
   invoicing.py            # bookkeeping logic: journals, invoices, merge/reclassify
-  tools/                  # the 66 MCP tools, split by domain
+  tools/                  # MCP tools, split by domain
     _registry.py          #   FastMCP instance + always-on server instructions
     _context.py           #   patchable indirection for client + audit-log access
     _writes.py            #   shared prepare/approve machinery (stage_write, run_approved_write)
@@ -264,6 +288,8 @@ moneybird/
     purchases.py          #   purchase invoices, receipts, journals (reads)
     bank.py               #   financial mutations + link/unlink bookings
     payments.py           #   payment registration on invoices and receipts
+    workflows.py          #   combined purchase + bank correction preview
+    approvals.py          #   stable generic executor for guarded approvals
     ledger.py             #   ledger accounts, general journals, reclassification
     reference.py          #   products, tax rates, projects, time entries, accounts
     reports.py            #   all Moneybird reports
@@ -287,10 +313,47 @@ Every guarded write follows the same discipline via `tools/_writes.py`: a
 `prepare_*` tool validates, builds a preview, and calls `stage_write(...)`; the
 matching `*_from_approval` tool calls `run_approved_write(...)`, which pops the
 stored approval, enforces the duplicate-suppression fingerprint, executes, and
-audit-logs success or failure in one place. Adding a new write means writing a
-prepare function and an executor — the safety plumbing comes for free. A few
+audit-logs success or failure in one place. Executors can explicitly mark a
+verified partial failure so it is never recorded as a successful duplicate.
+Adding a new write means writing a prepare function and an executor — the safety
+plumbing comes for free. A few
 multi-step batch flows (batch invoices, meter usage, reclassify, bulk delivery
 method) keep hand-rolled executors because they record partial progress on failure.
+Clients may always call `execute_approved_action(approval_id)` after confirmation; it
+reads the exact stored action and delegates to the existing action-specific executor, without
+weakening single-use, expiry, tenant, fingerprint, or audit checks.
+
+For a task that combines purchase-invoice reconciliation and bank-booking
+reclassification, `prepare_bookkeeping_correction_batch` stages the existing guarded child
+actions and returns one combined preview. Its executor preflights all children before the first
+write. Moneybird has no cross-object transaction, so a later runtime/API failure is returned and
+audited explicitly as partial progress rather than presented as atomic success. A child that
+returns a verification-error status also makes the parent partial; returning without raising is
+not sufficient for success.
+
+### Performance architecture
+
+- JSON API calls share a keep-alive `httpx` connection pool. Authorization stays on each
+  request, so the pool can safely serve multiple tenants without storing a tenant token.
+- `MoneybirdTaskContext` caches reference data only for one tool invocation and batch-loads
+  known document/invoice/mutation ids in groups of at most 100. The bank-reclassification
+  prepare+execute path for `N <= 100` uses approximately `5 + 2N` API calls instead of
+  `2 + 6N`, including an independent final verification.
+- The six versioned sync feeds run with at most three workers. A per-administration lock and
+  atomic file replacement protect the JSON cache. `updated_at` records freshness;
+  `content_updated_at` changes only when records change, so a no-change refresh does not rebuild
+  SQLite FTS.
+- Local bounded telemetry records normalized endpoints, durations, retries, status classes and
+  tool call totals. It never records tokens, query parameters, request/response bodies, or raw
+  numeric record ids. Metrics are isolated by an opaque credential scope, so
+  `get_server_status` only returns activity belonging to the caller's Moneybird tenant.
+
+On the live development administration (2026-07-29), a no-change sync improved from 4.21 s to
+about 0.69–0.86 s (latest repeat: 0.71 s), repeated pooled GETs after connection setup took
+about 0.05–0.08 s, and compact
+discovery reduced the initial protocol tool schema from 77 tools / 68,260 compact JSON bytes to
+9 tools / 6,933 bytes (about 90% smaller). These are reference measurements, not latency
+guarantees.
 
 ### Durable approvals & server state
 
@@ -326,6 +389,7 @@ Then use the public URL ending in `/sse`.
 
 ## 5. What the tools do
 
+- `get_server_status(recent_tools=20)`: returns local, privacy-safe API/tool latency, call-count, retry, and error aggregates; it makes no Moneybird API call.
 - `search(query, limit=8)`: searches contacts, sales invoices, purchase invoices, receipts, general journals, and financial mutations.
 - `fetch(id)`: fetches the full JSON for `contact:<id>`, `sales_invoice:<id>`, `purchase_invoice:<id>`, `receipt:<id>`, `general_journal_document:<id>`, `financial_mutation:<id>`, `ledger_account:<id>`, or `financial_account:<id>`.
 - `list_contacts(limit=10, page=1)`: compact contact overview.
@@ -389,14 +453,19 @@ Then use the public URL ending in `/sse`.
 - `archive_contact_from_approval(approval_id)`: executes the staged archive.
 - `prepare_register_payment(document_type, document_id, payment_date, price, ...)`: stages a payment registration on a sales invoice, purchase invoice, or receipt, with an open-amount preview and overpayment/partial-payment warnings.
 - `register_payment_from_approval(approval_id)`: executes the payment registration and verifies the document total is unchanged and the payment is visible.
+- `prepare_reclassify_bank_mutation_bookings(entries)`: stages up to 100 direct bank-booking moves between ledger accounts in one approval. Every entry identifies the mutation and exact `ledger_account_booking_id`; the preview stores the mutation version, source ledger, exact signed amount, destination, and payment reference.
+- `reclassify_bank_mutation_bookings_from_approval(approval_id)`: preflights the complete batch before the first write, unlinks and re-links each exact amount, verifies the source disappeared and a new target booking appeared while mutation amount/state/open amount stayed unchanged, and attempts to restore the original source booking when a target link fails. Moneybird offers no cross-mutation transaction, so the response reports partial progress explicitly if recovery is needed.
 - `prepare_link_bank_mutation_booking(financial_mutation_id, booking_type, booking_id, price="")`: stages linking a bank/cash mutation to an open invoice/document (`SalesInvoice`, `Document`) or directly to a ledger category (`LedgerAccount`) — the manual counterpart of Moneybird's bank reconciliation. Empty `price` links the full open amount.
-- `link_bank_mutation_booking_from_approval(approval_id)`: executes the link and verifies the payment/category booking appears on the mutation.
+- `link_bank_mutation_booking_from_approval(approval_id)`: executes the link and verifies the new booking's signed price, the resulting open amount, and the processed state when the mutation is fully closed.
 - `prepare_unlink_bank_mutation_booking(financial_mutation_id, booking_type, booking_id)`: stages removing a wrongly matched `Payment` or `LedgerAccountBooking` from a mutation (errors early if the booking id is not on the mutation).
 - `unlink_bank_mutation_booking_from_approval(approval_id)`: executes the unlink and verifies the booking is gone.
 - `prepare_create_credit_invoice(sales_invoice_id)`: stages duplicating an invoice into a draft credit invoice (negated amounts, nothing sent).
 - `create_credit_invoice_from_approval(approval_id)`: executes the credit duplication and verifies the credit total negates the original.
 - `prepare_reconcile_purchase_invoice(document_id, reference_document_id="", kind="purchase_invoice", target_total="", relabel_period=True, desired_lines=None, prices_are_incl_tax=None, source_note="")`: stages a purchase-invoice repair. With `desired_lines`, it validates exact PDF-derived descriptions, prices, ledger ids, and tax-rate ids and refuses any split that changes the current total; without them it reproduces and proportionally scales a reference invoice. Both modes store the document version in the approval.
 - `reconcile_purchase_invoice_from_approval(approval_id)`: aborts if the document changed after the preview, otherwise executes the staged reconcile and re-fetches the invoice to verify the total, exact line set, tax-price mode, and resulting version.
+- `prepare_bookkeeping_correction_batch(bank_reclassifications=None, purchase_reconciliations=None)`: groups related purchase-invoice and bank-booking corrections under one exact preview and approval; mixed plans are globally preflighted before the first write.
+- `bookkeeping_correction_batch_from_approval(approval_id)`: executes that combined plan and reports/audits verified completion or explicit partial failure.
+- `execute_approved_action(approval_id)`: stable executor for any pending guarded approval; delegates only to the action stored in that approval.
 
 ## 5b. Prompts and the playbook (the "skill" layer)
 
@@ -438,7 +507,7 @@ There are two layers of protection here:
 1. The server marks real write tools as destructive with MCP tool annotations.
 2. The server itself uses a two-step write flow:
    `prepare_*` only stages the action.
-   `*_from_approval` performs the Moneybird write.
+   `execute_approved_action` (or the matching `*_from_approval`) performs the Moneybird write.
 
 This is the important limitation: MCP tool annotations are only hints. They improve how ChatGPT or other MCP clients treat the tools, but they do not by themselves guarantee a human approval step.
 
@@ -464,6 +533,9 @@ Relevant OpenAI docs:
 - `search` uses a local synchronization cache when available and falls back to a live first-page scan when no cache exists yet.
 - The sync cache now covers contacts, sales invoices, purchase invoices, receipts, general journal documents, and financial mutations.
 - The HTTP client retries transient `429` and `5xx` responses with backoff, which makes multi-step bookkeeping runs much less fragile.
+- The HTTP client reuses keep-alive connections, task-local loaders batch known ids, and
+  versioned sync feeds run with bounded parallelism. Compact Tool Search is the default to avoid
+  sending the full catalog to the model up front.
 - The sync cache is stored locally and should not be committed.
 - Successful write actions are appended to a per-administration JSONL audit log at `.moneybird_audit_log_<administration_id>.jsonl` (falling back to `.moneybird_audit_log.jsonl` when no administration is set).
 - Failed multi-step writes now also append a failure entry with partial progress, which helps with recovery after interrupted bookkeeping runs.

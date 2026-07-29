@@ -23,7 +23,8 @@ PLAYBOOK_URI = "moneybird://playbook/bookkeeping"
 GUARDRAILS = """\
 Werk volgens deze vaste regels:
 1. Schrijf NOOIT zonder expliciete bevestiging: gebruik een prepare_*-tool, toon de
-   preview, wacht op een duidelijk "ja", en pas dan de bijbehorende *_from_approval-tool toe.
+   preview, wacht op een duidelijk "ja", en voer dan het teruggegeven approval_id uit met
+   execute_approved_action (de bijbehorende *_from_approval-tool blijft ook geldig).
 2. Verzin NOOIT gegevens (factuurnummers, referenties, bedragen, data, tegenpartijen).
    Ontbreekt iets, vraag het of laat het leeg.
 3. Verifieer na elke wijziging dat het documenttotaal ongewijzigd is (tot op de cent) en
@@ -56,7 +57,7 @@ en laat het meteen zien met mijn eigen administratie.
 Werkwijze:
 1. Stel jezelf in één alinea voor: je leest mijn Moneybird-administratie en kunt na mijn
    expliciete akkoord ook dingen wijzigen. Elke wijziging gaat via een preview
-   (prepare_*-tool) en wordt pas na mijn "ja" uitgevoerd (*_from_approval); er verandert
+   (prepare_*-tool) en wordt pas na mijn "ja" uitgevoerd (execute_approved_action); er verandert
    dus nooit iets zonder dat ik het gezien heb.
 2. Controleer de verbinding: haal list_administrations op en noem de administratie waar we
    in werken.
@@ -100,7 +101,12 @@ Werkwijze:
    Rapporteer per koppeling de verificatie (payments/ledger_account_bookings na afloop).
 5. Fout gekoppeld? Herstel met prepare_unlink_bank_mutation_booking →
    unlink_bank_mutation_booking_from_approval.
-6. Sluit af met een eerlijke samenvatting: gekoppeld, overgeslagen (en waarom), en wat een
+6. Staat een reeks mutaties rechtstreeks op het verkeerde grootboek? Gebruik
+   prepare_reclassify_bank_mutation_bookings met de exacte
+   ledger_account_booking_id per mutatie. Die flow preflight de volledige batch,
+   bewaart versies en bedragen, en probeert de bronboeking te herstellen als een
+   doelkoppeling mislukt.
+7. Sluit af met een eerlijke samenvatting: gekoppeld, overgeslagen (en waarom), en wat een
    boekingsregel in Moneybird zelf zou kunnen automatiseren (die regels staan niet in de API)."""
 
 

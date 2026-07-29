@@ -1,6 +1,8 @@
 # Pin to the tested major. fastmcp 3.x changed enough that a stray 4.0 could
 # break the http_app/middleware wiring used in __main__. Bump deliberately.
 fastmcp>=3.4,<4
+# Used directly for pooled, keep-alive Moneybird API connections.
+httpx>=0.28,<1
 # Used directly by the __main__ entrypoint to serve the SSE app with middleware.
 uvicorn>=0.30
 # FastMCP imports requests; keep the optional detector within requests' supported range.

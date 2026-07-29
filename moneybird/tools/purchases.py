@@ -435,15 +435,11 @@ def _verification_line_signature(lines: list[dict[str, Any]]) -> list[tuple[str,
     )
 
 
-def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
-    kind = payload["document_kind"]
+def _validate_reconcile_preflight(
+    before: dict[str, Any],
+    payload: dict[str, Any],
+) -> str:
     document_id = payload["document_id"]
-    expected_total = money_decimal(payload["expected_total_incl_tax"])
-    expected_total_before = money_decimal(
-        payload.get("expected_total_before", payload["expected_total_incl_tax"])
-    )
-
-    before = client.get_document(kind, document_id)
     expected_version = str(payload.get("expected_version") or "")
     current_version = str(before.get("version") or "")
     expected_updated_at = str(payload.get("expected_updated_at") or "")
@@ -453,11 +449,21 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
             f"Document {document_id} changed after the preview (version "
             f"{expected_version} -> {current_version}). Prepare the reconciliation again."
         )
-    if not expected_version and expected_updated_at and current_updated_at != expected_updated_at:
+    if (
+        not expected_version
+        and expected_updated_at
+        and current_updated_at != expected_updated_at
+    ):
         raise MoneybirdError(
             f"Document {document_id} changed after the preview (updated_at "
             f"{expected_updated_at} -> {current_updated_at}). Prepare the reconciliation again."
         )
+    expected_total_before = money_decimal(
+        payload.get(
+            "expected_total_before",
+            payload["expected_total_incl_tax"],
+        )
+    )
     current_total = money_decimal(before.get("total_price_incl_tax"))
     if abs(current_total - expected_total_before) >= Decimal("0.005"):
         raise MoneybirdError(
@@ -465,6 +471,15 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
             f"{expected_total_before:.2f}, now {current_total:.2f}. "
             "Prepare the reconciliation again."
         )
+    return current_version
+
+
+def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    kind = payload["document_kind"]
+    document_id = payload["document_id"]
+    expected_total = money_decimal(payload["expected_total_incl_tax"])
+    before = client.get_document(kind, document_id)
+    current_version = _validate_reconcile_preflight(before, payload)
 
     client.update_document(
         kind,

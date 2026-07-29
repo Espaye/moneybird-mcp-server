@@ -26,6 +26,7 @@ from ..formatting import (
     stringify_record,
 )
 from ..search_fts import refresh_fts_index, search_fts
+from ..telemetry import performance_snapshot, tenant_scope_for_token
 from ..sync import (
     load_sync_index,
     sync_search_index_data,
@@ -36,6 +37,36 @@ from ..invoicing import (
 from ._params import FilterString, Limit
 from ._registry import mcp
 from . import _context as ctx
+
+
+@mcp.tool(
+    annotations=READ_ONLY_ANNOTATIONS,
+    tags={"domain:core", "capability:read", "always-visible"},
+)
+def get_server_status(
+    recent_tools: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=100,
+            description="How many recent MCP tool timings to include (1-100).",
+        ),
+    ] = 20,
+) -> dict[str, Any]:
+    """Return local, privacy-safe performance diagnostics for this MCP process."""
+    # Resolve only the caller's credential scope; require_administration=False
+    # avoids a Moneybird API call when no administration id was configured.
+    client = ctx.get_client(require_administration=False)
+    return {
+        "tool_discovery": os.environ.get(
+            "MONEYBIRD_TOOL_DISCOVERY",
+            "full",
+        ),
+        "performance": performance_snapshot(
+            recent_tools=recent_tools,
+            tenant_scope=tenant_scope_for_token(client.token),
+        ),
+    }
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)

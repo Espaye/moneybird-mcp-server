@@ -115,7 +115,8 @@ def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[st
         "expires_at": expires_at.isoformat(),
         "warning": (
             "This action is not executed yet. Ask the user for explicit confirmation "
-            "before calling the matching *_from_approval tool."
+            "before calling execute_approved_action (or the matching "
+            "*_from_approval tool)."
         ),
     }
 
@@ -171,6 +172,67 @@ def pop_approval(
     }
 
 
+def peek_approval(
+    approval_id: str,
+    *,
+    administration_id: str | None = None,
+) -> dict[str, Any]:
+    """Inspect a pending approval without consuming it.
+
+    Used by the generic approval dispatcher to select the already-bound action.
+    The action-specific executor still calls :func:`pop_approval`, so single-use,
+    expiry, and tenant checks remain centralized and unchanged.
+    """
+    with _approvals_connection() as connection:
+        row = connection.execute(
+            "SELECT action, payload, summary, administration_id, expires_at "
+            "FROM approvals WHERE approval_id = ?",
+            (approval_id,),
+        ).fetchone()
+    if not row:
+        raise MoneybirdError(
+            "Unknown approval_id. Prepare the action again before executing it."
+        )
+    action, payload_json, summary, prepared_administration_id, expires_at = row
+    if (
+        prepared_administration_id
+        and str(prepared_administration_id) != str(administration_id or "")
+    ):
+        raise MoneybirdError(
+            "approval_id belongs to a different Moneybird administration. "
+            "Prepare the action again for the active administration."
+        )
+    if datetime.now(UTC) > datetime.fromisoformat(expires_at):
+        with _approvals_connection() as connection:
+            connection.execute(
+                "DELETE FROM approvals WHERE approval_id = ?",
+                (approval_id,),
+            )
+        raise MoneybirdError("approval_id expired. Prepare the action again.")
+    return {
+        "action": action,
+        "payload": json.loads(payload_json),
+        "summary": summary,
+        "administration_id": prepared_administration_id,
+        "expires_at": expires_at,
+    }
+
+
+def discard_approval(
+    approval_id: str,
+    *,
+    administration_id: str | None = None,
+) -> bool:
+    """Remove an unexecuted approval owned by the active administration."""
+    with _approvals_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM approvals WHERE approval_id = ? "
+            "AND administration_id = ?",
+            (approval_id, str(administration_id or "")),
+        )
+    return cursor.rowcount > 0
+
+
 def append_audit_log(entry: dict[str, Any], administration_id: str | None = None) -> None:
     administration_id = administration_id or get_active_administration_id()
     log_entry = {"timestamp": iso_now(), **entry, "administration_id": administration_id}
@@ -199,6 +261,8 @@ def audit_log_contains_success(
     administration_id: str | None = None,
 ) -> bool:
     administration_id = administration_id or get_active_administration_id()
+    latest_timestamp = ""
+    latest_result: str | None = None
     for path in _audit_log_candidates(administration_id):
         if not path.exists():
             continue
@@ -209,10 +273,20 @@ def audit_log_contains_success(
             if (
                 entry.get("action") == action
                 and entry.get("fingerprint") == fingerprint
-                and entry.get("result") == "success"
             ):
-                return True
-    return False
+                result = str(entry.get("result") or "")
+                # Failed and partial attempts never erase a previously verified
+                # success. Only an explicit invalidation can reopen the exact
+                # fingerprint; a later success can close it again.
+                if result not in {"success", "invalidated"}:
+                    continue
+                timestamp = str(entry.get("timestamp") or "")
+                if timestamp >= latest_timestamp:
+                    latest_timestamp = timestamp
+                    latest_result = result
+    # An append-only ``invalidated`` entry can correct a false-positive success
+    # after live verification proves the expected state is no longer present.
+    return latest_result == "success"
 
 
 def append_failed_audit_log(

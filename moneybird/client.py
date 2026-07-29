@@ -7,8 +7,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
+from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from typing import Any
+
+import httpx
 
 from .config import (
     BASE_URL,
@@ -26,6 +29,14 @@ from .credentials import resolve_credentials, set_active_administration_id
 from .formatting import (
     build_filter_string,
     document_kind_config,
+)
+from .http_transport import get_shared_http_client
+from .telemetry import (
+    current_tool_name,
+    current_trace_id,
+    record_api_call,
+    set_current_tenant_scope,
+    tenant_scope_for_token,
 )
 
 import logging
@@ -109,6 +120,8 @@ class MoneybirdClient:
             )
 
         self.token = token
+        self.telemetry_tenant_scope = tenant_scope_for_token(token)
+        set_current_tenant_scope(self.telemetry_tenant_scope)
         self.base_url = BASE_URL.rstrip("/")
         self.timeout = DEFAULT_TIMEOUT_SECONDS
         if administration_id:
@@ -134,35 +147,53 @@ class MoneybirdClient:
         if query:
             url = f"{url}?{urllib.parse.urlencode(query, doseq=True)}"
         serialized_body = json.dumps(body).encode("utf-8") if body is not None else None
+        trace_id = current_trace_id()
+        tool_name = current_tool_name()
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/json",
+        }
+        if serialized_body is not None:
+            headers["Content-Type"] = "application/json"
 
         for attempt in range(DEFAULT_RETRY_ATTEMPTS + 1):
-            request = urllib.request.Request(url=url, method=method)
-            request.add_header("Authorization", f"Bearer {self.token}")
-            request.add_header("Accept", "application/json")
-            if serialized_body is not None:
-                request.data = serialized_body
-                request.add_header("Content-Type", "application/json")
-
+            attempt_started = time.perf_counter()
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    payload = response.read().decode("utf-8")
-                return json.loads(payload) if payload else None
-            except urllib.error.HTTPError as exc:
-                body_text = exc.read().decode("utf-8", errors="replace")
+                response = get_shared_http_client().request(
+                    method,
+                    url,
+                    headers=headers,
+                    content=serialized_body,
+                    timeout=self.timeout,
+                )
+                response_status = response.status_code
+                payload = response.text
+                record_api_call(
+                    method=method,
+                    path=path,
+                    status=response_status,
+                    duration_seconds=time.perf_counter() - attempt_started,
+                    retry=attempt,
+                    trace_id=trace_id,
+                    tool_name=tool_name,
+                    tenant_scope=self.telemetry_tenant_scope,
+                )
+                if response_status < 300:
+                    return json.loads(payload) if payload else None
                 if (
                     retry_safe
                     and attempt < DEFAULT_RETRY_ATTEMPTS
-                    and is_retryable_http_status(exc.code)
+                    and is_retryable_http_status(response_status)
                 ):
                     delay = retry_delay_seconds(
                         attempt=attempt,
-                        retry_after_header=exc.headers.get("Retry-After"),
+                        retry_after_header=response.headers.get("Retry-After"),
                     )
                     logger.warning(
                         "Retrying Moneybird %s %s after HTTP %s in %.1fs (attempt %s/%s)",
                         method,
                         path,
-                        exc.code,
+                        response_status,
                         delay,
                         attempt + 1,
                         DEFAULT_RETRY_ATTEMPTS,
@@ -172,13 +203,24 @@ class MoneybirdClient:
                 retry_note = (
                     " Automatic retry was disabled because this write may already have "
                     "been processed; reconcile the record before retrying."
-                    if not retry_safe and is_retryable_http_status(exc.code)
+                    if not retry_safe and is_retryable_http_status(response_status)
                     else ""
                 )
                 raise MoneybirdError(
-                    f"Moneybird returned HTTP {exc.code} for {path}: {body_text}{retry_note}"
-                ) from exc
-            except urllib.error.URLError as exc:
+                    f"Moneybird returned HTTP {response_status} for {path}: "
+                    f"{payload}{retry_note}"
+                )
+            except httpx.TransportError as exc:
+                record_api_call(
+                    method=method,
+                    path=path,
+                    status="network_error",
+                    duration_seconds=time.perf_counter() - attempt_started,
+                    retry=attempt,
+                    trace_id=trace_id,
+                    tool_name=tool_name,
+                    tenant_scope=self.telemetry_tenant_scope,
+                )
                 if retry_safe and attempt < DEFAULT_RETRY_ATTEMPTS:
                     delay = retry_delay_seconds(attempt=attempt)
                     logger.warning(
@@ -188,7 +230,7 @@ class MoneybirdClient:
                         delay,
                         attempt + 1,
                         DEFAULT_RETRY_ATTEMPTS,
-                        exc.reason,
+                        exc,
                     )
                     time.sleep(delay)
                     continue
@@ -198,7 +240,7 @@ class MoneybirdClient:
                     else ""
                 )
                 raise MoneybirdError(
-                    f"Could not reach Moneybird: {exc.reason}.{retry_note}"
+                    f"Could not reach Moneybird: {exc}.{retry_note}"
                 ) from exc
 
     def _auto_select_administration(self) -> str:
@@ -806,10 +848,22 @@ class MoneybirdClient:
         mutation_id: str,
         booking: dict[str, Any],
     ) -> Any:
+        # The public MCP tools use the signed ``price`` returned on payments and
+        # ledger-account bookings. Moneybird's link_booking request calls the
+        # input ``price_base`` and expects its magnitude; Moneybird derives the
+        # booking sign from the financial mutation. Keep the tool contract
+        # stable and translate both conventions at the HTTP boundary.
+        request_booking = dict(booking)
+        if "price" in request_booking and "price_base" not in request_booking:
+            price = request_booking.pop("price")
+            request_booking["price_base"] = format(
+                abs(Decimal(str(price))),
+                "f",
+            )
         return self._request(
             "PATCH",
             f"/{self.administration_id}/financial_mutations/{mutation_id}/link_booking.json",
-            body=booking,
+            body=request_booking,
         )
 
     def unlink_financial_mutation_booking(

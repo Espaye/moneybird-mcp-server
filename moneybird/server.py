@@ -20,6 +20,7 @@ from pathlib import Path
 logger = logging.getLogger("moneybird_mcp")
 
 TRANSPORTS = ("stdio", "http", "sse")
+TOOL_DISCOVERY_MODES = ("full", "search")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -29,6 +30,7 @@ class ServerConfig:
     host: str
     port: int
     auth_token: str
+    tool_discovery: str
 
 
 def build_config(
@@ -60,6 +62,16 @@ def build_config(
         "Overrides MCP_TRANSPORT.",
     )
     parser.add_argument(
+        "--tool-discovery",
+        choices=TOOL_DISCOVERY_MODES,
+        default=None,
+        help=(
+            "search (default: expose compact search_tools/call_tool discovery) "
+            "or full (expose every Moneybird tool up front). Overrides "
+            "MCP_TOOL_DISCOVERY."
+        ),
+    )
+    parser.add_argument(
         "--host",
         default=None,
         help="Bind address for http/sse (default: MCP_HOST or 127.0.0.1).",
@@ -84,6 +96,18 @@ def build_config(
     host = args.host or os.environ.get("MCP_HOST", "127.0.0.1")
     port = args.port if args.port is not None else int(os.environ.get("MCP_PORT", "8000"))
     auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
+    tool_discovery = (
+        args.tool_discovery
+        or os.environ.get("MCP_TOOL_DISCOVERY", "").strip().lower()
+        or "search"
+    )
+    if tool_discovery not in TOOL_DISCOVERY_MODES:
+        logger.error(
+            "MCP_TOOL_DISCOVERY must be one of %s, not %r.",
+            TOOL_DISCOVERY_MODES,
+            tool_discovery,
+        )
+        raise SystemExit(1)
 
     # stdio is inherently local (the client owns both pipe ends); the loopback
     # rule only guards network transports.
@@ -95,14 +119,21 @@ def build_config(
         )
         raise SystemExit(1)
 
-    return ServerConfig(transport=transport, host=host, port=port, auth_token=auth_token)
+    return ServerConfig(
+        transport=transport,
+        host=host,
+        port=port,
+        auth_token=auth_token,
+        tool_discovery=tool_discovery,
+    )
 
 
 def main(argv: list[str] | None = None, *, default_transport: str = "stdio") -> None:
     logging.basicConfig(level=logging.INFO)  # stderr; stdout stays protocol-clean
     config = build_config(argv, default_transport=default_transport)
+    os.environ["MONEYBIRD_TOOL_DISCOVERY"] = config.tool_discovery
 
-    # Importing the tools package registers all 66 tools + prompts on the mcp
+    # Importing the tools package registers all tools + prompts on the mcp
     # instance; deferred past arg parsing so --help stays instant.
     from .tools import mcp
 

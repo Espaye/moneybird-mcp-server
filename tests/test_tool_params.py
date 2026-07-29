@@ -56,6 +56,16 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertEqual(set(schema["document_type"]["enum"]), PAYABLE_DOCUMENT_KINDS)
         self.assertIn("YYYY-MM-DD", schema["payment_date"]["description"])
 
+    def test_bank_reclassification_exposes_guarded_batch_entries(self) -> None:
+        schema = self._tool_schema(
+            "prepare_reclassify_bank_mutation_bookings"
+        )["properties"]
+        self.assertIn("entries", schema)
+        self.assertIn(
+            "ledger_account_booking_id",
+            schema["entries"]["description"],
+        )
+
     def test_purchase_reconcile_exposes_exact_pdf_line_mode(self) -> None:
         schema = self._tool_schema("prepare_reconcile_purchase_invoice")["properties"]
         self.assertIn("desired_lines", schema)
@@ -72,6 +82,17 @@ class ToolSchemaTests(unittest.TestCase):
         schema = self._tool_schema("get_purchase_invoice_by_reference")["properties"]
         self.assertIn("reference", schema)
         self.assertIn("Exact supplier invoice number", schema["reference"]["description"])
+
+    def test_generic_approval_executor_registers(self) -> None:
+        schema = self._tool_schema("execute_approved_action")["properties"]
+        self.assertIn("approval_id", schema)
+
+    def test_combined_bookkeeping_workflow_registers(self) -> None:
+        schema = self._tool_schema(
+            "prepare_bookkeeping_correction_batch"
+        )["properties"]
+        self.assertIn("bank_reclassifications", schema)
+        self.assertIn("purchase_reconciliations", schema)
 
     def test_all_tools_still_register(self) -> None:
         from moneybird.tools import mcp

@@ -10,8 +10,10 @@ Every write pair follows the same discipline:
 
 An executor receives ``(client, payload)`` and returns the tool result dict. Two
 reserved keys let it steer the envelope: ``_status`` (the ``status`` field of the
-response, default ``"done"``) and ``_audit`` (extra fields recorded in the audit
-log entry).
+response, default ``"done"``), ``_audit`` (extra fields recorded in the audit
+log entry), and ``_audit_result`` (default ``"success"``; use
+``"partial_failure"`` when a non-transactional batch returns verified partial
+progress instead of raising).
 """
 from __future__ import annotations
 
@@ -63,11 +65,12 @@ def run_approved_write(
         ctx.append_failed_audit_log(action, fingerprint=fingerprint, error=str(exc))
         raise
     audit_extra = result.pop("_audit", {})
+    audit_result = result.pop("_audit_result", "success")
     ctx.append_audit_log(
         {
             "action": action,
             "fingerprint": fingerprint,
-            "result": "success",
+            "result": audit_result,
             **audit_extra,
         }
     )

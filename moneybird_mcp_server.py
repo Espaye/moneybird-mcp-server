@@ -41,7 +41,15 @@ from moneybird.safety import (
     audit_log_contains_success,
 )
 from moneybird.sync import ensure_sync_index_shape
-from moneybird.tools import mcp
+
+if __name__ == "__main__":
+    # Let the shared entrypoint parse --tool-discovery / .env before importing
+    # moneybird.tools, because discovery transforms cannot be switched later.
+    from moneybird.server import main
+
+    main(default_transport="sse")
+else:
+    from moneybird.tools import mcp
 
 # Names re-exported purely for backward compatibility (tests and ad-hoc imports).
 __all__ = [
@@ -70,12 +78,3 @@ __all__ = [
     "audit_log_contains_success",
     "ensure_sync_index_shape",
 ]
-
-
-if __name__ == "__main__":
-    from moneybird.server import main
-
-    # Historical default: legacy SSE over HTTP, so existing deployments that run
-    # `python moneybird_mcp_server.py` keep working. The `moneybird-mcp` console
-    # script (moneybird/server.py) defaults to stdio for local MCP clients.
-    main(default_transport="sse")

@@ -113,7 +113,58 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
 - **Betalingen en bankkoppeling hebben eigen guarded tools**: `prepare_register_payment`
   (verkoopfactuur/inkoopfactuur/bon), `prepare_link_bank_mutation_booking` /
   `prepare_unlink_bank_mutation_booking` (bankmutatie ↔ factuur/document/grootboekcategorie)
-  en `prepare_create_credit_invoice`. Gebruik die, geen handmatige constructies.
+  en `prepare_create_credit_invoice`. Voor een reeks bestaande directe bankboekingen die naar
+  een ander grootboek moeten, gebruik je `prepare_reclassify_bank_mutation_bookings` →
+  `reclassify_bank_mutation_bookings_from_approval`: volledige preflight op mutatieversie en
+  bronboeking, exact bedrag, nacontrole van state/open bedrag, plus herstelpoging bij mislukte
+  relink. Moneybird biedt geen transactie over meerdere mutaties, dus partial failures worden
+  expliciet als zodanig geaudit. Gebruik deze flows, geen handmatige constructies.
+  Let op de afwijkende API-conventie (live bevestigd op 2026-07-29): de
+  `link_booking`-request verwacht `price_base` als **positieve grootte**, terwijl Moneybird op de
+  teruggegeven betaling/grootboekboeking een ondertekend `price` gebruikt. De client vertaalt
+  daarom het ondertekende toolbedrag aan de HTTP-grens. De uitvoerder controleert daarna ook het
+  teruggegeven teken, `amount_open` en de verwerkte status; alleen "er verscheen een koppeling" is
+  niet voldoende bewijs van succes.
+- **Groepeer samenhangende correcties in één taakpreview.** Gebruik
+  `prepare_bookkeeping_correction_batch` wanneer een opdracht zowel inkoopfactuurcorrecties als
+  directe bankherclassificaties bevat. De workflow maakt één exact `approval_id`, preflight alle
+  child-acties vóór de eerste write en wordt na het akkoord uitgevoerd met
+  `execute_approved_action`. Moneybird heeft geen transactie over verschillende objecten; een
+  runtimefout kan dus nog steeds een expliciet geaudit `completed_with_errors`-resultaat geven.
+  Een child die zelf `completed_with_errors` of een verificatiefout retourneert, maakt de parent
+  eveneens `completed_with_errors`; alleen volledig geverifieerde children tellen als voltooid.
+  Voor elk los `prepare_*`-resultaat mag eveneens `execute_approved_action(approval_id)` worden
+  gebruikt; die kiest uitsluitend de executor van de opgeslagen, nog geldige approval.
+
+## Performance architecture (verified 2026-07-29)
+
+- De runnable server gebruikt standaard compacte tool discovery (`search`): zeven
+  kern-tools plus FastMCP's `search_tools`/`call_tool` worden vooraf aangeboden. Dit verlaagt de
+  protocolcatalogus van 77 tools / 68.260 compacte JSON-bytes naar 9 tools / 6.933 bytes
+  (circa 90% kleiner). Start tijdelijk met
+  `--tool-discovery full` of `MCP_TOOL_DISCOVERY=full` voor oude clients die geen Tool Search
+  ondersteunen. Directe package-importen blijven standaard `full` voor compatibiliteit.
+  De legacy entrypoint importeert tools pas na CLI/`.env`-verwerking, zodat ook
+  `python moneybird_mcp_server.py --tool-discovery full` werkelijk naar `full` schakelt.
+- `moneybird/http_transport.py` beheert één luie `httpx`-connection pool. Authenticatie blijft
+  per request/tenant en staat nooit op de gedeelde client. In een live meting kostte de eerste
+  identieke GET circa 0,29 s en hergebruikte GETs circa 0,05–0,08 s.
+- `MoneybirdTaskContext` cachet referentiedata binnen één tool-invocation en haalt bekende
+  document-, factuur- en mutatie-id's in groepen van maximaal 100 via de sync-endpoints. Cache
+  nooit tussen taken/tenants. De bankbatch gebruikt hierdoor voor `N <= 100` ongeveer `5 + 2N`
+  API-calls voor prepare+execute in plaats van `2 + 6N`, inclusief onafhankelijke eindverificatie.
+- De zes sync-feeds lopen begrensd parallel (maximaal drie workers), met een lock per
+  administratie en atomaire JSON-save. `updated_at` is de freshness-tijd; alleen
+  `content_updated_at` triggert een FTS-rebuild. Een live no-change sync daalde van 4,21 s naar
+  0,69–0,86 s (laatste herhaling: 0,71 s).
+- `ToolTelemetryMiddleware` en de HTTP-client verzamelen begrensde, in-memory
+  latency/call-count/retry-statistieken. `get_server_status` leest die lokaal. Telemetrie bevat
+  geen tokens, queryparameters, bodies of responses; numerieke record-id's worden uit
+  endpointnamen verwijderd. Metrics zijn gescheiden op een niet-terugrekenbare
+  credential-scope, zodat tenants elkaars recente toolactiviteit niet zien.
+- Duplicate-suppression blijft geldig na een latere `failed`/`partial_failure`-auditregel.
+  Alleen een expliciete, nieuwere `invalidated`-regel heft een bewezen succes voor exact
+  dezelfde fingerprint op; een later succes sluit die fingerprint opnieuw.
 
 ## API coverage reference
 
@@ -127,7 +178,8 @@ asset bundled on developer.moneybird.com.
 
 - `moneybird/tools/` — MCP tool definitions, split by domain (`sales.py`, `bank.py`,
   `payments.py`, `contacts.py`, `ledger.py`, `purchases.py`, `reference.py`,
-  `reports.py`, `core.py`, `sales_batches.py`). `_registry.py` holds the FastMCP
+  `reports.py`, `core.py`, `sales_batches.py`, `workflows.py`, `approvals.py`).
+  `_registry.py` holds the FastMCP
   instance + server instructions; `_context.py` is the patchable indirection tests use
   (`mock.patch.object(moneybird.tools._context, "get_client", ...)`); `_writes.py` is
   the shared write machinery — new guarded writes use `stage_write` +
@@ -145,6 +197,12 @@ asset bundled on developer.moneybird.com.
 - `moneybird/client.py` — HTTP client + endpoint methods. Every endpoint it calls is
   checked against `docs/moneybird_api_paths.json` by
   `tests/test_client_spec_conformance.py`, so a typo'd path fails the suite.
+- `moneybird/http_transport.py` — shared keep-alive connection pool; request credentials stay
+  tenant-scoped in `client.py`. `moneybird/task_context.py` provides invocation-scoped batch
+  loading, and `moneybird/telemetry.py` + `performance_middleware.py` provide privacy-safe
+  local performance counters.
+- `moneybird/tool_discovery.py` — compact FastMCP BM25 Tool Search configuration and the
+  always-visible core tool set.
 - `moneybird/purchase_reconcile.py` — write-payload builders for reference-based and exact
   PDF-derived purchase reconciliation. It scales or validates line prices, maps them onto
   existing lines, and records pre/post-write expectations.
@@ -157,7 +215,8 @@ asset bundled on developer.moneybird.com.
   (where approvals DB / audit logs / sync caches live; override with
   `MONEYBIRD_MCP_DATA_DIR`). Approvals are persisted in SQLite and survive restarts.
 - `moneybird/search_fts.py` — SQLite FTS5 layer derived from the JSON sync index (the
-  durable store stays JSON; the FTS file is a rebuildable cache keyed on `updated_at`).
+  durable store stays JSON; the FTS file is a rebuildable cache keyed on
+  `content_updated_at`, not a no-change freshness refresh).
   `search` tries FTS (AND then OR prefix match, bm25-ranked), then substring, then live.
 - `moneybird/playbooks/boekhoud_playbook.md` — btw rules, categorization, consistency
   checklist, bank-mutation diagnosis. Read it before a bookkeeping task.
