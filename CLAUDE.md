@@ -236,3 +236,13 @@ asset bundled on developer.moneybird.com.
 `python -m pytest -q` from the repo root. All tests should pass; when adding an MCP prompt,
 also update `test_register_guidance_registers_prompts_and_resource` (it pins the exact
 prompt-name set).
+
+## GitHub publishing credentials
+
+- Voor een opdracht die uitsluitend om **commit en push** vraagt, is Git zelf de bron van
+  waarheid: controleer remote/branch en voer `git push` uit. Blokkeer zo'n opdracht niet op
+  alleen een mislukte `gh auth status`; Git Credential Manager en de Git credential-chain
+  kunnen nog geldig zijn terwijl de afzonderlijke GitHub CLI/API-sessie verlopen is.
+- Vereis een geldige `gh`-sessie alleen wanneer de gebruiker ook een pull request, issue,
+  release of andere GitHub-API-actie vraagt. Test in dat geval `gh auth status` en laat zo
+  nodig `gh auth login -h github.com` uitvoeren.
