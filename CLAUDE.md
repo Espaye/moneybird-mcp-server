@@ -257,3 +257,12 @@ prompt-name set).
 - Vereis een geldige `gh`-sessie alleen wanneer de gebruiker ook een pull request, issue,
   release of andere GitHub-API-actie vraagt. Test in dat geval `gh auth status` en laat zo
   nodig `gh auth login -h github.com` uitvoeren.
+- **Een commit die `.github/workflows/**` aanraakt kun je niet over HTTPS pushen.**
+  `origin` is een HTTPS-remote en de OAuth-token erachter mist de `workflow`-scope, dus
+  GitHub weigert: `refusing to allow an OAuth App to create or update workflow ... without
+  'workflow' scope` (live geraakt op 2026-07-29). De SSH-sleutel kent die scope-beperking
+  niet, dus push zo'n commit over SSH:
+  `git push git@github.com:Espaye/moneybird-mcp-server.git HEAD:main`. Alternatief is
+  eenmalig `gh auth refresh -h github.com -s workflow`, maar dat is interactief en moet de
+  gebruiker zelf doen. Diagnose los van elkaar: `git ls-remote origin` (HTTPS-credential)
+  versus `ssh -T git@github.com` (SSH; geeft altijd exit 1, ook bij succes).
