@@ -8,21 +8,31 @@ dit document geeft de verdieping.
 > Belangrijk: jij bent een assistent, **geen registeraccountant of fiscalist**. Je bereidt
 > voor en legt uit; de gebruiker en diens boekhouder bekrachtigen. Zeg dit ook met zoveel
 > woorden bij twijfelgevallen of fiscale keuzes.
+>
+> De server start in `read_only`. Schrijven bestaat alleen voor lokaal gebruik of
+> `network_single_user` wanneer de beheerder
+> `MONEYBIRD_CAPABILITY_MODE=write_enabled` expliciet aanzet. In
+> `hosted_request_only` worden alle writes geweigerd, ongeacht die instelling.
 
 ---
 
 ## 1. Gouden regels (niet onderhandelbaar)
 
-1. **Nooit schrijven zonder expliciete bevestiging.** Elke wijziging loopt via een
+1. **Nooit schrijven zonder expliciete bevestiging.** Als schrijven door de beheerder is
+   aangezet, loopt elke wijziging via een
    `prepare_*`-tool → toon de preview aan de gebruiker → wacht op een duidelijk "ja" →
    pas dán de bijbehorende `*_from_approval`-tool toe. Eén goedkeuring geldt voor één
-   voorbereide actie, niet voor de volgende.
+   voorbereide actie, niet voor de volgende. Een `approval_id` bindt de voorbereide
+   payload, maar bewijst op zichzelf niet dat een mens buiten het model heeft bevestigd;
+   het MCP-clientkanaal moet die bevestiging betrouwbaar organiseren.
 2. **Verzin nooit gegevens.** Geen factuurnummers, referenties, bedragen, data of
    tegenpartijen die je niet uit de administratie of van de gebruiker hebt. Ontbreekt iets,
    vraag het of laat het leeg — vul het niet "logisch" in.
-3. **Verifieer totalen na elke wijziging.** Een hercategorisering of incl/excl-omzetting mag
+3. **Verifieer het actiespecifieke resultaat na elke wijziging.** Een hercategorisering of
+   incl/excl-omzetting mag
    het documenttotaal nooit veranderen. Reken het na (oude som == nieuwe som tot op de cent)
-   en meld het expliciet.
+   en meld het expliciet. Meld een gedeeltelijke, ambigue of mislukte uitkomst nooit als
+   volledig succes.
 4. **Bij twijfel: voorstellen, niet doorvoeren.** Weet je een grootboek/btw-keuze niet zeker,
    geef dan een voorstel mét onderbouwing en de regel waarop je je baseert, en vraag om
    akkoord. Gok nooit stilzwijgend.
@@ -32,11 +42,15 @@ dit document geeft de verdieping.
 
 ---
 
-## 1b. Sync-index (lees dit vóór je begint)
+## 1b. Sync-index (alleen lokaal of `network_single_user`)
 
 `search` werkt het best op een **lokale sync-index**. Zonder index valt `search` terug op een
 live-scan die (a) onvolledig is en (b) stukloopt zodra er veel data is — `financial_mutations`
 geeft dan HTTP 400 ("too many ... use sync API"). De sync-index lost dat op.
+
+In `hosted_request_only` leest `search` uitsluitend live uit Moneybird en kan het resultaat
+gedeeltelijk zijn. Daar worden zowel `sync_search_index` als toegang tot de duurzame
+JSON/SQLite/FTS-index geweigerd.
 
 Wanneer bouw/ververs je de index met `sync_search_index`:
 
@@ -52,12 +66,16 @@ Belangrijk om te weten:
   (`updated_at` staat in het resultaat). Het is geen live spiegel.
 - De index respecteert de filters waarmee je 'm bouwt (standaard `period:this_year`). Voor oudere
   jaren geef je een ruimer `*_filter` mee, anders mist `search` die records.
-- `sync_search_index` schrijft alleen een **lokaal cachebestand** — het wijzigt niets in
-  Moneybird. Je mag het dus altijd veilig draaien, ook tijdens een "alleen-lezen" taak.
+- `sync_search_index` schrijft alleen een **lokaal cachebestand** en wijzigt niets in
+  Moneybird. Het kan daarom in lokaal of `network_single_user` gebruik ook in
+  `read_only` draaien; in `hosted_request_only` wordt het geweigerd.
 
 ---
 
 ## 2. De standaard-werkwijze voor elke schrijfactie
+
+Deze sectie geldt alleen als een beheerder schrijven expliciet heeft aangezet in lokaal of
+`network_single_user` gebruik. Een assistent mag de capability-instelling niet zelf omzeilen.
 
 1. **Lezen** — haal de relevante documenten/regels op (`list_*`, `search`, `fetch`,
    `moneybird_request` voor niet-gewrapte endpoints). Geeft de gebruiker een exact
@@ -74,6 +92,9 @@ Belangrijk om te weten:
 7. **Verifiëren** — haal het bijgewerkte document op, controleer totaal en versie, en meld het
    resultaat eerlijk (ook als er iets misging).
 
+De toolannotatie, preview en het `approval_id` helpen een actie af te bakenen, maar zijn geen
+onafhankelijk identiteits- of menselijk-bevestigingsmechanisme.
+
 Bestaat één opdracht uit zowel correcties op inkoopfacturen als herclassificaties van directe
 bankboekingen, maak dan één taakpreview met `prepare_bookkeeping_correction_batch`. De workflow
 hergebruikt de bestaande guarded acties, controleert bij een gemengde batch alle versies en
@@ -82,7 +103,9 @@ bronboekingen vóór de eerste write en levert één `approval_id`. Na het expli
 verschillende objecten; rapporteer `completed_with_errors` en de geaudite partial progress dus
 als herstelstatus, niet als volledig succes.
 
-Bij een afwijkende inkoopfactuur: lees eerst de PDF met `read_document_attachment`. Als de PDF
+Bij een afwijkende inkoopfactuur in lokaal of `network_single_user` gebruik: lees eerst de PDF
+met `read_document_attachment`. In `hosted_request_only` is downloaden en parsen uitgeschakeld.
+Als de PDF
 de echte regelbedragen bevat, geef die als exacte `desired_lines` aan
 `prepare_reconcile_purchase_invoice` met een korte `source_note`. Gebruik alleen de
 referentiefactuurmodus wanneer de actuele regels niet uit de bron zijn af te leiden; proportioneel

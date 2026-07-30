@@ -19,6 +19,9 @@ class ParallelSyncTests(unittest.TestCase):
             self._active = 0
             self.max_active = 0
 
+        def require_current_administration_access(self):
+            return {"id": self.administration_id}
+
         def _versions(self):
             with self._lock:
                 self._active += 1

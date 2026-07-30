@@ -1,93 +1,71 @@
-# Reading a purchase-invoice PDF attachment
+# Reading purchase-invoice PDF attachments
 
-Status: **implemented.** The MCP tool is `read_document_attachment`
-(`moneybird/tools/purchases.py`): it downloads the attachment via
-`MoneybirdClient.download_attachment`, saves the file under the data dir
-(`attachments/`), and returns the PDF's text layer when `pypdf` is installed
-(the `moneybird-mcp[pdf]` extra). This note remains as the design record —
-why it exists, the API path, and what is deliberately left out (OCR).
+Status: **implemented for local and authenticated single-user deployments; refused
+in `hosted_request_only` mode.** The MCP tool is
+`read_document_attachment` in `moneybird/tools/purchases.py`. Install the optional
+parser with `moneybird-mcp[pdf]`.
 
-## Why it matters
+## Intended use
 
-`prepare_reconcile_purchase_invoice` reproduces a supplier's booking by scaling a
-reference invoice's lines to the target total. When the totals differ, the per-line
-split (e.g. stroom vs gas) is an **assumption** copied from the reference — it is
-flagged as a warning in the preview. The only way to remove that assumption is to
-read the numbers off the actual invoice PDF and pass them as `desired_lines`. The
-prepare tool validates every ledger/tax id, calculates the proposed inclusive total,
-and refuses to stage a change unless it matches the current invoice total to the cent.
-Automatic parsing/OCR remains deliberately out of scope for the server.
+`prepare_reconcile_purchase_invoice` can scale a reference invoice's line split to a
+new total, but that split is still an assumption. A user can instead inspect the text
+from the actual invoice, determine exact line amounts, and pass those values as
+`desired_lines`.
 
-## The API path (already available)
+Text extraction is evidence for the user or model to inspect. It does not infer
+ledger or tax choices, approve a change, or write to Moneybird. Any later mutation
+still goes through the normal prepare/execute path and its action-specific
+postcondition check.
 
-Every purchase invoice returned by `get_document("purchase_invoice", id)` carries
-an `attachments` array. Each entry looks like:
+## Current data path and limits
 
-```json
-{
-  "id": "492726866741823091",
-  "filename": "Termijnspecificatie - Notanummer 1168011272.pdf",
-  "content_type": "application/pdf",
-  "size": 73113
-}
-```
+The attachment metadata comes from the purchase invoice's `attachments` array. The
+binary endpoint is:
 
-The file bytes are served by (confirmed present in the OpenAPI spec, exposed as a
-generic GET in `docs/moneybird_api_coverage.md`):
-
-```
+```text
 GET /{administration_id}/documents/purchase_invoices/{document_id}/attachments/{attachment_id}/download
 ```
 
-`raw_get()` is **not** the right call here: it appends `.json` and JSON-decodes the
-body, whereas this endpoint returns raw binary. Fetch it directly with the client's
-token instead:
+The client deliberately handles binary responses separately from JSON API calls. It
+validates public HTTPS redirect targets, pins the validated DNS address through the
+TLS connection while retaining normal hostname verification, and does not forward
+the Moneybird bearer token to a signed storage host.
 
-```python
-import urllib.request
-from moneybird.client import get_client
+The implementation then:
 
-client = get_client()
-doc = client.get_document("purchase_invoice", "492726866733434481")
-attachment = doc["attachments"][0]                     # pick the PDF you want
+- enforces a 20 MiB limit using both declared size and streamed bytes;
+- validates the advertised content type and PDF magic bytes;
+- parses at most 100 pages;
+- parses in a disposable spawned worker process with a 10-second wall-clock
+  timeout and 256 MiB process-memory limit;
+- returns at most 40,000 text characters;
+- keeps the downloaded bytes and extracted text in memory and does not retain an
+  attachment file.
 
-url = (
-    f"{client.base_url}/{client.administration_id}"
-    f"/documents/purchase_invoices/{doc['id']}"
-    f"/attachments/{attachment['id']}/download"
-)
-request = urllib.request.Request(url)
-request.add_header("Authorization", f"Bearer {client.token}")
-with urllib.request.urlopen(request, timeout=client.timeout) as response:
-    pdf_bytes = response.read()                         # the raw PDF
-```
+If `pypdf` is not installed, the tool returns a clear missing-extra result. Scanned
+documents with no useful text layer are not OCRed.
 
-Caveat: Moneybird may answer this endpoint with a `302` redirect to a signed
-storage URL that does **not** accept the `Authorization` header. `urllib` follows
-redirects automatically; if a redirect ever 401s, re-request the `Location` URL
-*without* the bearer header.
+## Deployment boundary
 
-## How it is implemented
+Attachment download and parsing are disabled before client access in
+`hosted_request_only` mode. The local parser now has per-document process isolation,
+timeout, and memory containment. A hosted parser additionally needs durable job
+capacity, global/per-tenant concurrency and abuse controls, tenant-scoped
+observability, and an explicit retention policy before this surface can be enabled.
 
-1. `MoneybirdClient._binary_request` fetches the endpoint without JSON decoding,
-   refuses automatic redirects, and re-requests the signed `Location` URL
-   **without** the Authorization header (the bearer token must never reach the
-   storage host). `download_attachment(kind, document_id, attachment_id)` wraps it;
-   the path is checked against `docs/moneybird_api_paths.json` like every other
-   endpoint (`tests/test_client_spec_conformance.py` also scans `_binary_request`).
-2. Extraction is read-only and separate: `moneybird/attachments.py::extract_pdf_text`
-   reads the text layer with `pypdf` when installed and otherwise explains what is
-   missing. Results are surfaced for confirmation — never auto-written.
-3. Any resulting change goes through `prepare_reconcile_purchase_invoice`. Pass exact
-   attachment values through `desired_lines` together with `prices_are_incl_tax` and a
-   short `source_note`; the normal preview/approval flow, optimistic version check, and
-   post-write total/line verification still apply.
+For local or `network_single_user` use, parsing happens outside the server process.
+The parent terminates a worker that exceeds its deadline; Unix uses an address-space
+limit and Windows uses a process-memory-limited Job Object. Parser failures fail
+closed without returning partial text. Continue to treat untrusted PDFs as an input
+risk and keep `pypdf` patched.
 
-## What is deliberately left out
+Older versions wrote attachments under the data directory. The current tool does
+not use or automatically delete those legacy files; operators should review them
+under their own retention and deletion policy.
 
-- **OCR.** Scanned invoices without a text layer report a clear note instead;
-  OCR would add heavy dependencies and stays out of the server.
-- **An automatic write from parsed values.** Extracted amounts can feed
-  `prepare_reconcile_purchase_invoice(desired_lines=[...])`, but the tool never infers
-  ledger/tax choices or writes immediately: it requires exact ids, produces a preview,
-  and still needs the matching explicit approval call.
+## Deliberately out of scope
+
+- OCR and image-based extraction.
+- Automatic bookkeeping writes from parsed values.
+- Inferring ledger accounts, tax rates, or line-item semantics.
+- Hosted parsing without durable capacity, backpressure, abuse, and lifecycle controls.

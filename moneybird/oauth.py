@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -30,7 +31,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .config import DEFAULT_TIMEOUT_SECONDS, MoneybirdError, data_dir
+from .config import (
+    DEFAULT_TIMEOUT_SECONDS,
+    MoneybirdError,
+    data_dir,
+    harden_private_file,
+)
 
 OAUTH_AUTHORIZE_URL = "https://moneybird.com/oauth/authorize"
 OAUTH_TOKEN_URL = "https://moneybird.com/oauth/token"
@@ -138,15 +144,28 @@ def _token_request(form: dict[str, str]) -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
         raise MoneybirdError(
-            f"Moneybird token endpoint returned HTTP {exc.code}: {body[:500]}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise MoneybirdError(f"Could not reach the Moneybird token endpoint: {exc}") from exc
-    tokens = json.loads(payload)
-    if "access_token" not in tokens:
-        raise MoneybirdError(f"Token response contains no access_token: {tokens}")
+            f"Moneybird token exchange failed with HTTP {exc.code}. "
+            "The upstream response was withheld because it may contain credentials."
+        ) from None
+    except urllib.error.URLError:
+        raise MoneybirdError(
+            "Could not reach the Moneybird token endpoint."
+        ) from None
+    try:
+        tokens = json.loads(payload)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise MoneybirdError(
+            "Moneybird returned an invalid token response."
+        ) from None
+    if (
+        not isinstance(tokens, dict)
+        or not isinstance(tokens.get("access_token"), str)
+        or not tokens["access_token"].strip()
+    ):
+        raise MoneybirdError(
+            "Moneybird returned a token response without a valid access token."
+        )
     return tokens
 
 
@@ -187,6 +206,8 @@ def refresh_access_token(refresh_token: str) -> dict[str, Any]:
 
 # --- Token persistence -------------------------------------------------------
 
+_STORE_LOCK = threading.RLock()
+
 
 def oauth_tokens_path() -> Path:
     return data_dir() / "moneybird_oauth_tokens.json"
@@ -200,22 +221,32 @@ def _load_store() -> dict[str, dict[str, Any]]:
 
 
 def _save_store(store: dict[str, dict[str, Any]]) -> None:
-    oauth_tokens_path().write_text(
+    path = oauth_tokens_path()
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    temporary.write_text(
         json.dumps(store, indent=2, sort_keys=True), encoding="utf-8"
     )
+    try:
+        harden_private_file(temporary)
+        os.replace(temporary, path)
+        harden_private_file(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def store_tokens(tokens: dict[str, Any], *, profile: str = DEFAULT_PROFILE) -> None:
     """Persist a token response under ``profile``, stamping when it was obtained."""
     record = dict(tokens)
     record.setdefault("obtained_at", int(time.time()))
-    store = _load_store()
-    store[profile] = record
-    _save_store(store)
+    with _STORE_LOCK:
+        store = _load_store()
+        store[profile] = record
+        _save_store(store)
 
 
 def load_tokens(profile: str = DEFAULT_PROFILE) -> dict[str, Any] | None:
-    return _load_store().get(profile)
+    with _STORE_LOCK:
+        return _load_store().get(profile)
 
 
 def _is_expired(record: dict[str, Any]) -> bool:
@@ -232,16 +263,17 @@ def get_access_token(profile: str = DEFAULT_PROFILE) -> str | None:
     Returns ``None`` when no OAuth login has been performed for the profile, so
     callers can fall through to other credential sources.
     """
-    record = load_tokens(profile)
-    if not record:
-        return None
-    if _is_expired(record):
-        refresh_token = record.get("refresh_token")
-        if not refresh_token:
-            raise MoneybirdError(
-                f"The stored OAuth access token for profile {profile!r} has expired and "
-                "no refresh token is stored. Run scripts/oauth_login.py again."
-            )
-        record = refresh_access_token(refresh_token)
-        store_tokens(record, profile=profile)
-    return record["access_token"]
+    with _STORE_LOCK:
+        record = load_tokens(profile)
+        if not record:
+            return None
+        if _is_expired(record):
+            refresh_token = record.get("refresh_token")
+            if not refresh_token:
+                raise MoneybirdError(
+                    f"The stored OAuth access token for profile {profile!r} has expired and "
+                    "no refresh token is stored. Run scripts/oauth_login.py again."
+                )
+            record = refresh_access_token(refresh_token)
+            store_tokens(record, profile=profile)
+        return record["access_token"]

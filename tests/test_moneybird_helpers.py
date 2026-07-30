@@ -616,7 +616,7 @@ class ClientRetrySafetyTests(unittest.TestCase):
     def test_write_network_error_is_not_retried(self) -> None:
         import moneybird.client as client_module
 
-        client = client_module.MoneybirdClient("token", "admin")
+        client = client_module.MoneybirdClient("token", "123")
         pooled_client = mock.Mock()
         pooled_client.request.side_effect = client_module.httpx.ConnectError(
             "lost response"
@@ -627,35 +627,63 @@ class ClientRetrySafetyTests(unittest.TestCase):
             return_value=pooled_client,
         ):
             with self.assertRaises(server.MoneybirdError) as raised:
-                client._request("POST", "/admin/sales_invoices.json", body={"x": 1})
+                client._request("POST", "/123/sales_invoices.json", body={"x": 1})
         self.assertEqual(pooled_client.request.call_count, 1)
         self.assertIn("ambiguous", str(raised.exception))
 
     def test_bank_booking_link_translates_price_to_price_base(self) -> None:
         import moneybird.client as client_module
 
-        client = client_module.MoneybirdClient("token", "admin")
+        client = client_module.MoneybirdClient("token", "123")
         with mock.patch.object(
             client,
             "_request",
-            return_value={"id": "mutation-1"},
+            return_value={"id": "456"},
         ) as request:
             client.link_financial_mutation_booking(
-                "mutation-1",
+                "456",
                 {
                     "booking_type": "LedgerAccount",
-                    "booking_id": "ledger-1",
+                    "booking_id": "789",
                     "price": "-10.00",
                 },
             )
 
         request.assert_called_once_with(
             "PATCH",
-            "/admin/financial_mutations/mutation-1/link_booking.json",
+            "/123/financial_mutations/456/link_booking.json",
             body={
                 "booking_type": "LedgerAccount",
-                "booking_id": "ledger-1",
+                "booking_id": "789",
                 "price_base": "10.00",
+            },
+        )
+
+    def test_bank_invoice_link_keeps_price_in_invoice_currency(self) -> None:
+        import moneybird.client as client_module
+
+        client = client_module.MoneybirdClient("token", "123")
+        with mock.patch.object(
+            client,
+            "_request",
+            return_value={"id": "456"},
+        ) as request:
+            client.link_financial_mutation_booking(
+                "456",
+                {
+                    "booking_type": "SalesInvoice",
+                    "booking_id": "789",
+                    "price": "-10.00",
+                },
+            )
+
+        request.assert_called_once_with(
+            "PATCH",
+            "/123/financial_mutations/456/link_booking.json",
+            body={
+                "booking_type": "SalesInvoice",
+                "booking_id": "789",
+                "price": "10.00",
             },
         )
 
@@ -809,6 +837,9 @@ class BatchScheduleTests(unittest.TestCase):
 
         def fetch_sales_invoices_by_ids(self, ids):
             return [dict(self.invoice)]
+
+        def get_sales_invoice(self, invoice_id):
+            return dict(self.invoice)
 
         def list_sales_invoices(self, **kwargs):
             return []
@@ -983,6 +1014,7 @@ class LinkBankMutationTests(unittest.TestCase):
                 "state": "unprocessed",
                 "amount": "121.00",
                 "amount_open": "121.00",
+                "version": 1,
                 "payments": [],
                 "ledger_account_bookings": [],
             }
@@ -1137,6 +1169,7 @@ class ReclassifyBankMutationBookingsTests(unittest.TestCase):
                 }
             )
             self.mutation["amount_open"] = "0.00"
+            self.mutation["version"] += 1
             self.mutation["state"] = "processed"
             self.mutation["version"] += 1
             return copy.deepcopy(self.mutation)
@@ -1290,6 +1323,7 @@ class UnlinkBankMutationTests(unittest.TestCase):
                 "message": "Huur juni",
                 "state": "processed",
                 "amount": "-950.00",
+                "version": 1,
                 "payments": [],
                 "ledger_account_bookings": [
                     {"id": "book-1", "ledger_account_id": "la-9", "price": "-950.00", "description": "Huur"}
@@ -1302,6 +1336,7 @@ class UnlinkBankMutationTests(unittest.TestCase):
         def unlink_financial_mutation_booking(self, mutation_id, *, booking_type, booking_id):
             self.mutation["ledger_account_bookings"] = []
             self.mutation["state"] = "unprocessed"
+            self.mutation["version"] += 1
 
     def test_unlink_requires_existing_booking(self) -> None:
         from moneybird import tools
@@ -1345,18 +1380,31 @@ class CreditInvoiceTests(unittest.TestCase):
                 "invoice_date": "2026-06-01",
                 "contact": {"company_name": "Klant BV"},
                 "total_price_incl_tax": "100.00",
+                "currency": "EUR",
+                "contact_id": "contact-1",
+                "details": [],
             }
+            self.credit_invoice = None
 
         def get_sales_invoice(self, invoice_id):
-            return dict(self.invoice)
+            record = (
+                self.credit_invoice
+                if invoice_id == "inv-2"
+                else self.invoice
+            )
+            return dict(record)
 
         def duplicate_sales_invoice_to_credit_invoice(self, invoice_id):
-            return {
+            self.credit_invoice = {
                 "id": "inv-2",
                 "state": "draft",
                 "reference": "2026-0001",
                 "total_price_incl_tax": "-100.00",
+                "currency": "EUR",
+                "contact_id": "contact-1",
+                "details": [],
             }
+            return dict(self.credit_invoice)
 
     def test_credit_invoice_verifies_negated_total(self) -> None:
         from moneybird import tools
@@ -1373,19 +1421,19 @@ class ReportEndpointTests(unittest.TestCase):
     def test_aging_reports_use_period_until(self) -> None:
         import moneybird.client as client_module
 
-        client = client_module.MoneybirdClient("token", "admin")
+        client = client_module.MoneybirdClient("token", "123")
         with mock.patch.object(client, "_request", return_value={}) as request:
             client.get_report("debtors_aging", period="20260630")
         request.assert_called_once_with(
             "GET",
-            "/admin/reports/debtors_aging.json",
+            "/123/reports/debtors_aging.json",
             query={"period_until": "20260630"},
         )
 
     def test_pagination_rejected_for_unpaginated_report(self) -> None:
         import moneybird.client as client_module
 
-        client = client_module.MoneybirdClient("token", "admin")
+        client = client_module.MoneybirdClient("token", "123")
         with self.assertRaises(server.MoneybirdError):
             client.get_report("profit_loss", period="this_year", page=2)
 

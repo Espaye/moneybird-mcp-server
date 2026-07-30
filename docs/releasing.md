@@ -1,105 +1,158 @@
-# Releasing moneybird-mcp
+# Releasing `moneybird-mcp`
 
-Releases are **version-driven**: the version in `pyproject.toml` is the trigger.
-A commit landing on `main` that bumps it makes
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) test, build,
-publish to PyPI, tag the commit, and create the GitHub release. Pushes that don't
-change the version skip all of that, so main stays green.
+Releases are version-driven and fail closed. A commit on `main` whose version is not
+fully present on PyPI starts the release workflow. The workflow tests the source,
+publishes exact artifacts with Trusted Publishing, verifies those artifacts after
+download from PyPI, and creates or repairs the GitHub release from the verified PyPI
+files.
 
-The one thing that stays manual is the `.mcpb` bundle for Claude Desktop: it vendors
-its dependencies and is therefore platform-specific, so it is built on the dev
-machine and attached to the release afterwards.
+The platform-specific `.mcpb` bundle remains a separate local build and manual
+GitHub-release upload.
 
-> **The bump is the release.** PyPI versions are immutable — once `0.3.0` is up you
-> can yank it but never replace it. Treat the version bump as the point of no
-> return, and keep it in its own commit so it is easy to hold back. If you want an
-> explicit brake, add required reviewers to the `pypi` environment in the repo
-> settings; the publish job then waits for your approval.
+## 1. Prepare the version commit
 
-## 1. Version
+- Bump `version` in both `pyproject.toml` and `mcpb/manifest.json`.
+- Update `CHANGELOG.md`.
+- Keep the version bump on `main`; the workflow refuses other refs.
+- Check PyPI and existing `vX.Y.Z` tag/release state before pushing.
 
-- Bump `version` in **both** `pyproject.toml` and `mcpb/manifest.json`
-  (`tests/test_server_entry.py::PackagingVersionSyncTests` fails if they differ, and
-  the release workflow runs the suite before publishing, so a mismatch cannot ship).
-- Use semver-ish judgement: new tools or packaging changes → minor bump;
-  fixes only → patch.
-- Check what is already published — the workflow compares against PyPI and simply
-  does nothing if the version exists: `pip index versions moneybird-mcp` or
-  <https://pypi.org/project/moneybird-mcp/#history>.
+PyPI versions are immutable. Do not reuse a published version or assume a partially
+published version can be repaired by uploading a replacement file.
 
-## 2. Verify
+## 2. Verify locally
 
-```
-python -m pytest -q                 # full suite must pass
-python scripts/healthcheck_readonly.py   # optional live read-only sanity sweep
-```
-
-## 3. Build (local check)
-
-The workflow builds and publishes the wheel/sdist itself, so this step is just a
-local dry run before you push the bump — plus the `.mcpb`, which only happens here:
-
-```
-python -m build                     # dist/moneybird_mcp-X.Y.Z-py3-none-any.whl + .tar.gz
+```text
+python -m pytest -q
+python -m pip install -c requirements-minimum.txt -r requirements.txt pytest
+python -m pytest -q
+python scripts/assert_release_version.py X.Y.Z
+python -m pip install build twine cyclonedx-bom==7.3.1
+python scripts/check_reproducible_build.py --output-dir dist
 python -m twine check dist/moneybird_mcp-X.Y.Z*
-python scripts/check_dist_hygiene.py     # no .env / tokens / sqlite state / audit logs
-python scripts/build_mcpb.py        # dist/moneybird-mcp-X.Y.Z-<platform>.mcpb
+python scripts/check_dist_hygiene.py
+python scripts/smoke_dist_install.py --expected-version X.Y.Z
+python scripts/build_sbom.py --expected-version X.Y.Z
 ```
 
-The `.mcpb` **is** still a manual build: it is platform-specific (dependencies are
-vendored into it), so build it on the platform you're shipping for. The wheel/sdist
-are pure Python and universal.
+`scripts/check_dist_hygiene.py` expects exactly one wheel and one sdist in `dist/`.
+Use a clean build directory so an older artifact cannot be selected accidentally.
+The smoke test installs the built distributions into clean environments, checks
+imports and version metadata, and invokes the CLI help path. It does not exercise
+live Moneybird credentials.
 
-`twine check` must PASS for both artifacts, and `check_dist_hygiene.py` must exit 0
-— it asserts the wheel holds nothing but the `moneybird` package and that neither
-artifact carries a `.env`, OAuth tokens, the approvals DB, a sync cache, or an
-audit log. Note it wants exactly one wheel and one sdist in `dist/`, so clear out
-stale versions first.
+An optional live read-only check is:
 
-## 4. Publish: push the bump to main
-
+```text
+python scripts/healthcheck_readonly.py
 ```
+
+## 3. Push the bump to `main`
+
+```text
 git push origin main
 ```
 
-That's it. The workflow then, in order:
+Repository-wide release concurrency prevents two release state machines from running
+at once. The workflow then:
 
-1. **check** — reads `pyproject.toml` and asks PyPI which versions exist. Version
-   already published → the rest is skipped and the run ends green.
-2. **build** — installs deps, runs `pytest -q`, `python -m build`, `twine check`,
-   and `scripts/check_dist_hygiene.py`. Any failure here stops the release.
-3. **publish-pypi** — uploads via Trusted Publishing in the `pypi` environment.
-4. **tag-and-release** — creates tag `vX.Y.Z` at that commit and a GitHub release
-   with the wheel + sdist attached.
+1. asserts the source and manifest versions match;
+2. inspects PyPI for the exact version and requires either no artifacts or exactly
+   one non-yanked wheel plus one non-yanked sdist;
+3. inspects any existing tag and GitHub release;
+4. requires an existing tag to peel to a commit on `main`;
+5. runs the full test matrix, lowest-supported-direct-dependency lane, and
+   dependency audit;
+6. builds one wheel and one sdist twice from fixed inputs and requires identical
+   SHA-256 digests, then checks metadata/hygiene, smoke-tests the candidate, and
+   generates a reproducible CycloneDX SBOM;
+7. tests the exact wheel artifact across the supported Python matrix;
+8. creates or verifies `vX.Y.Z` at the tested source SHA;
+9. publishes through the `pypi` environment using OIDC Trusted Publishing and
+   uploads PEP 740 attestations for both distributions;
+10. re-verifies the tag inside the publish job immediately after any environment
+    approval and before upload; after publication it verifies the tag again,
+    downloads the exact version back from PyPI, compares its filenames and SHA-256
+    digests with the tested candidate when one was built, cryptographically verifies
+    each artifact's PyPI provenance against this GitHub repository, checks hygiene,
+    and clean-installs both published artifacts;
+11. re-verifies the tag immediately before release mutation, creates or repairs the
+    GitHub release from those re-downloaded PyPI artifacts plus an SBOM regenerated
+    from the exact published wheel, removes stale package/SBOM assets, clears
+    draft/prerelease state, and finally checks the exact filenames and SHA-256
+    digests again.
 
-Publishing happens under the pseudonymous identity — no real name anywhere in
-package metadata (`authors` in `pyproject.toml` is the source of truth).
+The tag is checked again after creation. A release cannot silently tag a different
+commit from the source that produced the tested artifacts within that workflow run.
+These YAML checks—including final tag and release-asset verification—are defense in
+depth; repository settings must prevent later tag movement and restrict who can
+approve publication.
 
-Watch a run with `gh run watch` or `gh run list --workflow=release.yml`.
+## Recovery rules
 
-### One-time setup on pypi.org — already configured
+- **Exactly one valid wheel and one valid sdist already exist on PyPI:** publishing
+  is skipped, but published-artifact verification and GitHub-release repair still
+  run.
+- **Only one artifact exists, an artifact is yanked, or the file set is
+  unexpected:** the workflow fails. Never rebuild an already published version.
+  Repair a missing file only from the exact original tested workflow artifact under
+  an explicit recovery procedure; if that artifact is unavailable, investigate and
+  choose a new version. Do not construct a hybrid release.
+- **A tag exists at a different SHA than the current trigger:** do not move it.
+  Resume or rerun the original failed workflow for the tagged source.
+- **PyPI is complete but the GitHub release is absent or incomplete:** rerun the
+  workflow. It rebuilds the package-asset set from verified PyPI downloads and
+  regenerates the SBOM from the exact published wheel, then deletes differently
+  named stale wheel/sdist/SBOM assets.
+- **A historical tag predates the current verification helpers:** recovery uses
+  helpers from the guarded workflow commit while package bytes still come only from
+  the original candidate or PyPI. If that helper provenance cannot be reproduced
+  and reviewed, stop and perform an explicit manual recovery; never substitute a
+  rebuild of the historical package source.
+- **A pre-publish job fails:** fix the cause and rerun before any immutable upload.
 
-Trusted Publishing means there is no PyPI API token stored in the repo; PyPI mints
-a short-lived token from the workflow's OIDC identity. This publisher was added on
-2026-07-29 under *Manage project → Publishing → Add a new publisher* (GitHub):
+Do not use a manual `twine upload` as the normal fallback. It bypasses the workflow's
+source, artifact, and recovery checks.
+
+## Trusted Publishing
+
+The PyPI publisher must match:
 
 | Field | Value |
 | --- | --- |
 | Owner | `Espaye` |
 | Repository | `moneybird-mcp-server` |
-| Workflow name | `release.yml` |
+| Workflow | `release.yml` |
 | Environment | `pypi` |
 
-All four must match or PyPI rejects the upload. Falling back to a manual upload
-(`python -m twine upload dist/moneybird_mcp-X.Y.Z*` with username `__token__`)
-still works if the workflow is unavailable.
+Production release readiness requires both:
 
-## 5. After publishing
+- a `pypi` environment deployment-branch policy restricted to `main`, with at least
+  one required reviewer who is independent of the triggering workflow; and
+- a repository ruleset protecting `v*` tags from creation, update, or deletion
+  outside the intended release authority.
 
-- Smoke-test the published artifact in a clean environment:
-  `pipx run moneybird-mcp --help` (or `uvx moneybird-mcp`) — it should start the
-  stdio server and complain only about missing credentials.
-- Attach the locally built `.mcpb` to the GitHub release the workflow created, for
-  Desktop users (only useful once the repo is public):
-  `gh release upload vX.Y.Z dist/moneybird-mcp-X.Y.Z-<platform>.mcpb`.
-- Update the README install instructions if the install story changed.
+As of 2026-07-30, those environment and tag protections were not configured. The
+workflow's ref/source/tag checks reduce accidental release drift
+but cannot make an unprotected GitHub tag immutable or add an external publication
+approval. Configure and verify both controls before treating the release path as
+production-ready.
+
+No long-lived PyPI API token is needed in the repository.
+
+The separate `security.yml` workflow runs CodeQL on pushes, pull requests, and a
+weekly schedule, plus a weekly full-history Gitleaks scan. All third-party Actions
+are pinned to commit SHAs. Treat those workflow results, the dependency audit,
+minimum-version lane, reproducibility check, SBOM, and provenance verification as
+release signals; do not waive them by publishing manually.
+
+## `.mcpb` bundle
+
+Build the bundle on each platform being shipped:
+
+```text
+python scripts/build_mcpb.py
+```
+
+After the automated release is complete, upload that platform's bundle to the
+matching GitHub release. The gateway demo is intentionally not included in the
+wheel, sdist, or `.mcpb`.

@@ -16,7 +16,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .config import data_dir
+from .config import data_dir, harden_private_file
 
 FTS_INDEX_BASENAME = ".moneybird_search_fts"
 
@@ -37,7 +37,9 @@ def fts_index_path(administration_id: str | None) -> Path:
 
 def _connect(administration_id: str | None) -> sqlite3.Connection | None:
     """A connection with the schema in place, or None when FTS5 is unavailable."""
-    connection = sqlite3.connect(fts_index_path(administration_id))
+    path = fts_index_path(administration_id)
+    connection = sqlite3.connect(path)
+    harden_private_file(path)
     try:
         connection.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS records USING fts5("

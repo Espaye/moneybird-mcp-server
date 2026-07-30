@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from .config import MoneybirdError, data_dir
+from .config import MoneybirdError, data_dir, harden_private_file
 from .client import MoneybirdClient
 from .formatting import (
     chunked,
@@ -132,11 +132,13 @@ def save_sync_index(index: dict[str, Any], administration_id: str | None = None)
     )
     temporary_path = Path(temporary_name)
     try:
+        harden_private_file(temporary_path)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(serialized)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)
+        harden_private_file(path)
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
@@ -303,6 +305,18 @@ def sync_search_index_data(
     financial_mutation_filter: str = "period:this_year",
     force_full: bool = False,
 ) -> dict[str, Any]:
+    from .credentials import (
+        CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+        get_credential_mode,
+    )
+
+    if get_credential_mode() == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
+        raise MoneybirdError(
+            "Durable search caches are disabled in hosted_request_only mode until "
+            "cache artifacts can be bound to an authenticated principal and grant."
+        )
+    # Revalidate the current token before any existing JSON cache is opened.
+    client.require_current_administration_access()
     with _sync_lock(client.administration_id):
         return _sync_search_index_data_locked(
             client,
@@ -388,5 +402,5 @@ def _sync_search_index_data_locked(
         "invoice_filter": invoice_filter,
         "document_filter": document_filter,
         "financial_mutation_filter": financial_mutation_filter,
-        "path": str(sync_index_path(client.administration_id).resolve()),
+        "cache": sync_index_path(client.administration_id).name,
     }

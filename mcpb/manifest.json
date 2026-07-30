@@ -3,8 +3,8 @@
   "name": "moneybird-mcp",
   "display_name": "Moneybird",
   "version": "0.3.0",
-  "description": "Chat with your Moneybird bookkeeping: invoices, contacts, bank mutations and reports — changes only after a preview you approve.",
-  "long_description": "Connects Claude to your Moneybird administration. Read invoices, purchase documents, contacts, bank mutations and financial reports; create or change things only through a strict preview-and-approve flow (nothing is ever written without your explicit 'yes', and totals are verified after every change). Includes Dutch bookkeeping prompts such as 'koppel_banktransacties' and 'verwerk_achterstand'.",
+  "description": "Read your Moneybird bookkeeping with Claude; optional experimental writes require an explicit local capability setting and supervised previews.",
+  "long_description": "Connects Claude locally to your Moneybird administration. Read invoices, purchase documents, contacts, bank mutations and financial reports. The extension defaults to read-only. Setting capability mode to write_enabled exposes experimental prepare-and-execute bookkeeping tools; review every preview and verify the action-specific result. An approval ID binds a prepared payload but is not independent proof of human confirmation. Includes Dutch bookkeeping prompts such as 'koppel_banktransacties' and 'verwerk_achterstand'.",
   "author": {
     "name": "Espaye"
   },
@@ -19,7 +19,9 @@
       "env": {
         "MONEYBIRD_ACCESS_TOKEN": "${user_config.access_token}",
         "MONEYBIRD_ADMINISTRATION_ID": "${user_config.administration_id}",
-        "MONEYBIRD_MCP_DATA_DIR": "${user_config.data_dir}"
+        "MONEYBIRD_MCP_DATA_DIR": "${user_config.data_dir}",
+        "MONEYBIRD_CREDENTIAL_MODE": "local",
+        "MONEYBIRD_CAPABILITY_MODE": "${user_config.capability_mode}"
       },
       "platform_overrides": {
         "darwin": { "command": "python3" },
@@ -48,6 +50,13 @@
       "description": "Where the search index, approvals and audit log are stored on your computer.",
       "required": false,
       "default": "${HOME}/.moneybird-mcp"
+    },
+    "capability_mode": {
+      "type": "string",
+      "title": "Capability mode",
+      "description": "Safe default: read_only. Enter write_enabled only to expose experimental supervised write tools. Review each preview; this switch and an approval ID do not independently prove human confirmation.",
+      "required": true,
+      "default": "read_only"
     }
   },
   "compatibility": {

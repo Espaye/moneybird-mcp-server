@@ -17,11 +17,20 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .credentials import (
+    CREDENTIAL_MODE_ENV,
+    CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+    CREDENTIAL_MODE_LOCAL,
+    CREDENTIAL_MODE_NETWORK_SINGLE_USER,
+    CREDENTIAL_MODES,
+)
+
 logger = logging.getLogger("moneybird_mcp")
 
 TRANSPORTS = ("stdio", "http", "sse")
 TOOL_DISCOVERY_MODES = ("full", "search")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+TRUSTED_TLS_PROXY_ENV = "MCP_TRUSTED_TLS_PROXY"
 
 
 @dataclass(frozen=True)
@@ -31,6 +40,7 @@ class ServerConfig:
     port: int
     auth_token: str
     tool_discovery: str
+    credential_mode: str
 
 
 def build_config(
@@ -40,18 +50,18 @@ def build_config(
 ) -> ServerConfig:
     """Resolve transport/host/port from CLI flags, then env, then the default.
 
-    Raises SystemExit for configurations that must never start: an unknown
-    transport, or a network transport bound beyond loopback without
-    MCP_AUTH_TOKEN.
+    Raises SystemExit for configurations that must never start, including a
+    network credential mode without edge authentication.
     """
     parser = argparse.ArgumentParser(
         prog="moneybird-mcp",
         description=(
             "Moneybird MCP server. Default transport is stdio (for local MCP "
             "clients); use --transport http for a network deployment. "
-            "Credentials come from MONEYBIRD_ACCESS_TOKEN / "
-            "MONEYBIRD_ADMINISTRATION_ID (or a .env file, or the OAuth token "
-            "store)."
+            "Local and single-user credentials come from "
+            "MONEYBIRD_ACCESS_TOKEN / MONEYBIRD_ADMINISTRATION_ID (or a .env "
+            "file, or the OAuth token store); hosted request-only mode requires "
+            "gateway-injected credentials."
         ),
     )
     parser.add_argument(
@@ -69,6 +79,17 @@ def build_config(
             "search (default: expose compact search_tools/call_tool discovery) "
             "or full (expose every Moneybird tool up front). Overrides "
             "MCP_TOOL_DISCOVERY."
+        ),
+    )
+    parser.add_argument(
+        "--credential-mode",
+        choices=CREDENTIAL_MODES,
+        default=None,
+        help=(
+            "local (stdio only), network_single_user (authenticated network "
+            "server using one env/OAuth identity), or hosted_request_only "
+            "(authenticated network server requiring request credentials). "
+            f"Overrides {CREDENTIAL_MODE_ENV}."
         ),
     )
     parser.add_argument(
@@ -109,13 +130,64 @@ def build_config(
         )
         raise SystemExit(1)
 
-    # stdio is inherently local (the client owns both pipe ends); the loopback
-    # rule only guards network transports.
-    if transport != "stdio" and not auth_token and host not in LOOPBACK_HOSTS:
+    credential_mode = (
+        args.credential_mode
+        or os.environ.get(CREDENTIAL_MODE_ENV, "").strip().lower()
+        or (
+            CREDENTIAL_MODE_LOCAL
+            if transport == "stdio"
+            else CREDENTIAL_MODE_NETWORK_SINGLE_USER
+        )
+    )
+    if credential_mode not in CREDENTIAL_MODES:
         logger.error(
-            "Refusing to start: host=%s is non-loopback but MCP_AUTH_TOKEN is unset. "
-            "Set MCP_AUTH_TOKEN to allow non-loopback binding.",
+            "%s must be one of %s, not %r.",
+            CREDENTIAL_MODE_ENV,
+            CREDENTIAL_MODES,
+            credential_mode,
+        )
+        raise SystemExit(1)
+
+    if transport == "stdio" and credential_mode != CREDENTIAL_MODE_LOCAL:
+        logger.error(
+            "Refusing to start: stdio requires credential mode %r, not %r.",
+            CREDENTIAL_MODE_LOCAL,
+            credential_mode,
+        )
+        raise SystemExit(1)
+
+    if transport != "stdio" and credential_mode == CREDENTIAL_MODE_LOCAL:
+        logger.error(
+            "Refusing to start: credential mode %r is stdio-only. Use %r for "
+            "a single-user network server or %r behind a trusted gateway.",
+            CREDENTIAL_MODE_LOCAL,
+            CREDENTIAL_MODE_NETWORK_SINGLE_USER,
+            CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+        )
+        raise SystemExit(1)
+
+    # Network modes must authenticate the edge before credential resolution.
+    # This applies on loopback too: otherwise a request could reach process-wide
+    # credentials without proving it belongs to the configured caller.
+    if transport != "stdio" and not auth_token:
+        logger.error(
+            "Refusing to start: %s mode requires MCP_AUTH_TOKEN so the network "
+            "edge authenticates before Moneybird credentials are selected.",
+            credential_mode,
+        )
+        raise SystemExit(1)
+
+    if (
+        transport != "stdio"
+        and host not in LOOPBACK_HOSTS
+        and os.environ.get(TRUSTED_TLS_PROXY_ENV, "").strip().lower() != "true"
+    ):
+        logger.error(
+            "Refusing to bind a plaintext network listener to %r. Terminate TLS "
+            "at a trusted reverse proxy and set %s=true only when that boundary "
+            "is actually in place.",
             host,
+            TRUSTED_TLS_PROXY_ENV,
         )
         raise SystemExit(1)
 
@@ -125,6 +197,7 @@ def build_config(
         port=port,
         auth_token=auth_token,
         tool_discovery=tool_discovery,
+        credential_mode=credential_mode,
     )
 
 
@@ -132,6 +205,7 @@ def main(argv: list[str] | None = None, *, default_transport: str = "stdio") -> 
     logging.basicConfig(level=logging.INFO)  # stderr; stdout stays protocol-clean
     config = build_config(argv, default_transport=default_transport)
     os.environ["MONEYBIRD_TOOL_DISCOVERY"] = config.tool_discovery
+    os.environ[CREDENTIAL_MODE_ENV] = config.credential_mode
 
     # Importing the tools package registers all tools + prompts on the mcp
     # instance; deferred past arg parsing so --help stays instant.
@@ -150,20 +224,21 @@ def main(argv: list[str] | None = None, *, default_transport: str = "stdio") -> 
     from starlette.middleware import Middleware
 
     from .auth import SharedSecretAuthMiddleware
+    from .credentials import CredentialModeMiddleware
 
-    middleware = []
-    if config.auth_token:
-        middleware.append(Middleware(SharedSecretAuthMiddleware, token=config.auth_token))
-        logger.info("Shared-secret auth ENABLED on the MCP endpoint.")
-    else:
-        logger.warning(
-            "MCP_AUTH_TOKEN is not set: the MCP endpoint has NO authentication. "
-            "This is only safe because host=%s. Set MCP_AUTH_TOKEN before exposing "
-            "the server beyond loopback.",
-            config.host,
-        )
+    # Middleware order is significant: Starlette treats the first item as the
+    # outer layer, so shared-secret authentication runs before any credential
+    # mode policy or process-local fallback.
+    middleware = [
+        Middleware(SharedSecretAuthMiddleware, token=config.auth_token),
+        Middleware(CredentialModeMiddleware, mode=config.credential_mode),
+    ]
+    logger.info(
+        "Shared-secret auth ENABLED; credential mode is %s.",
+        config.credential_mode,
+    )
 
-    app = mcp.http_app(transport=config.transport, middleware=middleware or None)
+    app = mcp.http_app(transport=config.transport, middleware=middleware)
     endpoint = "/sse" if config.transport == "sse" else "/mcp"
     logger.info(
         "Starting Moneybird MCP server on %s:%s (%s at %s)",

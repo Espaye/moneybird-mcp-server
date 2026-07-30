@@ -1,11 +1,15 @@
 """Tests for the Moneybird OAuth flow and the credential fallback chain."""
 from __future__ import annotations
 
+import io
+import json
 import os
 import tempfile
 import time
 import unittest
+import urllib.error
 import urllib.parse
+import urllib.request
 from unittest import mock
 
 os.environ.setdefault(
@@ -102,6 +106,50 @@ class TokenRequestTests(unittest.TestCase):
         form = request.call_args.args[0]
         self.assertEqual(form["grant_type"], "refresh_token")
         self.assertEqual(form["refresh_token"], "rt")
+
+    def test_token_endpoint_error_never_exposes_response_credentials(self) -> None:
+        upstream = urllib.error.HTTPError(
+            oauth.OAUTH_TOKEN_URL,
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(b'{"refresh_token":"do-not-render"}'),
+        )
+        with mock.patch.object(
+            urllib.request,
+            "urlopen",
+            side_effect=upstream,
+        ):
+            with self.assertRaises(MoneybirdError) as caught:
+                oauth._token_request({"grant_type": "authorization_code"})
+        message = str(caught.exception)
+        self.assertIn("HTTP 400", message)
+        self.assertNotIn("do-not-render", message)
+
+    def test_token_response_requires_nonblank_string_access_token(self) -> None:
+        invalid_payloads = [
+            None,
+            [],
+            "access_token",
+            {"access_token": ""},
+            {"access_token": " \n"},
+            {"access_token": 123},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                response = mock.MagicMock()
+                response.__enter__.return_value = response
+                response.read.return_value = json.dumps(payload).encode("utf-8")
+                with mock.patch.object(
+                    urllib.request,
+                    "urlopen",
+                    return_value=response,
+                ):
+                    with self.assertRaisesRegex(
+                        MoneybirdError,
+                        "valid access token",
+                    ):
+                        oauth._token_request({"grant_type": "authorization_code"})
 
 
 class TokenStoreTests(unittest.TestCase):

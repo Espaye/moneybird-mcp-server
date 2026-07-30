@@ -1,0 +1,55 @@
+# Contributing
+
+Thank you for helping improve Moneybird MCP.
+
+## Development setup
+
+Use Python 3.11 or newer in a fresh virtual environment:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pytest -q
+python -m pip install -c requirements-minimum.txt -r requirements.txt pytest
+python -m pytest -q
+```
+
+No real Moneybird credential is needed for the test suite. Keep `.env`, OAuth stores,
+approvals, audit logs, sync indexes, FTS databases, and downloaded attachments out of commits
+and test fixtures.
+
+## Change expectations
+
+1. Open a focused issue or pull request with the user-visible behavior and risk.
+2. Add deterministic tests, including negative/adversarial cases.
+3. Preserve tenant and administration confinement at every boundary.
+4. For writes, define the action precondition, immutable preview/payload representation,
+   verifier, idempotency key, partial-failure behavior, and ambiguous-result reconciliation.
+5. Run the full suite and distribution-hygiene check.
+6. Update README, threat/data documentation, and changelog when behavior or durable state
+   changes.
+
+## Financial-safety invariants
+
+A prompt is never sufficient enforcement. Changes must not:
+
+- permit a model to manufacture trusted human confirmation;
+- allow one approval or semantic idempotency key to reach Moneybird twice concurrently;
+- record failed, partial, unverified, or ambiguous work as verified success;
+- retry a write after dispatch may have started without reconciliation;
+- use caller-controlled paths, administration IDs, cache ownership, or telemetry labels;
+- fall back to operator credentials in a hosted request;
+- expose secrets or bookkeeping content in logs, URLs, fixtures, or packages.
+
+Use `apply_patch`-sized, reviewable migrations. A migration that has observed new writes must
+roll forward or enter read-only reconciliation mode; it must not restore legacy write state.
+
+## Pull-request checklist
+
+- [ ] Focused tests pass.
+- [ ] Full `python -m pytest -q` passes.
+- [ ] Minimum-dependency tests pass when dependency bounds or used APIs change.
+- [ ] `scripts/check_reproducible_build.py` passes for release/build changes.
+- [ ] New dependency is direct, bounded, and justified.
+- [ ] No credential or local state was added.
+- [ ] Migration and rollback behavior are documented.
+- [ ] Security claims are no stronger than mechanical enforcement.

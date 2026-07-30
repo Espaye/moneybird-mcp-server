@@ -1,11 +1,11 @@
 [build-system]
-requires = ["hatchling>=1.26"]
+requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "moneybird-mcp"
 version = "0.3.0"
-description = "MCP server for Moneybird bookkeeping: read your administration, and make changes only through preview-and-approve flows."
+description = "Read-first MCP server for Moneybird bookkeeping, with experimental supervised writes behind an explicit capability policy."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -26,14 +26,15 @@ classifiers = [
 # Keep in sync with requirements.txt (which stays for the git-clone workflow).
 dependencies = [
     "fastmcp>=3.4,<4",
-    "httpx>=0.28,<1",
-    "uvicorn>=0.30",
+    "pydantic>=2.11.7,<3",
+    "httpx>=0.28.1,<1",
+    "uvicorn>=0.35",
     "chardet>=5,<6",
 ]
 
 [project.optional-dependencies]
-# PDF text-layer extraction for read_document_attachment; without it the tool
-# still downloads and saves the file but cannot return the text.
+# PDF text-layer extraction for read_document_attachment. Without it the local tool
+# reports the missing extra; attachment parsing is disabled in hosted request mode.
 pdf = ["pypdf>=5"]
 
 [project.urls]
@@ -57,6 +58,10 @@ include = [
     "mcpb",
     "README.md",
     "CLAUDE.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "SUPPORT.md",
+    "CHANGELOG.md",
     ".env.example",
 ]
 exclude = ["**/__pycache__"]

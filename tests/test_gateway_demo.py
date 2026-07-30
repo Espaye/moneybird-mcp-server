@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
+import types
 import unittest
 import urllib.parse
 from unittest import mock
@@ -17,6 +19,10 @@ from starlette.testclient import TestClient
 
 from gateway import app as gateway_app
 from moneybird import oauth
+from moneybird.credentials import (
+    CREDENTIAL_MODE_ENV,
+    CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+)
 
 FAKE_APP_ENV = {
     "MONEYBIRD_OAUTH_CLIENT_ID": "client-id-123",
@@ -161,6 +167,32 @@ class GatewayDemoTests(unittest.TestCase):
         # The Moneybird token itself must not sit in the user-mapping file.
         with open(users_file, encoding="utf-8") as handle:
             self.assertNotIn("moneybird-token-xyz", handle.read())
+
+    def test_gateway_forces_hosted_request_only_credentials(self) -> None:
+        os.environ[CREDENTIAL_MODE_ENV] = "local"
+        gateway_app.build_gateway_app(mcp_app=EchoMcpApp())
+        self.assertEqual(
+            os.environ[CREDENTIAL_MODE_ENV],
+            CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+        )
+
+    def test_default_construction_mounts_mcp_app_and_forces_safe_mode(self) -> None:
+        fake_mcp = mock.Mock()
+        mounted_app = EchoMcpApp()
+        fake_mcp.http_app.return_value = mounted_app
+        fake_tools = types.ModuleType("moneybird.tools")
+        fake_tools.mcp = fake_mcp
+        os.environ[CREDENTIAL_MODE_ENV] = "local"
+
+        with mock.patch.dict(sys.modules, {"moneybird.tools": fake_tools}):
+            built = gateway_app.build_gateway_app()
+
+        fake_mcp.http_app.assert_called_once_with(transport="http")
+        self.assertIs(built.mcp_app, mounted_app)
+        self.assertEqual(
+            os.environ[CREDENTIAL_MODE_ENV],
+            CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+        )
 
 
 if __name__ == "__main__":

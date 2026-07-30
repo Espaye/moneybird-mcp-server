@@ -6,25 +6,31 @@ setup each time**. Read this before doing live Moneybird work.
 
 ## What this is
 
-A Moneybird MCP server (FastMCP). The MCP tools in `moneybird/tools.py` are the surface
+A Moneybird MCP server (FastMCP). The MCP tools in `moneybird/tools/` are the surface
 a chat model normally calls. When you work *in this repo* those tools are usually **not**
 wired up as live MCP tools, so to actually touch the administration you run small Python
 scripts that import the package directly (see below).
 
 ## Credentials — already handled, don't hand-roll it
 
-- Credentials live in `.env` at the repo root: `MONEYBIRD_ACCESS_TOKEN` and
-  `MONEYBIRD_ADMINISTRATION_ID` (also `MCP_HOST` / `MCP_PORT`).
+- Local/single-user credentials live in `.env` at the repo root:
+  `MONEYBIRD_ACCESS_TOKEN` and `MONEYBIRD_ADMINISTRATION_ID`.
 - `moneybird/config.py` calls `load_local_env()` **on import**, which loads that `.env`
   into the environment. As of the cwd-independent fix it looks in the current directory
   *and* next to the package, so **just `import moneybird...` and credentials are present**
   — regardless of where you run Python from. Do not parse `.env` yourself.
-- Real env vars always win (`setdefault`), so per-request headers / CI secrets are safe.
+- Real env vars always win (`setdefault`). Credential resolution then follows the explicit
+  deployment mode:
+  - `local` (stdio only): request context → env → local OAuth profile;
+  - `network_single_user`: authenticated network edge → env → local OAuth profile; request
+    Moneybird headers are rejected;
+  - `hosted_request_only`: one nonblank trusted request context; no env/OAuth fallback.
 - **OAuth**: `moneybird/oauth.py` implements the authorization-code flow (app credentials in
   `.env` as `MONEYBIRD_OAUTH_CLIENT_ID`/`MONEYBIRD_OAUTH_CLIENT_SECRET`; interactive login via
   `python scripts/oauth_login.py`, out-of-band redirect). Tokens persist in
-  `moneybird_oauth_tokens.json` in the data dir and are used automatically when
-  `MONEYBIRD_ACCESS_TOKEN` is absent (resolution order: request header → env → OAuth store).
+  `moneybird_oauth_tokens.json` in the data dir and are used automatically in local or
+  network-single-user mode when `MONEYBIRD_ACCESS_TOKEN` is absent. Hosted request mode never
+  reads that store.
 
 ## Running a one-off live query or fix
 
@@ -50,12 +56,17 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
 
 ## Write safety (HARD RULES — same as the server instructions)
 
-1. **Never write without explicit user confirmation.** Workflow: read → show an exact
-   preview (ids, before→after values) → wait for a clear "yes" → only then write.
-2. Never invent data (amounts, references, dates, ledger/tax ids). Ask or leave blank.
-3. **After any change, verify the document total is unchanged to the cent** and say so.
-   Re-fetch the record and compare `total_price_incl_tax` before vs after.
-4. Writes go through `update_document` / `update_sales_invoice` with
+1. **The supported default is mechanically read-only.** MCP write execution requires
+   `MONEYBIRD_CAPABILITY_MODE=write_enabled`, and hosted request mode refuses all writes
+   regardless of that environment value.
+2. **Never write without explicit user confirmation.** For a deliberately enabled local or
+   authenticated single-user run: read → show an exact preview → wait for a clear "yes" → only
+   then execute. The approval ID is model-visible and does not independently prove that "yes";
+   this is an operator rule unless the MCP client supplies a trusted confirmation UI.
+3. Never invent data (amounts, references, dates, ledger/tax ids). Ask or leave blank.
+4. Apply the action-specific verifier. For a reclassification or incl/excl conversion, verify
+   the document total is unchanged to the cent; other writes have different invariants.
+5. Writes go through `update_document` / `update_sales_invoice` with
    `details_attributes`. To edit an existing line, include its detail `id` plus only the
    fields you change — Moneybird keeps the rest (description, ledger, tax).
 
@@ -152,7 +163,11 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
 - `MoneybirdTaskContext` cachet referentiedata binnen één tool-invocation en haalt bekende
   document-, factuur- en mutatie-id's in groepen van maximaal 100 via de sync-endpoints. Cache
   nooit tussen taken/tenants. De bankbatch gebruikt hierdoor voor `N <= 100` ongeveer `5 + 2N`
-  API-calls voor prepare+execute in plaats van `2 + 6N`, inclusief onafhankelijke eindverificatie.
+  API-calls voor prepare+execute in plaats van `2 + 6N`, inclusief een aparte eindverificatie.
+- Duurzame JSON/FTS-sync is alleen beschikbaar in local/network-single-user mode. Hosted request
+  mode gebruikt uitsluitend de gedeeltelijke live zoekfallback en weigert `sync_search_index`.
+  `read_document_attachment` is daar eveneens uitgeschakeld totdat PDF-werk in een apart
+  begrensd proces draait.
 - De zes sync-feeds lopen begrensd parallel (maximaal drie workers), met een lock per
   administratie en atomaire JSON-save. `updated_at` is de freshness-tijd; alleen
   `content_updated_at` triggert een FTS-rebuild. Een live no-change sync daalde van 4,21 s naar
@@ -160,8 +175,9 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
 - `ToolTelemetryMiddleware` en de HTTP-client verzamelen begrensde, in-memory
   latency/call-count/retry-statistieken. `get_server_status` leest die lokaal. Telemetrie bevat
   geen tokens, queryparameters, bodies of responses; numerieke record-id's worden uit
-  endpointnamen verwijderd. Metrics zijn gescheiden op een niet-terugrekenbare
-  credential-scope, zodat tenants elkaars recente toolactiviteit niet zien.
+  endpointnamen verwijderd. Metrics worden gegroepeerd op een afgekorte, token-afgeleide
+  pseudonieme scope. Dat label filtert procesmetrics maar is geen tenantidentiteit of
+  autorisatiegrens.
 - Duplicate-suppression blijft geldig na een latere `failed`/`partial_failure`-auditregel.
   Alleen een expliciete, nieuwere `invalidated`-regel heft een bewezen succes voor exact
   dezelfde fingerprint op; een later succes sluit die fingerprint opnieuw.
@@ -191,7 +207,9 @@ asset bundled on developer.moneybird.com.
 - `moneybird/server.py` — the runnable entrypoint (`build_config` + `main`). The
   `moneybird-mcp` console script (see `pyproject.toml`) defaults to **stdio** for local
   MCP clients and defaults server state to `~/.moneybird-mcp`; `python
-  moneybird_mcp_server.py` keeps the legacy SSE default for existing deployments.
+  moneybird_mcp_server.py` keeps the legacy SSE default for existing deployments. Every
+  network transport requires `MCP_AUTH_TOKEN`; a non-loopback bind also requires a real trusted
+  TLS proxy plus `MCP_TRUSTED_TLS_PROXY=true`.
   `mcpb/` + `scripts/build_mcpb.py` build the Claude Desktop extension bundle
   (`dist/*.mcpb`; platform-specific because dependencies are vendored into it).
 - `moneybird/client.py` — HTTP client + endpoint methods. Every endpoint it calls is
@@ -206,6 +224,10 @@ asset bundled on developer.moneybird.com.
 - `moneybird/purchase_reconcile.py` — write-payload builders for reference-based and exact
   PDF-derived purchase reconciliation. It scales or validates line prices, maps them onto
   existing lines, and records pre/post-write expectations.
+- `moneybird/write_contracts.py` — required versioned WriteSpec registry and shared
+  controlled-field/financial-line comparison helpers. `tools/approvals.py` asserts that
+  its action keys exactly match the registry, so a new executor cannot silently omit its
+  precondition, verifier, occurrence identity, or reconciliation rule.
 - `moneybird/purchase_review.py` — read-only supplier-history retrieval and advisory anomaly
   detection behind `review_purchase_invoices`. Description-similarity checks are optional;
   deterministic state and supplier-pattern checks remain available independently. Tests live in
@@ -225,20 +247,36 @@ asset bundled on developer.moneybird.com.
   commit on `main` that bumps `version` in pyproject **and** mcpb/manifest.json is
   the release trigger. Never bump the version as a drive-by edit.
 - `.github/workflows/` — `ci.yml` runs the suite on main + PRs (Ubuntu 3.11–3.14 plus
-  Windows 3.11) and builds/inspects the distributions. `release.yml` runs on every
-  push to main but only acts when `pyproject.toml`'s version is not yet on PyPI: then
-  it tests, builds, publishes via Trusted Publishing (no API token in the repo;
-  configured publisher = owner `Espaye`, repo `moneybird-mcp-server`, workflow
-  `release.yml`, environment `pypi`), and creates tag `vX.Y.Z` + the GitHub release.
+  Windows 3.11), a lowest-direct-dependency lane, reproducibility/SBOM checks, and
+  distribution inspection. `security.yml` runs CodeQL and a full-history Gitleaks scan.
+  `release.yml` is a main-only,
+  stage-independent state machine: it checks PyPI, tag and release assets; gates the exact
+  source SHA through the full test/dependency/artifact matrix; creates and re-verifies the tag
+  before Trusted Publishing, re-verifies it after any environment-approval delay, and compares
+  the tested candidate's filenames/hashes with the exact downloaded PyPI wheel/sdist.
+  Trusted Publishing emits attestations; the workflow cryptographically verifies their
+  repository identity, generates a reproducible CycloneDX SBOM from the exact published
+  wheel, then creates or repairs the GitHub release and verifies the final tag, exact
+  package/SBOM names, and digests. Historical recovery uses helpers from the guarded workflow
+  commit; when that provenance cannot be reproduced/reviewed, recovery is manual rather than
+  a rebuild. Partial PyPI publication fails closed. These workflow checks
+  are defense in depth: the live repository still needs a `pypi` environment restricted to
+  `main` with an independent required reviewer, plus a protected `v*` tag ruleset, before the
+  release boundary is production-ready.
   Both workflows gate on `scripts/check_dist_hygiene.py`, which asserts the wheel
   ships only the `moneybird` package and that no `.env`/tokens/approvals DB/sync
   cache/audit log is packaged. CI never has credentials — keep the suite fully
   mocked (verified: the whole suite passes in a checkout without `.env`).
-- `docs/hosted_gateway_design.md` — architecture for the hosted web-app product
-  (gateway owns users/tokens and injects the tenant headers; this server stays
-  unmodified). Read it before any hosted/multi-tenant work.
+- `scripts/reconcile_execution.py` — local operator-only unresolved-execution inspection
+  and evidence-bearing resolution. Never expose it as an MCP tool or automatically turn
+  a lease/crash into a retry.
+- `docs/hosted_gateway_design.md` — localhost gateway demo plus explicit production no-go.
+  The server has a contained live-read-only `hosted_request_only` mode, but production identity,
+  grant storage, authorization, durable artifact ownership and trusted write confirmation are
+  not built.
 - `gateway/` — the M1 localhost demo of that design (`python -m gateway`, loopback-only,
-  not in the wheel): OAuth onboarding pages + tenant-injecting dispatch to the
+  source checkout only; not in the wheel, sdist, or `.mcpb`): OAuth onboarding pages +
+  tenant-injecting dispatch to the
   in-process MCP app. Tests in `tests/test_gateway_demo.py`.
 - `README.md` — setup, deployment, ChatGPT connection, tool descriptions.
 

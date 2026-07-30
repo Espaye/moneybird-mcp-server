@@ -1,15 +1,18 @@
-"""Write-safety machinery: durable approval tokens (TTL) and the JSONL audit log.
+"""Write-safety machinery: durable approval state and the JSONL audit export.
 
 Approvals are persisted in a small SQLite database inside :func:`~moneybird.config.data_dir`
 so a prepared write survives a server restart and works when the server runs with more
-than one worker process (prepare and execute may land on different processes). The audit
-log stays JSONL: append-only, greppable, one file per administration.
+than one worker process (prepare and execute may land on different processes). Approval
+claims and outcomes remain in SQLite instead of deleting the row before an upstream write.
+The audit log stays JSONL for backward-compatible, greppable export.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
+import socket
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,8 +22,13 @@ from .config import (
     APPROVAL_TTL_MINUTES,
     MoneybirdError,
     data_dir,
+    harden_private_file,
 )
-from .credentials import get_active_administration_id
+from .credentials import (
+    CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+    get_active_administration_id,
+    get_credential_mode,
+)
 from .formatting import iso_now
 
 # The audit log is per administration so tenants never share a write history.
@@ -30,6 +38,36 @@ LEGACY_AUDIT_LOG_PATH = Path(f"{AUDIT_LOG_BASENAME}.jsonl")
 AUDIT_LOG_PATH = LEGACY_AUDIT_LOG_PATH
 
 APPROVALS_DB_BASENAME = "moneybird_approvals.sqlite3"
+APPROVALS_SCHEMA_VERSION = 3
+
+PENDING_APPROVAL_STATE = "pending"
+CLAIMED_APPROVAL_STATE = "claimed"
+SUCCESS_APPROVAL_STATE = "succeeded"
+UNRESOLVED_APPROVAL_STATES = {
+    CLAIMED_APPROVAL_STATE,
+    "partial_failure",
+    "verification_failed",
+    "ambiguous",
+}
+APPROVAL_OUTCOME_STATES = {
+    "success": SUCCESS_APPROVAL_STATE,
+    "failed": "failed",
+    "failed_pre_write": "failed_pre_write",
+    "partial_failure": "partial_failure",
+    "verification_failed": "verification_failed",
+    "ambiguous": "ambiguous",
+    "duplicate_suppressed": "duplicate_suppressed",
+}
+
+
+class _ClosingSQLiteConnection(sqlite3.Connection):
+    """Make ``with _approvals_connection()`` close, not only commit, the handle."""
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        try:
+            return bool(super().__exit__(exc_type, exc_value, traceback))
+        finally:
+            self.close()
 
 
 def audit_log_path(administration_id: str | None = None) -> Path:
@@ -45,7 +83,21 @@ def approvals_db_path() -> Path:
 
 
 def _approvals_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(approvals_db_path())
+    connection = sqlite3.connect(
+        approvals_db_path(),
+        timeout=30,
+        factory=_ClosingSQLiteConnection,
+    )
+    harden_private_file(approvals_db_path())
+    connection.execute("PRAGMA busy_timeout = 30000")
+    (schema_version,) = connection.execute("PRAGMA user_version").fetchone()
+    if int(schema_version) > APPROVALS_SCHEMA_VERSION:
+        connection.close()
+        raise MoneybirdError(
+            "The approvals database was created by a newer Moneybird MCP "
+            f"schema ({schema_version}); this build supports up to "
+            f"{APPROVALS_SCHEMA_VERSION} and will not downgrade it."
+        )
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS approvals (
@@ -55,22 +107,147 @@ def _approvals_connection() -> sqlite3.Connection:
             summary TEXT NOT NULL,
             administration_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL
+            expires_at TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending',
+            fingerprint TEXT NOT NULL DEFAULT '',
+            claim_id TEXT,
+            claimed_at TEXT,
+            claim_owner TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            phase TEXT NOT NULL DEFAULT 'pending',
+            dispatch_started_at TEXT,
+            completed_at TEXT,
+            outcome TEXT,
+            error TEXT,
+            reconciled_at TEXT,
+            reconciled_by TEXT,
+            reconciliation_evidence TEXT
         )
         """
     )
+    connection.commit()
+
+    # Existing installations have the original seven-column table. Serialize the
+    # additive migration so concurrent workers cannot both try to add a column.
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(approvals)").fetchall()
+    }
+    additions = {
+        "state": "TEXT NOT NULL DEFAULT 'pending'",
+        "fingerprint": "TEXT NOT NULL DEFAULT ''",
+        "claim_id": "TEXT",
+        "claimed_at": "TEXT",
+        "claim_owner": "TEXT",
+        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        "phase": "TEXT NOT NULL DEFAULT 'pending'",
+        "dispatch_started_at": "TEXT",
+        "completed_at": "TEXT",
+        "outcome": "TEXT",
+        "error": "TEXT",
+        "reconciled_at": "TEXT",
+        "reconciled_by": "TEXT",
+        "reconciliation_evidence": "TEXT",
+    }
+    if not additions.keys() <= columns:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(approvals)").fetchall()
+            }
+            for name, declaration in additions.items():
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE approvals ADD COLUMN {name} {declaration}"
+                    )
+            connection.execute(f"PRAGMA user_version = {APPROVALS_SCHEMA_VERSION}")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            connection.close()
+            raise
+    else:
+        connection.execute(f"PRAGMA user_version = {APPROVALS_SCHEMA_VERSION}")
+
+    # Populate the indexed fingerprint for rows created by the legacy schema.
+    legacy_rows = connection.execute(
+        "SELECT approval_id, payload FROM approvals WHERE fingerprint = ''"
+    ).fetchall()
+    for approval_id, payload_json in legacy_rows:
+        try:
+            fingerprint = str(json.loads(payload_json).get("fingerprint") or "")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            fingerprint = ""
+        if fingerprint:
+            connection.execute(
+                "UPDATE approvals SET fingerprint = ? WHERE approval_id = ?",
+                (fingerprint, approval_id),
+            )
+
+    # A partially migrated database may contain several already-claimed or
+    # unresolved rows for the same semantic write. Retain the oldest one and
+    # durably discard later duplicates before adding the uniqueness invariant.
+    unresolved_sql = ", ".join(
+        f"'{state}'" for state in sorted(UNRESOLVED_APPROVAL_STATES)
+    )
+    duplicate_groups = connection.execute(
+        "SELECT administration_id, action, fingerprint "
+        "FROM approvals WHERE fingerprint <> '' "
+        f"AND state IN ({unresolved_sql}) "
+        "GROUP BY administration_id, action, fingerprint HAVING COUNT(*) > 1"
+    ).fetchall()
+    for administration_id, action, fingerprint in duplicate_groups:
+        duplicate_rows = connection.execute(
+            "SELECT approval_id FROM approvals "
+            "WHERE administration_id = ? AND action = ? AND fingerprint = ? "
+            f"AND state IN ({unresolved_sql}) "
+            "ORDER BY created_at, approval_id",
+            (administration_id, action, fingerprint),
+        ).fetchall()
+        for (approval_id,) in duplicate_rows[1:]:
+            connection.execute(
+                "UPDATE approvals SET state = 'discarded', outcome = 'discarded', "
+                "completed_at = ? WHERE approval_id = ?",
+                (datetime.now(UTC).isoformat(), approval_id),
+            )
+
+    # Only one execution with an exact fingerprint may be active or unresolved.
+    # Successful rows leave this index so a later explicit ``invalidated`` audit
+    # event can reopen the fingerprint; audit_log_contains_success still reads
+    # durable succeeded rows and ordered invalidations.
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS approvals_one_unresolved_fingerprint "
+        "ON approvals (administration_id, action, fingerprint) "
+        f"WHERE fingerprint <> '' AND state IN ({unresolved_sql})"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS approvals_pending_state "
+        "ON approvals (state, expires_at)"
+    )
+    connection.commit()
     return connection
 
 
 def _purge_expired(connection: sqlite3.Connection) -> None:
     connection.execute(
-        "DELETE FROM approvals WHERE expires_at < ?",
-        (datetime.now(UTC).isoformat(),),
+        "UPDATE approvals SET state = 'expired', outcome = 'expired', "
+        "completed_at = COALESCE(completed_at, ?) "
+        "WHERE state = 'pending' AND expires_at < ?",
+        (
+            datetime.now(UTC).isoformat(),
+            datetime.now(UTC).isoformat(),
+        ),
     )
 
 
 def clear_pending_approvals() -> None:
-    """Remove every staged approval (used by tests and manual resets)."""
+    """Explicitly erase approval history for tests or a deliberate manual reset.
+
+    Normal execution never deletes approval rows. This reset retains the legacy
+    helper's clean-slate semantics so unresolved fingerprints from one isolated
+    run cannot contaminate the next.
+    """
     with _approvals_connection() as connection:
         connection.execute("DELETE FROM approvals")
 
@@ -78,11 +255,19 @@ def clear_pending_approvals() -> None:
 def pending_approval_count() -> int:
     with _approvals_connection() as connection:
         _purge_expired(connection)
-        (count,) = connection.execute("SELECT COUNT(*) FROM approvals").fetchone()
+        (count,) = connection.execute(
+            "SELECT COUNT(*) FROM approvals WHERE state = 'pending'"
+        ).fetchone()
     return int(count)
 
 
 def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[str, Any]:
+    if get_credential_mode() == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
+        raise MoneybirdError(
+            "Write preparation is disabled in hosted_request_only mode because "
+            "approval state is not yet bound to an independently authenticated "
+            "principal, session, and grant."
+        )
     approval_id = secrets.token_urlsafe(18)
     now = datetime.now(UTC)
     expires_at = now + timedelta(minutes=APPROVAL_TTL_MINUTES)
@@ -93,20 +278,30 @@ def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[st
         )
     with _approvals_connection() as connection:
         _purge_expired(connection)
-        connection.execute(
-            "INSERT INTO approvals VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                approval_id,
-                action,
-                # default=str keeps rare non-JSON scalars (Decimal, dates) storable;
-                # write payloads must be JSON-shaped anyway to be sendable to Moneybird.
-                json.dumps(payload, ensure_ascii=True, default=str),
-                summary,
-                str(administration_id),
-                now.isoformat(),
-                expires_at.isoformat(),
-            ),
-        )
+        try:
+            connection.execute(
+                "INSERT INTO approvals ("
+                "approval_id, action, payload, summary, administration_id, created_at, "
+                "expires_at, state, fingerprint"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (
+                    approval_id,
+                    action,
+                    # default=str keeps rare non-JSON scalars (Decimal, dates) storable;
+                    # write payloads must be JSON-shaped anyway to be sendable to Moneybird.
+                    json.dumps(payload, ensure_ascii=True, default=str),
+                    summary,
+                    str(administration_id),
+                    now.isoformat(),
+                    expires_at.isoformat(),
+                    str(payload.get("fingerprint") or ""),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise MoneybirdError(
+                "The approval could not be persisted because its identifier or "
+                "unresolved write fingerprint conflicted with durable state."
+            ) from exc
     return {
         "approval_id": approval_id,
         "action": action,
@@ -127,9 +322,14 @@ def pop_approval(
     *,
     administration_id: str | None = None,
 ) -> dict[str, Any]:
-    with _approvals_connection() as connection:
+    connection = _approvals_connection()
+    try:
+        # BEGIN IMMEDIATE makes validation + compare-and-set one write transaction
+        # across threads and processes. No network call occurs while it is held.
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
-            "SELECT action, payload, summary, administration_id, expires_at "
+            "SELECT action, payload, summary, administration_id, expires_at, state, "
+            "fingerprint "
             "FROM approvals WHERE approval_id = ?",
             (approval_id,),
         ).fetchone()
@@ -137,7 +337,15 @@ def pop_approval(
             raise MoneybirdError(
                 "Unknown approval_id. Prepare the action again before executing it."
             )
-        action, payload_json, summary, prepared_administration_id, expires_at = row
+        (
+            action,
+            payload_json,
+            summary,
+            prepared_administration_id,
+            expires_at,
+            state,
+            fingerprint,
+        ) = row
 
         if action != expected_action:
             raise MoneybirdError(
@@ -153,23 +361,58 @@ def pop_approval(
                 "Prepare the action again for the active administration."
             )
 
+        if state != PENDING_APPROVAL_STATE:
+            raise MoneybirdError(
+                f"approval_id is already {state} and cannot be executed again."
+            )
+
         if datetime.now(UTC) > datetime.fromisoformat(expires_at):
             connection.execute(
-                "DELETE FROM approvals WHERE approval_id = ?", (approval_id,)
+                "UPDATE approvals SET state = 'expired', outcome = 'expired', "
+                "completed_at = ? WHERE approval_id = ? AND state = 'pending'",
+                (datetime.now(UTC).isoformat(), approval_id),
             )
+            connection.commit()
             raise MoneybirdError("approval_id expired. Prepare the action again.")
 
-        connection.execute(
-            "DELETE FROM approvals WHERE approval_id = ?", (approval_id,)
-        )
-
-    return {
-        "action": action,
-        "payload": json.loads(payload_json),
-        "summary": summary,
-        "administration_id": prepared_administration_id,
-        "expires_at": expires_at,
-    }
+        claim_id = secrets.token_urlsafe(18)
+        claimed_at = datetime.now(UTC).isoformat()
+        claim_owner = f"{socket.gethostname()}:{os.getpid()}"
+        try:
+            cursor = connection.execute(
+                "UPDATE approvals SET state = 'claimed', claim_id = ?, claimed_at = ?, "
+                "claim_owner = ?, attempt_count = attempt_count + 1, phase = 'preflight', "
+                "dispatch_started_at = NULL "
+                "WHERE approval_id = ? AND state = 'pending'",
+                (claim_id, claimed_at, claim_owner, approval_id),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise MoneybirdError(
+                "An execution with this exact fingerprint is already active or "
+                "requires reconciliation."
+            ) from exc
+        if cursor.rowcount != 1:
+            raise MoneybirdError(
+                "approval_id was claimed concurrently and cannot be executed again."
+            )
+        connection.commit()
+        return {
+            "approval_id": approval_id,
+            "claim_id": claim_id,
+            "claim_owner": claim_owner,
+            "action": action,
+            "payload": json.loads(payload_json),
+            "summary": summary,
+            "administration_id": prepared_administration_id,
+            "expires_at": expires_at,
+            "fingerprint": fingerprint,
+        }
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def peek_approval(
@@ -185,7 +428,7 @@ def peek_approval(
     """
     with _approvals_connection() as connection:
         row = connection.execute(
-            "SELECT action, payload, summary, administration_id, expires_at "
+            "SELECT action, payload, summary, administration_id, expires_at, state "
             "FROM approvals WHERE approval_id = ?",
             (approval_id,),
         ).fetchone()
@@ -193,7 +436,7 @@ def peek_approval(
         raise MoneybirdError(
             "Unknown approval_id. Prepare the action again before executing it."
         )
-    action, payload_json, summary, prepared_administration_id, expires_at = row
+    action, payload_json, summary, prepared_administration_id, expires_at, state = row
     if (
         prepared_administration_id
         and str(prepared_administration_id) != str(administration_id or "")
@@ -202,11 +445,16 @@ def peek_approval(
             "approval_id belongs to a different Moneybird administration. "
             "Prepare the action again for the active administration."
         )
+    if state != PENDING_APPROVAL_STATE:
+        raise MoneybirdError(
+            f"approval_id is already {state} and cannot be executed again."
+        )
     if datetime.now(UTC) > datetime.fromisoformat(expires_at):
         with _approvals_connection() as connection:
             connection.execute(
-                "DELETE FROM approvals WHERE approval_id = ?",
-                (approval_id,),
+                "UPDATE approvals SET state = 'expired', outcome = 'expired', "
+                "completed_at = ? WHERE approval_id = ? AND state = 'pending'",
+                (datetime.now(UTC).isoformat(), approval_id),
             )
         raise MoneybirdError("approval_id expired. Prepare the action again.")
     return {
@@ -223,14 +471,288 @@ def discard_approval(
     *,
     administration_id: str | None = None,
 ) -> bool:
-    """Remove an unexecuted approval owned by the active administration."""
+    """Durably discard an unexecuted approval owned by the active administration."""
     with _approvals_connection() as connection:
         cursor = connection.execute(
-            "DELETE FROM approvals WHERE approval_id = ? "
-            "AND administration_id = ?",
-            (approval_id, str(administration_id or "")),
+            "UPDATE approvals SET state = 'discarded', outcome = 'discarded', "
+            "completed_at = ? WHERE approval_id = ? AND administration_id = ? "
+            "AND state = 'pending'",
+            (
+                datetime.now(UTC).isoformat(),
+                approval_id,
+                str(administration_id or ""),
+            ),
         )
     return cursor.rowcount > 0
+
+
+APPROVAL_EXECUTION_PHASES = {
+    "preflight",
+    "dispatching",
+    "verifying",
+}
+
+
+def record_approval_phase(
+    approval_id: str,
+    phase: str,
+    *,
+    administration_id: str | None = None,
+) -> None:
+    """Advance a claimed write through its durable dispatch boundary."""
+
+    if phase not in APPROVAL_EXECUTION_PHASES:
+        raise MoneybirdError(
+            f"Unsupported execution phase {phase!r}; expected one of "
+            f"{', '.join(sorted(APPROVAL_EXECUTION_PHASES))}."
+        )
+    administration_id = administration_id or get_active_administration_id()
+    dispatch_started_at = (
+        datetime.now(UTC).isoformat() if phase == "dispatching" else None
+    )
+    with _approvals_connection() as connection:
+        cursor = connection.execute(
+            "UPDATE approvals SET phase = ?, "
+            "dispatch_started_at = COALESCE(dispatch_started_at, ?) "
+            "WHERE approval_id = ? AND administration_id = ? AND state = 'claimed'",
+            (
+                phase,
+                dispatch_started_at,
+                approval_id,
+                str(administration_id or ""),
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise MoneybirdError(
+                "Cannot advance execution phase because this approval is not claimed."
+            )
+
+
+def approval_execution_state(
+    approval_id: str,
+    *,
+    administration_id: str | None = None,
+) -> dict[str, Any]:
+    """Read durable execution metadata for diagnostics and reconciliation."""
+
+    administration_id = administration_id or get_active_administration_id()
+    with _approvals_connection() as connection:
+        row = connection.execute(
+            "SELECT approval_id, action, summary, administration_id, state, outcome, "
+            "fingerprint, claim_id, claimed_at, claim_owner, attempt_count, phase, "
+            "dispatch_started_at, completed_at, error, reconciled_at, reconciled_by, "
+            "reconciliation_evidence FROM approvals "
+            "WHERE approval_id = ? AND administration_id = ?",
+            (approval_id, str(administration_id or "")),
+        ).fetchone()
+    if row is None:
+        raise MoneybirdError("Unknown approval_id for this administration.")
+    keys = (
+        "approval_id",
+        "action",
+        "summary",
+        "administration_id",
+        "state",
+        "outcome",
+        "fingerprint",
+        "claim_id",
+        "claimed_at",
+        "claim_owner",
+        "attempt_count",
+        "phase",
+        "dispatch_started_at",
+        "completed_at",
+        "error",
+        "reconciled_at",
+        "reconciled_by",
+        "reconciliation_evidence",
+    )
+    return dict(zip(keys, row))
+
+
+def list_unresolved_approval_executions(
+    *,
+    administration_id: str | None = None,
+) -> list[dict[str, Any]]:
+    administration_id = administration_id or get_active_administration_id()
+    unresolved = tuple(sorted(UNRESOLVED_APPROVAL_STATES))
+    placeholders = ", ".join("?" for _item in unresolved)
+    with _approvals_connection() as connection:
+        rows = connection.execute(
+            "SELECT approval_id FROM approvals WHERE administration_id = ? "
+            f"AND state IN ({placeholders}) ORDER BY claimed_at, approval_id",
+            (str(administration_id or ""), *unresolved),
+        ).fetchall()
+    return [
+        approval_execution_state(
+            str(row[0]),
+            administration_id=administration_id,
+        )
+        for row in rows
+    ]
+
+
+def reconcile_approval_execution(
+    approval_id: str,
+    resolution: str,
+    *,
+    evidence: str,
+    reconciled_by: str,
+    administration_id: str | None = None,
+) -> dict[str, Any]:
+    """Resolve an unresolved execution after an operator has inspected Moneybird."""
+
+    resolution = str(resolution).strip()
+    evidence = str(evidence).strip()
+    reconciled_by = str(reconciled_by).strip()
+    if resolution not in {"proven_absent", "succeeded_verified", "manual_review"}:
+        raise MoneybirdError(
+            "resolution must be proven_absent, succeeded_verified, or manual_review."
+        )
+    if not evidence or not reconciled_by:
+        raise MoneybirdError(
+            "Reconciliation requires non-empty evidence and reconciled_by."
+        )
+    administration_id = administration_id or get_active_administration_id()
+    now = datetime.now(UTC).isoformat()
+    unresolved = tuple(sorted(UNRESOLVED_APPROVAL_STATES))
+    placeholders = ", ".join("?" for _item in unresolved)
+    with _approvals_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT state, outcome, phase FROM approvals "
+            "WHERE approval_id = ? AND administration_id = ?",
+            (approval_id, str(administration_id or "")),
+        ).fetchone()
+        if row is None:
+            raise MoneybirdError("Unknown approval_id for this administration.")
+        state, existing_outcome, phase = (
+            str(row[0]),
+            str(row[1] or ""),
+            str(row[2] or ""),
+        )
+        if state not in UNRESOLVED_APPROVAL_STATES:
+            raise MoneybirdError(
+                f"approval_id is {state}, not an unresolved execution."
+            )
+        if resolution == "manual_review":
+            new_state = state
+            new_outcome = existing_outcome or state
+            new_phase = phase
+            completed_at = None
+        elif resolution == "proven_absent":
+            # A dispatched call that was later proven absent is materially
+            # different from one that failed before dispatch. Keep that
+            # distinction durable while releasing the unresolved fingerprint.
+            new_state = "reconciled_absent"
+            new_outcome = "reconciled_absent"
+            new_phase = "reconciled"
+            completed_at = now
+        else:
+            new_state = SUCCESS_APPROVAL_STATE
+            new_outcome = "success"
+            new_phase = "reconciled"
+            completed_at = now
+        cursor = connection.execute(
+            "UPDATE approvals SET state = ?, outcome = ?, phase = ?, "
+            "completed_at = COALESCE(?, completed_at), reconciled_at = ?, "
+            "reconciled_by = ?, reconciliation_evidence = ? "
+            "WHERE approval_id = ? AND administration_id = ? "
+            f"AND state IN ({placeholders})",
+            (
+                new_state,
+                new_outcome,
+                new_phase,
+                completed_at,
+                now,
+                reconciled_by,
+                evidence,
+                approval_id,
+                str(administration_id or ""),
+                *unresolved,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise MoneybirdError("The execution changed while it was reconciled.")
+    append_audit_log(
+        {
+            "action": "reconcile_approval_execution",
+            "approval_id": approval_id,
+            "result": resolution,
+            "prior_phase": phase,
+            "evidence": evidence,
+            "reconciled_by": reconciled_by,
+        },
+        administration_id=administration_id,
+    )
+    return approval_execution_state(
+        approval_id,
+        administration_id=administration_id,
+    )
+
+
+def record_approval_outcome(
+    approval_id: str,
+    outcome: str,
+    *,
+    administration_id: str | None = None,
+    error: str = "",
+) -> None:
+    """Persist the terminal or unresolved result of one claimed approval.
+
+    ``success`` is intentionally explicit. Partial, verification-failed, and
+    ambiguous outcomes remain distinct and never become successful duplicate
+    evidence.
+    """
+    state = APPROVAL_OUTCOME_STATES.get(str(outcome))
+    if state is None:
+        supported = ", ".join(sorted(APPROVAL_OUTCOME_STATES))
+        raise MoneybirdError(
+            f"Unsupported approval outcome {outcome!r}; use one of: {supported}."
+        )
+    administration_id = administration_id or get_active_administration_id()
+    with _approvals_connection() as connection:
+        cursor = connection.execute(
+            "UPDATE approvals SET state = ?, outcome = ?, completed_at = ?, error = ?, "
+            "phase = CASE WHEN ? IN "
+            "('partial_failure', 'verification_failed', 'ambiguous') "
+            "THEN phase ELSE 'completed' END "
+            "WHERE approval_id = ? AND administration_id = ? AND state = 'claimed'",
+            (
+                state,
+                outcome,
+                datetime.now(UTC).isoformat(),
+                str(error or ""),
+                outcome,
+                approval_id,
+                str(administration_id or ""),
+            ),
+        )
+        if cursor.rowcount != 1:
+            row = connection.execute(
+                "SELECT state FROM approvals WHERE approval_id = ?",
+                (approval_id,),
+            ).fetchone()
+            current = str(row[0]) if row else "unknown"
+            raise MoneybirdError(
+                f"Cannot record outcome for approval_id in state {current}."
+            )
+
+
+def classify_write_exception(exc: BaseException) -> str:
+    """Conservatively recognize current client errors that mean result unknown."""
+    message = str(exc).lower()
+    ambiguous_markers = (
+        "ambiguous",
+        "may already have been processed",
+        "reconcile moneybird before retrying",
+        "reconcile the record before retrying",
+    )
+    return (
+        "ambiguous"
+        if any(marker in message for marker in ambiguous_markers)
+        else "failed"
+    )
 
 
 def append_audit_log(entry: dict[str, Any], administration_id: str | None = None) -> None:
@@ -238,6 +760,7 @@ def append_audit_log(entry: dict[str, Any], administration_id: str | None = None
     log_entry = {"timestamp": iso_now(), **entry, "administration_id": administration_id}
     path = audit_log_path(administration_id)
     with path.open("a", encoding="utf-8") as handle:
+        harden_private_file(path)
         handle.write(json.dumps(log_entry, ensure_ascii=True) + "\n")
 
 
@@ -261,15 +784,50 @@ def audit_log_contains_success(
     administration_id: str | None = None,
 ) -> bool:
     administration_id = administration_id or get_active_administration_id()
+    expected_administration_id = str(administration_id or "")
     latest_timestamp = ""
     latest_result: str | None = None
+
+    # SQLite is now the durable source for newly executed approvals. Merge it
+    # with JSONL so a later explicit invalidation can still reopen a fingerprint.
+    with _approvals_connection() as connection:
+        rows = connection.execute(
+            "SELECT completed_at FROM approvals "
+            "WHERE administration_id = ? AND action = ? AND fingerprint = ? "
+            "AND state = 'succeeded'",
+            (str(administration_id or ""), action, fingerprint),
+        ).fetchall()
+    for (completed_at,) in rows:
+        timestamp = str(completed_at or "")
+        if timestamp >= latest_timestamp:
+            latest_timestamp = timestamp
+            latest_result = "success"
+
     for path in _audit_log_candidates(administration_id):
         if not path.exists():
             continue
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
+        for raw_line in path.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines():
             if not raw_line.strip():
                 continue
-            entry = json.loads(raw_line)
+            try:
+                entry = json.loads(raw_line)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                # JSONL appends can be interrupted mid-line. A corrupt export
+                # record must never crash execution or become success evidence.
+                continue
+            if not isinstance(entry, dict):
+                continue
+            entry_administration_id = entry.get("administration_id")
+            if (
+                entry_administration_id is None
+                or str(entry_administration_id) != expected_administration_id
+            ):
+                # Legacy unscoped entries and foreign-tenant entries are not
+                # authoritative duplicate-suppression evidence.
+                continue
             if (
                 entry.get("action") == action
                 and entry.get("fingerprint") == fingerprint
@@ -296,12 +854,21 @@ def append_failed_audit_log(
     error: str,
     partial: dict[str, Any] | None = None,
     administration_id: str | None = None,
+    result: str = "failed",
 ) -> None:
+    if result not in {
+        "failed",
+        "failed_pre_write",
+        "partial_failure",
+        "verification_failed",
+        "ambiguous",
+    }:
+        raise ValueError("Failure audit result cannot be successful.")
     append_audit_log(
         {
             "action": action,
             "fingerprint": fingerprint,
-            "result": "failed",
+            "result": result,
             "error": error,
             "partial": partial or {},
         },

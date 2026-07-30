@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import email.message
 import io
-import os
-import tempfile
+import socket
 import unittest
 import urllib.error
 import urllib.request
@@ -60,8 +59,29 @@ class ExtractPdfTextTests(unittest.TestCase):
     def test_non_pdf_bytes_are_rejected_without_pypdf(self) -> None:
         result = extract_pdf_text(b"GIF89a not a pdf")
         self.assertFalse(result["available"])
+        self.assertTrue(result["untrusted_content"])
         self.assertIn("not a PDF", result["note"])
         self.assertFalse(looks_like_pdf(b"plain text"))
+
+    def test_oversized_bytes_are_rejected_before_parsing(self) -> None:
+        data = _minimal_pdf("sensitive")
+        result = extract_pdf_text(data, max_bytes=len(data) - 1)
+        self.assertFalse(result["available"])
+        self.assertTrue(result["untrusted_content"])
+        self.assertIn("too large", result["note"])
+
+    def test_unexpected_content_type_is_rejected_before_parsing(self) -> None:
+        result = extract_pdf_text(
+            _minimal_pdf("sensitive"),
+            content_type="text/html; charset=utf-8",
+        )
+        self.assertFalse(result["available"])
+        self.assertTrue(result["untrusted_content"])
+        self.assertIn("content type", result["note"])
+
+    def test_limits_must_be_positive(self) -> None:
+        with self.assertRaises(ValueError):
+            extract_pdf_text(_minimal_pdf("x"), max_pages=0)
 
     def test_text_layer_is_extracted(self) -> None:
         if not _pypdf_available():
@@ -71,6 +91,9 @@ class ExtractPdfTextTests(unittest.TestCase):
         self.assertIn("Stroom 40,00", result["text"])
         self.assertEqual(result["page_count"], 1)
         self.assertFalse(result["truncated"])
+        self.assertEqual(result["isolation"], "worker_process")
+        self.assertEqual(result["timeout_seconds"], 10.0)
+        self.assertEqual(result["worker_memory_limit_bytes"], 256 * 1024 * 1024)
 
     def test_long_text_is_truncated(self) -> None:
         if not _pypdf_available():
@@ -86,6 +109,15 @@ class ExtractPdfTextTests(unittest.TestCase):
         result = extract_pdf_text(b"%PDF-1.4 garbage without structure")
         self.assertFalse(result["available"])
         self.assertIn("note", result)
+
+    def test_parser_worker_is_terminated_at_deadline(self) -> None:
+        result = extract_pdf_text(
+            _minimal_pdf("deadline"),
+            timeout_seconds=0.000001,
+        )
+        self.assertFalse(result["available"])
+        self.assertEqual(result["isolation"], "worker_process")
+        self.assertIn("time limit", result["note"])
 
     def test_safe_attachment_filename(self) -> None:
         self.assertEqual(
@@ -104,8 +136,10 @@ class BinaryRequestRedirectTests(unittest.TestCase):
             self.headers = {"Content-Type": content_type}
             self._data = data
 
-        def read(self) -> bytes:
-            return self._data
+        def read(self, amount: int | None = None) -> bytes:
+            if amount is None:
+                return self._data
+            return self._data[:amount]
 
         def __enter__(self):
             return self
@@ -116,7 +150,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
     def test_redirect_drops_authorization_header(self) -> None:
         from moneybird.client import MoneybirdClient
 
-        client = MoneybirdClient("secret-token", "admin-1")
+        client = MoneybirdClient("secret-token", "123")
         redirect_headers = email.message.Message()
         redirect_headers["Location"] = "https://storage.example/signed/abc?sig=1"
         first_requests: list[urllib.request.Request] = []
@@ -124,21 +158,42 @@ class BinaryRequestRedirectTests(unittest.TestCase):
 
         class FakeOpener:
             def open(self, request, timeout=None):
-                first_requests.append(request)
-                raise urllib.error.HTTPError(
-                    request.full_url, 302, "Found", redirect_headers, io.BytesIO(b"")
+                if request.has_header("Authorization"):
+                    first_requests.append(request)
+                    raise urllib.error.HTTPError(
+                        request.full_url,
+                        302,
+                        "Found",
+                        redirect_headers,
+                        io.BytesIO(b""),
+                    )
+                signed_requests.append(request)
+                return BinaryRequestRedirectTests._FakeResponse(
+                    b"%PDF-fake",
+                    "application/pdf",
                 )
 
-        def fake_urlopen(request, timeout=None):
-            signed_requests.append(request)
-            return BinaryRequestRedirectTests._FakeResponse(b"%PDF-fake", "application/pdf")
-
         with (
-            mock.patch.object(urllib.request, "build_opener", return_value=FakeOpener()),
-            mock.patch.object(urllib.request, "urlopen", side_effect=fake_urlopen),
+            mock.patch.object(
+                urllib.request,
+                "build_opener",
+                return_value=FakeOpener(),
+            ) as build_opener,
+            mock.patch(
+                "moneybird.client.socket.getaddrinfo",
+                return_value=[
+                    (
+                        socket.AF_INET,
+                        socket.SOCK_STREAM,
+                        socket.IPPROTO_TCP,
+                        "",
+                        ("93.184.216.34", 443),
+                    )
+                ],
+            ),
         ):
             data, content_type = client.download_attachment(
-                "purchase_invoice", "doc-1", "att-1"
+                "purchase_invoice", "456", "789"
             )
 
         self.assertEqual(data, b"%PDF-fake")
@@ -151,11 +206,102 @@ class BinaryRequestRedirectTests(unittest.TestCase):
             signed_requests[0].has_header("Authorization"),
             "bearer token must not be forwarded to the storage host",
         )
+        self.assertEqual(build_opener.call_count, 2)
+        signed_handlers = build_opener.call_args_list[1].args
+        pinned_handler = next(
+            handler
+            for handler in signed_handlers
+            if handler.__class__.__name__ == "_PinnedHTTPSHandler"
+        )
+        self.assertEqual(
+            pinned_handler._pinned_addresses,
+            ("93.184.216.34",),
+        )
 
+    def test_second_redirect_from_signed_storage_is_refused(self) -> None:
+        from moneybird.client import MoneybirdClient
+        from moneybird.config import MoneybirdError
+
+        client = MoneybirdClient("secret-token", "123")
+        first_headers = email.message.Message()
+        first_headers["Location"] = "https://storage.example/signed/abc?sig=1"
+        second_headers = email.message.Message()
+        second_headers["Location"] = "https://127.0.0.1/private"
+
+        class FakeOpener:
+            def open(self, request, timeout=None):
+                headers = (
+                    first_headers if request.has_header("Authorization") else second_headers
+                )
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    302,
+                    "Found",
+                    headers,
+                    io.BytesIO(b""),
+                )
+
+        with (
+            mock.patch.object(urllib.request, "build_opener", return_value=FakeOpener()),
+            mock.patch(
+                "moneybird.client.socket.getaddrinfo",
+                return_value=[
+                    (
+                        socket.AF_INET,
+                        socket.SOCK_STREAM,
+                        socket.IPPROTO_TCP,
+                        "",
+                        ("93.184.216.34", 443),
+                    )
+                ],
+            ),
+        ):
+            with self.assertRaisesRegex(MoneybirdError, "second redirect"):
+                client.download_attachment("purchase_invoice", "456", "789")
+
+    def test_bounded_reader_rejects_declared_and_streamed_overflow(self) -> None:
+        from moneybird.client import _read_bounded_response
+        from moneybird.config import MoneybirdError
+
+        declared = self._FakeResponse(b"1234", "application/pdf")
+        declared.headers["Content-Length"] = "5"
+        with self.assertRaisesRegex(MoneybirdError, "download limit"):
+            _read_bounded_response(declared, max_bytes=4)
+
+        streamed = self._FakeResponse(b"12345", "application/pdf")
+        with self.assertRaisesRegex(MoneybirdError, "download limit"):
+            _read_bounded_response(streamed, max_bytes=4)
+
+    def test_redirect_policy_rejects_non_https_and_private_addresses(self) -> None:
+        from moneybird.client import _validated_attachment_redirect
+        from moneybird.config import MoneybirdError
+
+        with self.assertRaisesRegex(MoneybirdError, "credential-free HTTPS"):
+            _validated_attachment_redirect(
+                "https://moneybird.com/api/v2/123/file",
+                "http://storage.example/file",
+            )
+        with mock.patch(
+            "moneybird.client.socket.getaddrinfo",
+            return_value=[
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    socket.IPPROTO_TCP,
+                    "",
+                    ("127.0.0.1", 443),
+                )
+            ],
+        ):
+            with self.assertRaisesRegex(MoneybirdError, "non-public"):
+                _validated_attachment_redirect(
+                    "https://moneybird.com/api/v2/123/file",
+                    "https://storage.example/file",
+                )
     def test_direct_response_returns_bytes(self) -> None:
         from moneybird.client import MoneybirdClient
 
-        client = MoneybirdClient("secret-token", "admin-1")
+        client = MoneybirdClient("secret-token", "123")
 
         class FakeOpener:
             def open(self, request, timeout=None):
@@ -165,7 +311,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
 
         with mock.patch.object(urllib.request, "build_opener", return_value=FakeOpener()):
             data, content_type = client.download_attachment(
-                "purchase_invoice", "doc-1", "att-1"
+                "purchase_invoice", "456", "789"
             )
         self.assertEqual(data, b"raw-bytes")
         self.assertEqual(content_type, "application/pdf")
@@ -173,7 +319,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
 
 class ReadDocumentAttachmentToolTests(unittest.TestCase):
     class FakeClient:
-        administration_id = "admin"
+        administration_id = "123"
 
         def __init__(self, attachments: list[dict] | None = None) -> None:
             self.attachments = (
@@ -181,7 +327,7 @@ class ReadDocumentAttachmentToolTests(unittest.TestCase):
                 if attachments is not None
                 else [
                     {
-                        "id": "att-1",
+                        "id": "789",
                         "filename": "Termijnnota juli.pdf",
                         "content_type": "application/pdf",
                         "size": 999,
@@ -208,52 +354,89 @@ class ReadDocumentAttachmentToolTests(unittest.TestCase):
             set_active_administration_id(fake.administration_id)
             return fake
 
-        with (
-            mock.patch.object(tool_context, "get_client", side_effect=get_fake_client),
-            tempfile.TemporaryDirectory() as tmp,
-            mock.patch.dict(os.environ, {"MONEYBIRD_MCP_DATA_DIR": tmp}),
+        with mock.patch.object(
+            tool_context,
+            "get_client",
+            side_effect=get_fake_client,
         ):
             result = tools.read_document_attachment(**kwargs)
-            saved = result.get("saved_path")
-            if saved:
-                # Assert while the temp dir still exists.
-                self.assertTrue(os.path.exists(saved))
-                result["_saved_file_size"] = os.path.getsize(saved)
         return result
 
-    def test_single_attachment_is_downloaded_and_saved(self) -> None:
-        result = self._call(self.FakeClient(), document_id="doc-1")
-        self.assertEqual(result["attachment"]["id"], "att-1")
+    def test_single_attachment_is_downloaded_without_retention(self) -> None:
+        result = self._call(self.FakeClient(), document_id="456")
+        self.assertEqual(result["attachment"]["id"], "789")
         self.assertEqual(result["content_type"], "application/pdf")
-        self.assertIn("Termijnnota_juli.pdf", result["saved_path"])
-        self.assertGreater(result["_saved_file_size"], 0)
+        self.assertEqual(result["retention"], "none")
+        self.assertNotIn("saved_path", result)
+        self.assertTrue(result["text"]["untrusted_content"])
         if _pypdf_available():
             self.assertTrue(result["text"]["available"])
             self.assertIn("Stroom 40,00", result["text"]["text"])
 
+    def test_hosted_mode_refuses_pdf_parsing_without_capacity_controls(self) -> None:
+        import os
+
+        from moneybird import tools
+        from moneybird.config import MoneybirdError
+        from moneybird.credentials import CREDENTIAL_MODE_ENV
+        from moneybird.tools import _context as tool_context
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {CREDENTIAL_MODE_ENV: "hosted_request_only"},
+                clear=False,
+            ),
+            mock.patch.object(tool_context, "get_client") as get_client,
+        ):
+            with self.assertRaisesRegex(MoneybirdError, "durable capacity"):
+                tools.read_document_attachment(document_id="456")
+        get_client.assert_not_called()
+
     def test_multiple_attachments_without_id_returns_listing(self) -> None:
         fake = self.FakeClient(
             attachments=[
-                {"id": "att-1", "filename": "a.pdf", "content_type": "application/pdf", "size": 1},
-                {"id": "att-2", "filename": "b.pdf", "content_type": "application/pdf", "size": 2},
+                {"id": "789", "filename": "a.pdf", "content_type": "application/pdf", "size": 1},
+                {"id": "790", "filename": "b.pdf", "content_type": "application/pdf", "size": 2},
             ]
         )
-        result = self._call(fake, document_id="doc-1")
+        result = self._call(fake, document_id="456")
         self.assertEqual(len(result["attachments"]), 2)
         self.assertIn("attachment_id", result["note"])
         self.assertNotIn("saved_path", result)
 
+    def test_declared_oversize_is_rejected_before_download(self) -> None:
+        from moneybird.attachments import DEFAULT_MAX_ATTACHMENT_BYTES
+        from moneybird.config import MoneybirdError
+
+        fake = self.FakeClient(
+            attachments=[
+                {
+                    "id": "789",
+                    "filename": "large.pdf",
+                    "content_type": "application/pdf",
+                    "size": DEFAULT_MAX_ATTACHMENT_BYTES + 1,
+                }
+            ]
+        )
+        with (
+            mock.patch.object(fake, "download_attachment") as download,
+            self.assertRaisesRegex(MoneybirdError, "byte limit"),
+        ):
+            self._call(fake, document_id="456")
+        download.assert_not_called()
+
     def test_no_attachments_is_reported(self) -> None:
-        result = self._call(self.FakeClient(attachments=[]), document_id="doc-1")
+        result = self._call(self.FakeClient(attachments=[]), document_id="456")
         self.assertEqual(result["attachments"], [])
         self.assertIn("no attachments", result["note"])
 
     def test_unknown_attachment_id_returns_listing(self) -> None:
         result = self._call(
-            self.FakeClient(), document_id="doc-1", attachment_id="does-not-exist"
+            self.FakeClient(), document_id="456", attachment_id="999"
         )
         self.assertIn("not found", result["note"])
-        self.assertEqual(result["attachments"][0]["id"], "att-1")
+        self.assertEqual(result["attachments"][0]["id"], "789")
 
 
 if __name__ == "__main__":

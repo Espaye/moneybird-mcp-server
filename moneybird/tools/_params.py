@@ -52,8 +52,18 @@ FilterString = Annotated[
 
 # --- Identifiers ----------------------------------------------------------------
 
-ContactId = Annotated[
+MONEYBIRD_ID_PATTERN = r"^[0-9]+$"
+
+MoneybirdId = Annotated[
     str,
+    Field(
+        min_length=1,
+        pattern=MONEYBIRD_ID_PATTERN,
+        description="Moneybird internal record id (ASCII digits only).",
+    ),
+]
+ContactId = Annotated[
+    MoneybirdId,
     Field(description="Moneybird contact id (long numeric string), e.g. from search_contacts."),
 ]
 CustomerId = Annotated[
@@ -61,16 +71,30 @@ CustomerId = Annotated[
     Field(description="The human-facing customer number of a contact (not the contact id)."),
 ]
 SalesInvoiceId = Annotated[
-    str,
+    MoneybirdId,
     Field(description="Moneybird sales invoice id (long numeric string)."),
 ]
 FinancialMutationId = Annotated[
-    str,
+    MoneybirdId,
     Field(description="Financial mutation (bank transaction) id, e.g. from list_financial_mutations."),
 ]
 FinancialAccountId = Annotated[
-    str,
+    MoneybirdId,
     Field(description="Financial account (bank account) id, e.g. from list_financial_accounts."),
+]
+SearchRecordId = Annotated[
+    str,
+    Field(
+        pattern=(
+            r"^(?:contact|sales_invoice|purchase_invoice|receipt|"
+            r"general_journal_document|financial_mutation|ledger_account|"
+            r"financial_account):[0-9]+$"
+        ),
+        description=(
+            "Prefixed search record id with an ASCII-numeric Moneybird id, "
+            "e.g. 'contact:123' or 'purchase_invoice:456'."
+        ),
+    ),
 ]
 ApprovalId = Annotated[
     str,
@@ -79,6 +103,23 @@ ApprovalId = Annotated[
             "The approval_id returned by the matching prepare_* tool. Call this only "
             "after showing the user the preview and receiving an explicit 'yes'."
         )
+    ),
+]
+
+# Generic paths are additionally checked against the exact GET-template
+# allowlist at runtime. This schema constraint filters URL-like and encoded path
+# inputs before a tool call where the MCP client honors JSON Schema patterns.
+GenericGetPath = Annotated[
+    str,
+    Field(
+        pattern=(
+            r"^(?:administrations|[a-z][a-z_]*(?:/"
+            r"(?:[a-z][a-z_]*|[0-9]+))*)(?:\.json)?$"
+        ),
+        description=(
+            "Allowlisted JSON GET route relative to the configured administration; "
+            "do not include an administration id, leading slash, or query string."
+        ),
     ),
 ]
 
@@ -122,15 +163,6 @@ LinkBookingType = Literal[
     "SalesInvoice",
     "Document",
     "LedgerAccount",
-    "PaymentTransactionBatch",
-    "PurchaseTransaction",
-    "NewPurchaseInvoice",
-    "NewReceipt",
-    "PaymentTransaction",
-    "PurchaseTransactionBatch",
-    "ExternalSalesInvoice",
-    "Payment",
-    "VatDocument",
 ]
 
 UnlinkBookingType = Literal["Payment", "LedgerAccountBooking"]

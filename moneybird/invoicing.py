@@ -29,17 +29,24 @@ from .formatting import (
     render_preview_table,
     year_period_for_date,
 )
+from .write_contracts import build_patch_precondition
 
 
 def parse_decimal_number(value: Any, *, label: str) -> Decimal:
     text = str(value).strip().replace("\u00a0", " ")
-    match = re.match(r"^[-+]?\d+(?:[.,]\d+)?", text)
+    # Accept one explicit decimal separator and nothing else. In particular,
+    # never reinterpret a currency suffix, grouping separator, or second dot by
+    # silently taking a numeric prefix.
+    match = re.fullmatch(r"[-+]?\d+(?:[.,]\d+)?", text)
     if not match:
         raise MoneybirdError(f"Invalid {label}: {value!r}.")
     try:
-        return Decimal(match.group(0).replace(",", "."))
+        result = Decimal(match.group(0).replace(",", "."))
     except InvalidOperation as exc:
         raise MoneybirdError(f"Invalid {label}: {value!r}.") from exc
+    if not result.is_finite():
+        raise MoneybirdError(f"Invalid {label}: {value!r}.")
+    return result
 
 def validate_general_journal_entries(entries: list[dict[str, Any]]) -> dict[str, Any]:
     if len(entries) < 2:
@@ -603,6 +610,8 @@ def build_meter_usage_entries(
         raise MoneybirdError("invoice_date is required.")
 
     threshold = parse_decimal_number(minimum_usage_kwh, label="minimum_usage_kwh")
+    if threshold < 0:
+        raise MoneybirdError("minimum_usage_kwh must be non-negative.")
     skip_set = {str(item).strip().casefold() for item in (skip_meters or [])}
     entries: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []
@@ -1226,6 +1235,8 @@ def build_batch_invoice_payload(
         supplied_percentage = raw_detail.get("tax_percentage")
         if supplied_percentage not in (None, ""):
             supplied = parse_decimal_number(supplied_percentage, label="tax_percentage")
+            if supplied < 0 or supplied > 100:
+                raise MoneybirdError("tax_percentage must be between 0 and 100.")
             if supplied != tax_percentage:
                 raise MoneybirdError(
                     f"tax_percentage {supplied} does not match tax_rate_id "
@@ -1637,6 +1648,14 @@ def prepare_reclassification_batch(
         )
 
     document_updates = list(prepared_updates.values())
+    for update in document_updates:
+        document = document_cache[
+            (update["document_kind"], update["document_id"])
+        ]
+        update["precondition"] = build_patch_precondition(
+            document,
+            {"details_attributes": update["details_attributes"]},
+        )
     payload = {
         "document_updates": document_updates,
         "general_journal_documents": journal_payloads,

@@ -6,6 +6,7 @@ from typing import Annotated, Any, Callable
 
 from pydantic import Field
 
+from ..capabilities import require_write_capability
 from ..config import (
     MoneybirdError,
     PREPARE_ANNOTATIONS,
@@ -17,6 +18,8 @@ from ..safety import (
     make_approval,
     peek_approval,
     pop_approval,
+    record_approval_phase,
+    record_approval_outcome,
 )
 from ..task_context import MoneybirdTaskContext
 from ._params import ApprovalId
@@ -259,6 +262,7 @@ def bookkeeping_correction_batch_from_approval(
 ) -> dict[str, Any]:
     """Execute one explicitly approved combined bookkeeping correction plan."""
     client = ctx.get_client()
+    require_write_capability(action="bookkeeping_correction_batch")
     pending = pop_approval(
         approval_id,
         "bookkeeping_correction_batch",
@@ -272,6 +276,11 @@ def bookkeeping_correction_batch_from_approval(
         fingerprint,
     ):
         _discard_children(children, client.administration_id)
+        record_approval_outcome(
+            approval_id,
+            "duplicate_suppressed",
+            administration_id=client.administration_id,
+        )
         raise MoneybirdError(
             "This combined bookkeeping correction already completed successfully "
             "according to the local audit log."
@@ -282,6 +291,12 @@ def bookkeeping_correction_batch_from_approval(
             _preflight_workflow_children(client, children)
     except Exception as exc:
         discarded = _discard_children(children, client.administration_id)
+        record_approval_outcome(
+            approval_id,
+            "failed_pre_write",
+            administration_id=client.administration_id,
+            error=str(exc),
+        )
         ctx.append_failed_audit_log(
             "bookkeeping_correction_batch",
             fingerprint=fingerprint,
@@ -292,6 +307,11 @@ def bookkeeping_correction_batch_from_approval(
 
     completed: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
+    record_approval_phase(
+        approval_id,
+        "dispatching",
+        administration_id=client.administration_id,
+    )
     for index, child in enumerate(children):
         executor = _WORKFLOW_EXECUTORS[child["action"]]
         try:
@@ -332,12 +352,23 @@ def bookkeeping_correction_batch_from_approval(
             )
             break
 
+    record_approval_phase(
+        approval_id,
+        "verifying",
+        administration_id=client.administration_id,
+    )
     fully_verified = not failures and len(completed) == len(children)
+    audit_result = "success" if fully_verified else "partial_failure"
+    record_approval_outcome(
+        approval_id,
+        audit_result,
+        administration_id=client.administration_id,
+    )
     ctx.append_audit_log(
         {
             "action": "bookkeeping_correction_batch",
             "fingerprint": fingerprint,
-            "result": "success" if fully_verified else "partial_failure",
+            "result": audit_result,
             "completed_count": len(completed),
             "failure_count": len(failures),
         }

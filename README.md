@@ -1,23 +1,25 @@
 # Moneybird MCP server
 
 Chat with your [Moneybird](https://www.moneybird.nl) bookkeeping from Claude, ChatGPT, or any
-other MCP client: read invoices, contacts, bank mutations, and reports; make changes only
-through a strict preview-and-approve flow. Nothing is ever written without your explicit
-"yes", and document totals are verified to the cent after every change.
+other MCP client: read invoices, contacts, bank mutations, and reports. The supported default
+is mechanically **read-only**. Experimental writes remain available for an explicitly
+supervised local deployment, behind a durable prepare/execute flow and action-specific
+verification.
 
 - **Read everything that matters**: contacts, sales and purchase invoices, receipts, bank
   mutations, and every Moneybird report (P&L, balance sheet, btw, aging, ...), plus ranked
   full-text search over a local sync index.
-- **Write safely**: every change is staged by a `prepare_*` tool that returns a preview and
-  an `approval_id`; only the matching `*_from_approval` tool executes it, verifies the result,
-  and appends to an audit log. Approvals survive server restarts.
+- **Writes are opt-in**: execution is denied unless the operator explicitly sets
+  `MONEYBIRD_CAPABILITY_MODE=write_enabled`. A `prepare_*` tool can stage a preview and
+  `approval_id`; execution atomically claims that request, records a typed outcome, and applies
+  action-specific checks. Approvals survive server restarts.
 - **Dutch bookkeeping smarts built in**: btw rules and categorization playbook, bank-mutation
   diagnosis, purchase-invoice reconciliation against a supplier's usual booking, meter-usage
   invoicing, and PDF attachment reading to check the real invoice split.
 
 Quick start for MCP clients: `pip install moneybird-mcp` and run the `moneybird-mcp` console
 script (stdio). See **Install and run** below for the Claude Desktop one-file extension and
-the HTTP/SSE deployment used with ChatGPT.
+the authenticated HTTP/SSE options. The package and Desktop extension start read-only.
 
 ## Tool surface
 
@@ -130,12 +132,17 @@ MONEYBIRD_ACCESS_TOKEN=mb_xxx
 MONEYBIRD_ADMINISTRATION_ID=123456789
 MCP_HOST=127.0.0.1
 MCP_PORT=8000
+# Safe local default.
+MCP_TRANSPORT=stdio
+MONEYBIRD_CREDENTIAL_MODE=local
+MONEYBIRD_CAPABILITY_MODE=read_only
+# Required for HTTP/SSE, including loopback.
 MCP_AUTH_TOKEN=
+# Set true only for a non-loopback listener behind a trusted TLS reverse proxy.
+MCP_TRUSTED_TLS_PROXY=false
 # Optional: where server state lives (approvals DB, audit logs, sync caches).
-# Defaults to the working directory; set an absolute path for real deployments.
+# Console script default: ~/.moneybird-mcp. Legacy clone entrypoint: working directory.
 MONEYBIRD_MCP_DATA_DIR=
-# Optional: "sse" (default, endpoint /sse) or "http" (streamable HTTP, endpoint /mcp).
-MCP_TRANSPORT=sse
 # Optional: "search" (default, compact on-demand Tool Search) or "full".
 MCP_TOOL_DISCOVERY=search
 # Optional: OAuth application credentials (register at
@@ -149,41 +156,43 @@ MONEYBIRD_OAUTH_CLIENT_SECRET=
 
 ### Network exposure & authentication
 
-- **`MCP_HOST` defaults to `127.0.0.1` (loopback only).** The cloudflared tunnel runs on the same host and connects to localhost, so this does **not** break tunnelling — it just stops the server from listening on every network interface. Only set `MCP_HOST=0.0.0.0` if you genuinely need to bind externally.
-- **`MCP_AUTH_TOKEN`** is an optional shared secret. When set, every request to the SSE endpoint must present it as either `Authorization: Bearer <token>` or `X-MCP-Token: <token>`; anything else gets `401 Unauthorized`. When unset, the endpoint is unauthenticated (acceptable only on loopback).
-- **Safety guard:** the server *refuses to start* if `MCP_HOST` is non-loopback while `MCP_AUTH_TOKEN` is unset — so you can't accidentally expose unauthenticated bookkeeping data to the network.
+- **Every HTTP/SSE listener requires `MCP_AUTH_TOKEN`, including loopback.** Each request must
+  present it as `Authorization: Bearer <token>` or `X-MCP-Token: <token>`; otherwise the server
+  returns `401 Unauthorized`.
+- **`MCP_HOST` defaults to `127.0.0.1`.** A non-loopback bind is refused unless
+  `MCP_TRUSTED_TLS_PROXY=true`. Set that flag only when a trusted reverse proxy really terminates
+  TLS before the plaintext application listener.
+- The shared secret is a coarse single-server gate, not per-user OAuth, authorization, or tenant
+  membership. Do not treat a public static-secret endpoint as a hosted multi-user product.
 
-### Multi-tenant: serving more than one administration
+### Credential and deployment modes
 
-The server resolves Moneybird credentials **per request**, so one running instance can serve
-several users/administrations:
+Credential resolution is deliberately mode-specific:
 
-1. **Per-request headers (multi-tenant):** a caller sends its own token on each request:
-   - `X-Moneybird-Token: <that user's Moneybird token>`
-   - `X-Moneybird-Administration-Id: <that user's administration id>` (optional; omit if the
-     token sees only one administration)
-2. **Environment (single-user / local):** if no token header is present, the server falls back
-   to `MONEYBIRD_ACCESS_TOKEN` / `MONEYBIRD_ADMINISTRATION_ID`. Existing single-user setups keep
-   working unchanged.
+| Mode | Where it runs | Moneybird identity | Limits |
+|---|---|---|---|
+| `local` | stdio only | request context, then environment, then local OAuth store | Default local mode |
+| `network_single_user` | authenticated HTTP/SSE | environment, then local OAuth store | Rejects all request tenant headers |
+| `hosted_request_only` | trusted gateway only | one nonblank gateway-injected request token/admin | Live reads only; no env/OAuth fallback, writes, durable sync/FTS, or PDF parsing |
 
-Notes and limits:
+`hosted_request_only` is containment for a future gateway, not a production-hosting claim. The
+trusted gateway must authenticate the caller, strip client-supplied Moneybird headers, and inject
+its own context. Exposing this mode directly would let an authenticated client choose its own
+Moneybird header and is unsupported.
 
-- **The Moneybird token is the tenant boundary.** Send it only over TLS (the cloudflared tunnel
-  provides it). `MCP_AUTH_TOKEN`, if set, is a coarse gate in front of the whole server; the
-  per-request Moneybird token is what scopes data to a tenant. The token is never logged.
-- **The sync cache is per administration** (`.moneybird_sync_index_<administration_id>.json`), so
-  tenants never overwrite each other's cache. A pre-existing single-file cache is migrated
-  automatically on first use.
-- **The audit log is also per administration** (`.moneybird_audit_log_<administration_id>.jsonl`),
-  and each entry records its `administration_id`. The duplicate-suppression check reads the
-  tenant's own log (and the legacy shared log for back-compat), so tenants never share a write
-  history.
-- **OAuth (authorization-code flow) is supported** as a third credential source, tried after
-  the header and the environment. One-time setup:
+Local and single-user notes:
+
+- Local sync JSON and FTS filenames are scoped by Moneybird administration id, but filenames are
+  not authorization. `search` revalidates current administration membership before reading them.
+  They are unencrypted local files with operator-managed retention.
+- Approvals and audit exports are administration-scoped, not principal/session/grant-scoped.
+  Different grants to the same administration are not isolated enough for hosting.
+- **OAuth (authorization-code flow) is supported** for `local` and
+  `network_single_user` when an environment token is absent. One-time setup:
   1. Register an application at `https://moneybird.com/user/applications/new` with redirect URI
      `urn:ietf:wg:oauth:2.0:oob` (out-of-band: Moneybird displays the code in the browser, so no
-     public callback endpoint is needed). For a hosted deployment, also register a stable HTTPS
-     callback such as `https://<your-host>/oauth/callback`.
+     public callback endpoint is needed). A future hosted service would instead need its own
+     fixed HTTPS callback, identity boundary, and durable OAuth-state design.
   2. Put the credentials in `.env`: `MONEYBIRD_OAUTH_CLIENT_ID` and
      `MONEYBIRD_OAUTH_CLIENT_SECRET`.
   3. Run `python scripts/oauth_login.py`, authorize in the browser, and paste the code. Tokens
@@ -192,11 +201,9 @@ Notes and limits:
      are refreshed automatically from then on. The requested scopes are
      `sales_invoices documents estimates bank time_entries settings`.
 
-  When `MONEYBIRD_ACCESS_TOKEN` is set it still wins over the OAuth store, so existing
-  personal-token setups behave exactly as before. Not yet included: a server-side *per-user*
-  token store keyed to inbound identity (a public multi-user product would put an OAuth consent
-  step in front and map each end user to their own Moneybird tokens; today the multi-tenant path
-  is the `X-Moneybird-Token` header).
+  When `MONEYBIRD_ACCESS_TOKEN` is set it wins over the local OAuth store. Hosted request mode
+  never consults either process-wide source. A production per-user identity/session/grant store
+  is not implemented.
 
 ## 3. Install and run
 
@@ -232,27 +239,35 @@ Double-clicking it (or Claude Desktop → Settings → Extensions → Install) i
 server with a settings form for the API token — no Python packaging knowledge needed
 by the end user. The bundle vendors all dependencies, so it is specific to the
 platform + Python minor version it was built on; the user's machine still needs a
-system Python ≥ 3.11 on PATH.
+system Python ≥ 3.11 on PATH. The bundle pins credential mode to `local`, and the
+settings form defaults capability mode to `read_only`. Entering `write_enabled`
+explicitly exposes the experimental supervised write surface; review each preview
+carefully, because the switch and an approval ID are not independent proof of human
+confirmation.
 
-### Option C — run from a clone as an HTTP server (the original deployment)
+### Option C — run from a clone as an authenticated HTTP server
 
 ```powershell
 python -m pip install -r requirements.txt
+$env:MCP_AUTH_TOKEN = "<long-random-secret>"
+$env:MONEYBIRD_CREDENTIAL_MODE = "network_single_user"
+$env:MCP_TRANSPORT = "http"
 python .\moneybird_mcp_server.py
 ```
 
-By default this exposes a (legacy) SSE endpoint at:
+This serves the current streamable-HTTP transport at:
 
 ```text
-http://localhost:8000/sse
+http://localhost:8000/mcp
 ```
 
-Set `MCP_TRANSPORT=http` to serve the current MCP streamable-HTTP transport at
-`http://localhost:8000/mcp` instead — prefer this for new clients; `sse` remains
-the default only so existing deployments keep working. The same is available via
-`moneybird-mcp --transport http` (add `--host`/`--port` as needed). The runnable entrypoints
-use compact Tool Search by default; add `--tool-discovery full` only for a client that needs
-every tool schema up front.
+Set `MCP_TRANSPORT=sse` only for a legacy client that still needs `/sse`. The same
+HTTP mode is available via `moneybird-mcp --transport http` (add `--host`/`--port`
+as needed). The runnable entrypoints use compact Tool Search by default; add
+`--tool-discovery full` only for a client that needs every tool schema up front.
+Both network transports refuse to start without `MCP_AUTH_TOKEN`; a non-loopback
+bind additionally requires a real trusted TLS proxy and
+`MCP_TRUSTED_TLS_PROXY=true`.
 
 ## Project layout
 
@@ -266,7 +281,8 @@ mcpb/                     # Claude Desktop extension: manifest + bundle entry sc
 moneybird/
   server.py               # shared entrypoint: stdio | http | sse (build_config + main)
   config.py               # constants, MoneybirdError, .env loading, data_dir()
-  credentials.py          # per-request tenant credentials (headers) + env fallback
+  credentials.py          # explicit local, network-single-user, hosted-request-only modes
+  capabilities.py         # read-only default + explicit local/single-user write opt-in
   client.py               # Moneybird REST client (pooled HTTP, retry/backoff)
   http_transport.py       # process-wide keep-alive pool; no default tenant credentials
   task_context.py         # per-tool cache + batch loading for known record ids
@@ -275,6 +291,7 @@ moneybird/
   tool_discovery.py       # compact BM25 Tool Search profile
   formatting.py           # pure helpers: titles, money, search-record shaping
   safety.py               # write guards: durable approvals (SQLite) + audit log
+  write_contracts.py      # versioned contracts for every approval-backed action
   sync.py                 # bounded-parallel, atomic local search-index sync
   invoicing.py            # bookkeeping logic: journals, invoices, merge/reclassify
   tools/                  # MCP tools, split by domain
@@ -296,7 +313,7 @@ moneybird/
   guidance.py             # the "skill" layer: playbook resource + scenario prompts
   playbooks/
     boekhoud_playbook.md  # deep bookkeeping reference (loaded on demand)
-  auth.py                 # optional shared-secret auth middleware
+  auth.py                 # required shared-secret auth middleware for HTTP/SSE
 docs/
   moneybird_api_coverage.md  # all 296 API operations + per-endpoint coverage status
   moneybird_api_paths.json   # slim OpenAPI snapshot backing the conformance test
@@ -311,10 +328,15 @@ cannot create an import cycle.
 
 Every guarded write follows the same discipline via `tools/_writes.py`: a
 `prepare_*` tool validates, builds a preview, and calls `stage_write(...)`; the
-matching `*_from_approval` tool calls `run_approved_write(...)`, which pops the
-stored approval, enforces the duplicate-suppression fingerprint, executes, and
-audit-logs success or failure in one place. Executors can explicitly mark a
-verified partial failure so it is never recorded as a successful duplicate.
+matching `*_from_approval` tool calls `run_approved_write(...)`, which first enforces the
+deployment capability, atomically claims the stored approval, applies duplicate suppression
+when that action has a nonempty fingerprint, executes, and records an explicit outcome.
+Executors can mark partial, verification-failed, ambiguous, or failed work so it is never
+recorded as successful duplicate evidence.
+`write_contracts.py` is the fail-closed registry for every approval action. The
+generic dispatcher refuses to load if an executor lacks a versioned declaration,
+and shared comparison helpers verify every caller-controlled header/line field
+rather than relying on record counts or totals alone.
 Adding a new write means writing a prepare function and an executor — the safety
 plumbing comes for free. A few
 multi-step batch flows (batch invoices, meter usage, reclassify, bulk delivery
@@ -322,6 +344,12 @@ method) keep hand-rolled executors because they record partial progress on failu
 Clients may always call `execute_approved_action(approval_id)` after confirmation; it
 reads the exact stored action and delegates to the existing action-specific executor, without
 weakening single-use, expiry, tenant, fingerprint, or audit checks.
+
+This flow is durable write-safety machinery, not an independent confirmation authority. The
+same model-visible channel receives the `approval_id` and can call the executor. Use
+`write_enabled` only in a supervised local or authenticated single-user deployment whose MCP
+client supplies the human-confirmation boundary. Hosted request mode refuses every write even
+if the process environment says `write_enabled`.
 
 For a task that combines purchase-invoice reconciliation and bank-booking
 reclassification, `prepare_bookkeeping_correction_batch` stages the existing guarded child
@@ -338,15 +366,16 @@ not sufficient for success.
 - `MoneybirdTaskContext` caches reference data only for one tool invocation and batch-loads
   known document/invoice/mutation ids in groups of at most 100. The bank-reclassification
   prepare+execute path for `N <= 100` uses approximately `5 + 2N` API calls instead of
-  `2 + 6N`, including an independent final verification.
+  `2 + 6N`, including a separate final readback verification.
 - The six versioned sync feeds run with at most three workers. A per-administration lock and
   atomic file replacement protect the JSON cache. `updated_at` records freshness;
   `content_updated_at` changes only when records change, so a no-change refresh does not rebuild
   SQLite FTS.
 - Local bounded telemetry records normalized endpoints, durations, retries, status classes and
   tool call totals. It never records tokens, query parameters, request/response bodies, or raw
-  numeric record ids. Metrics are isolated by an opaque credential scope, so
-  `get_server_status` only returns activity belonging to the caller's Moneybird tenant.
+  numeric record ids. Metrics are grouped by a truncated token-derived pseudonymous scope, so
+  `get_server_status` filters to the active credential. That label is not a tenant identity or
+  authorization boundary.
 
 On the live development administration (2026-07-29), a no-change sync improved from 4.21 s to
 about 0.69–0.86 s (latest repeat: 0.71 s), repeated pooled GETs after connection setup took
@@ -358,11 +387,19 @@ guarantees.
 ### Durable approvals & server state
 
 Approvals are stored in SQLite (`moneybird_approvals.sqlite3`), so a prepared write
-survives a server restart and works across multiple worker processes. All server
-state (approvals DB, per-administration audit logs, sync caches) lives in
-`MONEYBIRD_MCP_DATA_DIR` (default: the working directory, for backward
-compatibility); legacy state files in the working directory are still read and
-migrated transparently.
+survives a server restart and works across multiple worker processes. Durable local
+state (approvals DB, per-administration audit logs, sync/FTS caches, local OAuth tokens) lives in
+`MONEYBIRD_MCP_DATA_DIR`. The installed console script defaults it to
+`~/.moneybird-mcp`; the legacy clone entrypoint keeps the working-directory default.
+Legacy state files in the working directory are still read and migrated where
+explicitly supported. Pending approvals expire after 15 minutes. Claimed,
+partial, verification-failed, and ambiguous outcomes remain durable for operator reconciliation;
+there is no automatic hosted reconciliation service.
+
+For local incident recovery, `scripts/reconcile_execution.py` lists and inspects
+unresolved rows and accepts only an evidence-bearing `proven_absent`,
+`succeeded_verified`, or `manual_review` decision. It is deliberately an operator
+CLI—not an MCP tool—and requires the approval ID to be repeated before resolution.
 
 ## 4. Connect it to ChatGPT
 
@@ -373,24 +410,29 @@ Relevant OpenAI docs:
 - `https://developers.openai.com/api/docs/mcp`
 - `https://platform.openai.com/docs/guides/developer-mode`
 
-To use this in ChatGPT:
+To use an authenticated self-hosted network endpoint in an MCP client:
 
 1. Enable ChatGPT Developer Mode in ChatGPT settings.
-2. Make the MCP server reachable over the internet.
-3. Add the public `/sse` URL as your MCP server in ChatGPT Apps or Connectors.
+2. Put the server behind trusted HTTPS and configure a long random `MCP_AUTH_TOKEN`.
+3. Confirm that the client can send that bearer credential, then add the public `/mcp` URL.
 
-For local testing, a tunnel is the quickest approach. Example with `cloudflared`:
+For local testing, a tunnel can terminate TLS while the server remains on loopback:
 
 ```powershell
 cloudflared tunnel --url http://localhost:8000
 ```
 
-Then use the public URL ending in `/sse`.
+Then use the public URL ending in `/mcp` and configure the bearer secret in the client. A tunnel
+does not turn the static-secret, single-user server into a production hosted service. Client
+authentication capabilities change over time; verify them against the current client
+documentation before exposing the endpoint.
 
 ## 5. What the tools do
 
 - `get_server_status(recent_tools=20)`: returns local, privacy-safe API/tool latency, call-count, retry, and error aggregates; it makes no Moneybird API call.
-- `search(query, limit=8)`: searches contacts, sales invoices, purchase invoices, receipts, general journals, and financial mutations.
+- `search(query, limit=8)`: searches contacts, sales invoices, purchase invoices, receipts,
+  general journals, and financial mutations. Local/single-user mode can use the sync/FTS cache;
+  hosted request mode always uses a partial live scan.
 - `fetch(id)`: fetches the full JSON for `contact:<id>`, `sales_invoice:<id>`, `purchase_invoice:<id>`, `receipt:<id>`, `general_journal_document:<id>`, `financial_mutation:<id>`, `ledger_account:<id>`, or `financial_account:<id>`.
 - `list_contacts(limit=10, page=1)`: compact contact overview.
 - `audit_invoice_delivery_settings(include_archived_contacts=False, include_inactive_recurring=False)`: controleert of contacten op verzendmethode `Email` staan, of er factuur-e-mailadressen ontbreken, en of periodieke facturen risico lopen door `auto_send`/verzendmethode/e-mailinstellingen.
@@ -400,7 +442,7 @@ Then use the public URL ending in `/sse`.
 - `get_purchase_invoice_by_reference(reference)`: resolves an exact supplier invoice number directly through Moneybird's purchase-document filter and returns its current lines with ledger/tax names, attachments, payments, and version; use this instead of broad `search` when the user names an inkoopfactuur.
 - `list_receipts(limit=10, page=1, filter="", period="")`: compact bonnen-/overige uitgavenoverzicht.
 - `list_general_journal_documents(limit=10, page=1, filter="", period="")`: compact memoriaaloverzicht.
-- `read_document_attachment(document_id, attachment_id="", kind="purchase_invoice")`: downloads the (PDF) attachment behind a purchase invoice, receipt, or general journal document, saves it under the data dir, and returns the PDF text layer (requires the `pdf` extra: `pip install 'moneybird-mcp[pdf]'`) — so the real per-line amounts can be read off the actual invoice instead of assumed.
+- `read_document_attachment(document_id, attachment_id="", kind="purchase_invoice")`: in local or authenticated single-user mode, downloads the PDF behind a purchase invoice, receipt, or general journal document into bounded memory, retains no file, and parses it in a disposable worker with a 10-second timeout and 256 MiB process-memory cap. It returns at most 40,000 characters from at most 100 pages (20 MiB download cap; requires `pip install 'moneybird-mcp[pdf]'`). Returned text is marked untrusted. Hosted request mode still refuses parsing until durable capacity, backpressure, abuse, and lifecycle controls exist.
 - `review_purchase_invoices(period="", limit=100, contact_id="", kind="purchase_invoice")`: finds purchase invoices that need attention — still `new`, booked with fewer lines than the supplier usually gets, missing ledger accounts, a flipped incl/excl-btw flag, or a familiar line description mapped to a different ledger/tax destination. A contact-specific review uses the complete versioned document synchronization feed (paginated list fallback) so older supplier history is not lost after the first page or current-book-year default.
 - `list_financial_mutations(limit=10, page=1, filter="", period="")`: compact bank- en kasmutatieoverzicht.
 - `list_administrations()`: useful during setup if the token can access multiple administrations.
@@ -413,12 +455,12 @@ Then use the public URL ending in `/sse`.
 - `list_time_entries(limit=25, page=1, filter="", period="")`: lists logged hours; `filter` accepts Moneybird query syntax (e.g. `contact_id:123`, `project_id:456`, `state:open`), `period` accepts e.g. `202506` or `20250101..20250331`.
 - `list_estimates(limit=10, page=1, filter="", period="")`: compact offerteoverzicht; `filter` accepts e.g. `state:open|late|accepted|rejected|billed`.
 - `list_recurring_sales_invoices(limit=10, page=1, filter="")`: compact overzicht van periodieke facturen (frequentie, volgende factuurdatum, `auto_send`).
-- `moneybird_request(path, query=None)`: read-only escape hatch that performs a single GET against any Moneybird endpoint this server does not wrap explicitly (e.g. `estimates`, `subscriptions`, `time_entries/123`, `documents/purchase_invoices`). `path` is relative to the administration; use `administrations` for the API root. It can only read — use the `prepare_*` / `*_from_approval` tools to change anything.
+- `moneybird_request(path, query=None)`: read-only escape hatch that performs one JSON GET against a finite allowlist generated from the vendored Moneybird OpenAPI routes (e.g. `estimates`, `subscriptions`, `time_entries/123`, `documents/purchase_invoices`). `path` is relative to the administration; use `administrations` for the API root. Binary downloads, unknown paths, writes, traversal, and another administration's paths are refused.
 - `get_profit_loss(period)`: reads the Moneybird profit and loss report for the requested period.
 - `get_balance_sheet(period)`: reads the Moneybird balance sheet report for the requested period.
 - `get_general_ledger(period)`: reads the Moneybird general ledger report for the requested period.
 - `get_financial_report(report_name, period, page=0)`: reads any Moneybird report — `profit_loss`, `balance_sheet`, `general_ledger`, `cash_flow`, `tax` (btw), `debtors` / `creditors` (openstaande posten), `debtors_aging` / `creditors_aging`, `revenue_by_contact`, `revenue_by_project`, `expenses_by_contact`, `expenses_by_project`, `journal_entries`, `subscriptions`, `assets`. Note: `cash_flow`, `tax`, `debtors`, and `creditors` accept at most one month of period (`this_month`, `202606`); the aging reports take a whole month as reference date.
-- `sync_search_index(invoice_filter="state:all,period:this_year", document_filter="period:this_year", financial_mutation_filter="period:this_year", force_full=False)`: builds or refreshes a local cached search index from Moneybird synchronization endpoints across contacts, sales invoices, purchase invoices, receipts, general journals, and financial mutations. `search` queries it through a derived SQLite FTS5 index (multi-word, any order, prefix matching, bm25 ranking; rebuilt automatically when the sync index changes), with a substring scan and finally a live API scan as fallbacks.
+- `sync_search_index(invoice_filter="state:all,period:this_year", document_filter="period:this_year", financial_mutation_filter="period:this_year", force_full=False)`: in local/single-user mode, builds or refreshes a local cached search index from Moneybird synchronization endpoints across contacts, sales invoices, purchase invoices, receipts, general journals, and financial mutations. `search` queries it through a derived SQLite FTS5 index, with substring and live API fallbacks. Hosted request mode rejects this tool because its durable artifacts are not yet principal/grant-bound.
 - `search_contacts(query, limit=10)`: contact lookup by partial customer id, e-mail, phone, city, or company/person name.
 - `get_invoice_defaults_for_contact(contact_id="", customer_id="")`: reads the latest invoice defaults for a contact so new invoices can inherit the right workflow, style, identity, tax, ledger, and send settings.
 - `prepare_create_ledger_account(...)`: stages a ledger account create and returns an `approval_id`.
@@ -473,9 +515,9 @@ The tools are the hands; this layer is the craft, so someone else's AI client ca
 overdue bookkeeping, categorize a year, or read the reports without re-deriving the rules.
 It uses progressive disclosure rather than one giant always-on instruction:
 
-- **Always-on, thin** — the hard rails live in the server `instructions` (no write without
-  explicit approval, never invent data, verify totals, propose when unsure, you are not a
-  tax advisor).
+- **Always-on, thin** — the behavioral rules live in the server `instructions` (ask before
+  executing, never invent data, apply the relevant verifier, propose when unsure, you are not a
+  tax advisor). Instructions guide the model; the mechanical boundary is the capability policy.
 - **Scenarios (MCP prompts)** — invokable, parameterized playbooks that carry the rails
   inline and point at the reference:
   - `aan_de_slag()` — first-run onboarding: explains what the assistant can do, shows the
@@ -502,16 +544,23 @@ It uses progressive disclosure rather than one giant always-on instruction:
 
 ## 6. Approval behavior
 
-There are two layers of protection here:
+There are three distinct layers:
 
-1. The server marks real write tools as destructive with MCP tool annotations.
-2. The server itself uses a two-step write flow:
+1. The process defaults to `MONEYBIRD_CAPABILITY_MODE=read_only`; all MCP write executors deny
+   mutation. `hosted_request_only` refuses writes unconditionally.
+2. The server marks real write tools as destructive with MCP tool annotations.
+3. An opted-in local/single-user server uses a durable two-step write flow:
    `prepare_*` only stages the action.
    `execute_approved_action` (or the matching `*_from_approval`) performs the Moneybird write.
 
-This is the important limitation: MCP tool annotations are only hints. They improve how ChatGPT or other MCP clients treat the tools, but they do not by themselves guarantee a human approval step.
+Capability denial is application enforcement. Tool annotations and the prepare/execute sequence
+do **not** independently prove a human approved: the same model-visible channel receives the
+`approval_id` and can call the executor. A trusted MCP client UI may add a real confirmation
+boundary, but this repository does not mint or verify that receipt.
 
-If you are connecting this server through the OpenAI Responses API, the current OpenAI MCP docs say approvals are the actual enforcement point. Keep approvals enabled for destructive tools by using `require_approval: "always"` or only exempting clearly safe read tools.
+If an MCP client offers tool confirmation, keep it enabled for every destructive tool in
+addition to the server's default read-only policy. Treat client approval behavior as a separate,
+version-specific control and verify it against that client's current documentation.
 
 Relevant OpenAI docs:
 
@@ -520,18 +569,23 @@ Relevant OpenAI docs:
 
 ## 7. Notes and limits
 
-- This scaffold is intentionally conservative on writes.
+- The supported default is read-only. Experimental writes require the explicit
+  `MONEYBIRD_CAPABILITY_MODE=write_enabled` process opt-in and remain limited to supervised local
+  or authenticated single-user operation.
 - It now supports contact create/update/archive, ledger account creation, general journal creation, purchase-document reclassification, sales invoice draft creation, and explicit send/schedule as approval-gated actions.
-- It now also supports previewed batch invoice creation, batch scheduling with verification,
+- It now also supports previewed batch invoice creation, batch scheduling with action-specific checks,
   a first-class meter-usage invoice run, duplicate warnings, automatic merge checks for
   scheduled sends, workflow pause/resume, and batch invoice updates.
 - It also supports the daily-bookkeeping writes: payment registration on sales/purchase
   invoices and receipts, linking/unlinking bank mutations to invoices, documents, or ledger
   categories (manual bank reconciliation), and duplicating an invoice to a draft credit
-  invoice — all approval-gated with automatic post-write verification.
+  invoice. These flows use their implemented action-specific postcondition checks and closed
+  outcomes; they do not provide an independent guarantee of bookkeeping correctness.
 - When a new invoice is scheduled for a contact/date that already has exactly one scheduled invoice, the server automatically reuses that invoice's workflow/style/identity defaults before showing the approval preview.
 - `search` uses a local synchronization cache when available and falls back to a live first-page scan when no cache exists yet.
-- The sync cache now covers contacts, sales invoices, purchase invoices, receipts, general journal documents, and financial mutations.
+- Local/single-user sync caches cover contacts, sales invoices, purchase invoices, receipts,
+  general journal documents, and financial mutations. Hosted request mode is live-read-only:
+  it neither reads nor builds durable JSON/FTS caches.
 - The HTTP client retries transient `429` and `5xx` responses with backoff, which makes multi-step bookkeeping runs much less fragile.
 - The HTTP client reuses keep-alive connections, task-local loaders batch known ids, and
   versioned sync feeds run with bounded parallelism. Compact Tool Search is the default to avoid
@@ -539,7 +593,9 @@ Relevant OpenAI docs:
 - The sync cache is stored locally and should not be committed.
 - Successful write actions are appended to a per-administration JSONL audit log at `.moneybird_audit_log_<administration_id>.jsonl` (falling back to `.moneybird_audit_log.jsonl` when no administration is set).
 - Failed multi-step writes now also append a failure entry with partial progress, which helps with recovery after interrupted bookkeeping runs.
-- OpenAI’s current MCP docs explicitly warn that prompt injection and accidental writes are real risks. Do not disable approvals for destructive tools unless you truly trust the full prompt chain and the server.
+- Moneybird fields and PDF text are untrusted model input. Prompt injection can influence model
+  behavior; keep the mechanical capability policy read-only unless an explicitly supervised
+  local/single-user workflow accepts that residual risk.
 - **Boekingsregels (bank/transaction rules) are not exposed by the Moneybird API**, so the server cannot read or change them. To explain why a bank mutation was not auto-processed, the `diagnose_bankmutatie` prompt and playbook recipe E infer rule behavior from the financial-mutation fields and `created_at`/`processed_at` timing, and point the user to Moneybird's own Boekingsregels settings.
 - `list_financial_mutations` returns HTTP 400 ("too many ... use sync API") for a wide period; query per month (`period:"JJJJMM01..JJJJMMnn"`) or use the sync index.
 - The `cash_flow`, `tax`, `debtors`, and `creditors` reports accept at most one month of period; the `*_aging` reports require a whole month as reference date (verified live: `{"error":"Period cannot exceed 1 month"}`).

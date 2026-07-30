@@ -30,6 +30,12 @@ from ..invoicing import (
     list_scheduled_merge_candidates,
     resolve_contact_reference,
 )
+from ..write_contracts import (
+    SALES_INVOICE_LINE_DECIMALS,
+    SALES_INVOICE_LINE_FIELDS,
+    compare_controlled_rows,
+    verify_sales_invoice_payload,
+)
 from ._params import (
     ApprovalId,
     ContactId,
@@ -41,8 +47,32 @@ from ._params import (
     SalesInvoiceId,
 )
 from ._registry import mcp
-from ._writes import run_approved_write, stage_write
+from ._writes import (
+    mark_write_dispatch_started,
+    mark_write_verifying,
+    run_approved_write,
+    stage_write,
+)
 from . import _context as ctx
+
+
+def _invoice_precondition_snapshot(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: record.get(key)
+        for key in ("version", "updated_at", "state", "paused", "invoice_date")
+        if record.get(key) is not None
+    }
+
+
+def _changed_invoice_preconditions(
+    record: dict[str, Any],
+    expected: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    return {
+        key: {"expected": value, "actual": record.get(key)}
+        for key, value in expected.items()
+        if str(record.get(key) or "") != str(value or "")
+    }
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
@@ -217,6 +247,8 @@ def prepare_create_sales_invoice_draft(
                     "amount": detail.get("amount", "1"),
                     "tax_rate_id": detail.get("tax_rate_id"),
                     "ledger_account_id": detail.get("ledger_account_id"),
+                    "product_id": detail.get("product_id"),
+                    "period": detail.get("period"),
                 }
             )
         )
@@ -244,14 +276,30 @@ def prepare_create_sales_invoice_draft(
 
 def _execute_create_sales_invoice_draft(client, payload: dict[str, Any]) -> dict[str, Any]:
     invoice = {key: value for key, value in payload.items() if key != "fingerprint"}
-    record = client.create_sales_invoice(invoice)
-    record_id = str(record.get("id"))
+    mark_write_dispatch_started()
+    created = client.create_sales_invoice(invoice)
+    record_id = str(created.get("id") or "")
+    if not record_id:
+        raise MoneybirdError(
+            "Moneybird did not return a sales invoice id; reconcile before retrying."
+        )
+    mark_write_verifying()
+    record = client.get_sales_invoice(record_id)
+    verification = verify_sales_invoice_payload(invoice, record)
+    record_id_matches = str(record.get("id") or "") == record_id
+    fully_verified = record_id_matches and verification["fully_verified"]
     return {
-        "_status": "created",
+        "_status": (
+            "created" if fully_verified else "completed_with_verification_errors"
+        ),
+        "_audit_result": (
+            "success" if fully_verified else "verification_failed"
+        ),
         "_audit": {
             "sales_invoice_id": record_id,
             "contact_id": record.get("contact_id"),
             "reference": record.get("reference"),
+            "fully_verified": fully_verified,
         },
         "sales_invoice": {
             "id": record_id,
@@ -261,6 +309,11 @@ def _execute_create_sales_invoice_draft(client, payload: dict[str, Any]) -> dict
             "reference": record.get("reference"),
             "total_price_incl_tax": record.get("total_price_incl_tax"),
             "url": api_url("sales_invoices", record_id, client.administration_id),
+        },
+        "verification": {
+            "independent_post_read": True,
+            "record_id_matches": record_id_matches,
+            **verification,
         },
     }
 
@@ -314,6 +367,7 @@ def prepare_send_sales_invoice(
         payload={
             "sales_invoice_id": sales_invoice_id,
             "sales_invoice_sending": payload,
+            "expected_record": _invoice_precondition_snapshot(record),
         },
         preview={
             "sales_invoice_id": sales_invoice_id,
@@ -344,17 +398,66 @@ def prepare_send_sales_invoice(
 
 
 def _execute_send_sales_invoice(client, payload: dict[str, Any]) -> dict[str, Any]:
-    record = client.send_sales_invoice(
-        payload["sales_invoice_id"],
+    sales_invoice_id = payload["sales_invoice_id"]
+    before = client.get_sales_invoice(sales_invoice_id)
+    changed_preconditions = _changed_invoice_preconditions(
+        before,
+        payload.get("expected_record") or {},
+    )
+    if str(before.get("id") or "") != str(sales_invoice_id):
+        changed_preconditions["id"] = {
+            "expected": sales_invoice_id,
+            "actual": before.get("id"),
+        }
+    if changed_preconditions:
+        return {
+            "_status": "precondition_failed",
+            "_audit_result": "failed_pre_write",
+            "_audit": {
+                "sales_invoice_id": sales_invoice_id,
+                "precondition_failed": True,
+            },
+            "verification": {
+                "write_dispatched": False,
+                "changed_preconditions": changed_preconditions,
+            },
+        }
+
+    mark_write_dispatch_started()
+    client.send_sales_invoice(
+        sales_invoice_id,
         payload["sales_invoice_sending"],
     )
-    record_id = str(record.get("id"))
+    mark_write_verifying()
+    record = client.get_sales_invoice(sales_invoice_id)
+    record_id = str(record.get("id") or "")
+    sending = payload["sales_invoice_sending"]
+    if sending.get("sending_scheduled"):
+        fully_verified = (
+            record_id == str(sales_invoice_id)
+            and str(record.get("state") or "") == "scheduled"
+            and str(record.get("invoice_date") or "")
+            == str(sending.get("invoice_date") or "")
+        )
+    else:
+        fully_verified = record_id == str(sales_invoice_id) and (
+            bool(record.get("sent_at"))
+            or str(record.get("state") or "") not in {"", "draft"}
+        )
     return {
-        "_status": "sent_or_scheduled",
+        "_status": (
+            "sent_or_scheduled"
+            if fully_verified
+            else "completed_with_verification_errors"
+        ),
+        "_audit_result": (
+            "success" if fully_verified else "verification_failed"
+        ),
         "_audit": {
             "sales_invoice_id": record_id,
             "state": record.get("state"),
             "invoice_date": record.get("invoice_date"),
+            "fully_verified": fully_verified,
         },
         "sales_invoice": {
             "id": record_id,
@@ -363,6 +466,12 @@ def _execute_send_sales_invoice(client, payload: dict[str, Any]) -> dict[str, An
             "invoice_date": record.get("invoice_date"),
             "sent_at": record.get("sent_at"),
             "url": api_url("sales_invoices", record_id, client.administration_id),
+        },
+        "verification": {
+            "independent_post_read": True,
+            "sending_scheduled": bool(sending.get("sending_scheduled")),
+            "record_id_matches": record_id == str(sales_invoice_id),
+            "fully_verified": fully_verified,
         },
     }
 
@@ -384,19 +493,37 @@ def prepare_pause_sales_invoice_workflow(sales_invoice_id: SalesInvoiceId) -> di
     return stage_write(
         "pause_sales_invoice_workflow",
         summary=f"Pause workflow for sales invoice {record.get('invoice_id') or record.get('id')}",
-        payload={"sales_invoice_id": sales_invoice_id},
+        payload={
+            "sales_invoice_id": sales_invoice_id,
+            "expected_record": _invoice_precondition_snapshot(record),
+        },
         preview={"sales_invoice_id": sales_invoice_id, "state": record.get("state")},
     )
 
 
-def _workflow_state_result(client, record: dict[str, Any], status: str) -> dict[str, Any]:
-    record_id = str(record.get("id"))
+def _workflow_state_result(
+    client,
+    record: dict[str, Any],
+    status: str,
+    *,
+    expected_record_id: str,
+) -> dict[str, Any]:
+    record_id = str(record.get("id") or "")
+    expected_paused = status == "paused"
+    record_id_matches = record_id == str(expected_record_id)
+    fully_verified = (
+        record_id_matches and record.get("paused") is expected_paused
+    )
     return {
-        "_status": status,
+        "_status": status if fully_verified else "completed_with_verification_errors",
+        "_audit_result": (
+            "success" if fully_verified else "verification_failed"
+        ),
         "_audit": {
             "sales_invoice_id": record_id,
             "state": record.get("state"),
             "paused": record.get("paused"),
+            "fully_verified": fully_verified,
         },
         "sales_invoice": {
             "id": record_id,
@@ -405,7 +532,61 @@ def _workflow_state_result(client, record: dict[str, Any], status: str) -> dict[
             "paused": record.get("paused"),
             "url": api_url("sales_invoices", record_id, client.administration_id),
         },
+        "verification": {
+            "independent_post_read": True,
+            "expected_paused": expected_paused,
+            "record_id_matches": record_id_matches,
+            "paused_matches": record.get("paused") is expected_paused,
+        },
     }
+
+
+def _execute_workflow_state_change(
+    client,
+    payload: dict[str, Any],
+    *,
+    pause: bool,
+) -> dict[str, Any]:
+    sales_invoice_id = payload["sales_invoice_id"]
+    before = client.get_sales_invoice(sales_invoice_id)
+    changed_preconditions = _changed_invoice_preconditions(
+        before,
+        payload.get("expected_record") or {},
+    )
+    if str(before.get("id") or "") != str(sales_invoice_id):
+        changed_preconditions["id"] = {
+            "expected": sales_invoice_id,
+            "actual": before.get("id"),
+        }
+    if changed_preconditions:
+        return {
+            "_status": "precondition_failed",
+            "_audit_result": "failed_pre_write",
+            "_audit": {
+                "sales_invoice_id": sales_invoice_id,
+                "precondition_failed": True,
+            },
+            "verification": {
+                "write_dispatched": False,
+                "changed_preconditions": changed_preconditions,
+            },
+        }
+    if pause:
+        mark_write_dispatch_started()
+        client.pause_sales_invoice(sales_invoice_id)
+        status = "paused"
+    else:
+        mark_write_dispatch_started()
+        client.resume_sales_invoice(sales_invoice_id)
+        status = "resumed"
+    mark_write_verifying()
+    after = client.get_sales_invoice(sales_invoice_id)
+    return _workflow_state_result(
+        client,
+        after,
+        status,
+        expected_record_id=sales_invoice_id,
+    )
 
 
 @mcp.tool(annotations=WRITE_ANNOTATIONS)
@@ -416,8 +597,10 @@ def pause_sales_invoice_workflow_from_approval(approval_id: ApprovalId) -> dict[
         client,
         approval_id,
         "pause_sales_invoice_workflow",
-        lambda client, payload: _workflow_state_result(
-            client, client.pause_sales_invoice(payload["sales_invoice_id"]), "paused"
+        lambda client, payload: _execute_workflow_state_change(
+            client,
+            payload,
+            pause=True,
         ),
     )
 
@@ -430,7 +613,10 @@ def prepare_resume_sales_invoice_workflow(sales_invoice_id: SalesInvoiceId) -> d
     return stage_write(
         "resume_sales_invoice_workflow",
         summary=f"Resume workflow for sales invoice {record.get('invoice_id') or record.get('id')}",
-        payload={"sales_invoice_id": sales_invoice_id},
+        payload={
+            "sales_invoice_id": sales_invoice_id,
+            "expected_record": _invoice_precondition_snapshot(record),
+        },
         preview={"sales_invoice_id": sales_invoice_id, "state": record.get("state")},
     )
 
@@ -443,8 +629,10 @@ def resume_sales_invoice_workflow_from_approval(approval_id: ApprovalId) -> dict
         client,
         approval_id,
         "resume_sales_invoice_workflow",
-        lambda client, payload: _workflow_state_result(
-            client, client.resume_sales_invoice(payload["sales_invoice_id"]), "resumed"
+        lambda client, payload: _execute_workflow_state_change(
+            client,
+            payload,
+            pause=False,
         ),
     )
 
@@ -457,12 +645,45 @@ def prepare_create_credit_invoice(sales_invoice_id: SalesInvoiceId) -> dict[str,
     write until the user explicitly confirms."""
     client = ctx.get_client()
     record = client.get_sales_invoice(sales_invoice_id)
+    original_details = [
+        clean_dict(
+            {
+                key: detail.get(key)
+                for key in SALES_INVOICE_LINE_FIELDS
+                if key != "id"
+            }
+        )
+        for detail in record.get("details") or []
+    ]
+    expected_credit_details: list[dict[str, Any]] = []
+    for detail in original_details:
+        expected = dict(detail)
+        if "price" in expected:
+            expected["price"] = str(-money_decimal(expected["price"]))
+        expected_credit_details.append(expected)
+    original_contact_id = str(
+        record.get("contact_id") or (record.get("contact") or {}).get("id") or ""
+    )
     return stage_write(
         "create_credit_invoice",
         summary=f"Create draft credit invoice for {invoice_title(record)}",
         payload={
             "sales_invoice_id": str(sales_invoice_id),
             "total_original": str(record.get("total_price_incl_tax") or "0"),
+            "expected_original": {
+                **_invoice_precondition_snapshot(record),
+                "total_price_incl_tax": str(
+                    record.get("total_price_incl_tax") or "0"
+                ),
+                "details": original_details,
+            },
+            "expected_credit_invoice": clean_dict(
+                {
+                    "contact_id": original_contact_id,
+                    "currency": record.get("currency"),
+                    "details_attributes": expected_credit_details,
+                }
+            ),
         },
         preview={
             "original_invoice": {
@@ -483,22 +704,79 @@ def prepare_create_credit_invoice(sales_invoice_id: SalesInvoiceId) -> dict[str,
         },
         fingerprint=duplicate_fingerprint(
             "create_credit_invoice",
-            {"sales_invoice_id": str(sales_invoice_id), "date": iso_now()[:10]},
+            {
+                "sales_invoice_id": str(sales_invoice_id),
+                "original_occurrence": _invoice_precondition_snapshot(record),
+            },
         ),
     )
 
 
 def _execute_create_credit_invoice(client, payload: dict[str, Any]) -> dict[str, Any]:
-    record = client.duplicate_sales_invoice_to_credit_invoice(
+    original = client.get_sales_invoice(payload["sales_invoice_id"])
+    expected_original = payload.get("expected_original") or {}
+    changed_original = {
+        key: {"expected": value, "actual": original.get(key)}
+        for key, value in expected_original.items()
+        if key != "details"
+        and (
+            money_decimal(original.get(key) or 0) != money_decimal(value or 0)
+            if key == "total_price_incl_tax"
+            else str(original.get(key) or "") != str(value or "")
+        )
+    }
+    original_line_mismatches = compare_controlled_rows(
+        expected_original.get("details"),
+        original.get("details"),
+        fields=SALES_INVOICE_LINE_FIELDS,
+        decimal_fields=SALES_INVOICE_LINE_DECIMALS,
+    )
+    if str(original.get("id") or "") != str(payload["sales_invoice_id"]):
+        changed_original["id"] = {
+            "expected": payload["sales_invoice_id"],
+            "actual": original.get("id"),
+        }
+    if changed_original or original_line_mismatches:
+        raise MoneybirdError(
+            "The original sales invoice changed after the credit preview. Prepare again."
+        )
+    mark_write_dispatch_started()
+    created = client.duplicate_sales_invoice_to_credit_invoice(
         payload["sales_invoice_id"]
     )
+    record_id = str(created.get("id") or "")
+    if not record_id:
+        raise MoneybirdError(
+            "Moneybird did not return a credit invoice id; reconcile before retrying."
+        )
+    mark_write_verifying()
+    record = client.get_sales_invoice(record_id)
     total_credit = money_decimal(record.get("total_price_incl_tax") or 0)
     total_original = money_decimal(payload["total_original"])
+    payload_verification = verify_sales_invoice_payload(
+        payload.get("expected_credit_invoice") or {},
+        record,
+    )
+    state_is_draft = str(record.get("state") or "") == "draft"
+    record_id_matches = str(record.get("id") or "") == record_id
+    fully_verified = (
+        total_credit == -total_original
+        and state_is_draft
+        and record_id_matches
+        and payload_verification["fully_verified"]
+    )
     return {
-        "_status": "created",
+        "_status": (
+            "created" if fully_verified else "completed_with_verification_errors"
+        ),
+        "_audit_result": (
+            "success" if fully_verified else "verification_failed"
+        ),
         "_audit": {
             "original_sales_invoice_id": payload["sales_invoice_id"],
             "credit_invoice_id": str(record.get("id")),
+            "credit_negates_original": fully_verified,
+            "state_is_draft": state_is_draft,
         },
         "credit_invoice": {
             "id": str(record.get("id")),
@@ -512,7 +790,10 @@ def _execute_create_credit_invoice(client, payload: dict[str, Any]) -> dict[str,
         "verification": {
             "total_original": str(total_original),
             "total_credit": str(total_credit),
-            "credit_negates_original": total_credit == -total_original,
+            "credit_negates_original": fully_verified,
+            "state_is_draft": state_is_draft,
+            "record_id_matches": record_id_matches,
+            "payload_verification": payload_verification,
         },
     }
 

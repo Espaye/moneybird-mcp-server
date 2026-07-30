@@ -6,9 +6,14 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..client import normalize_generic_get_path, validate_moneybird_id
 from ..config import (
     MoneybirdError,
     READ_ONLY_ANNOTATIONS,
+)
+from ..credentials import (
+    CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+    get_credential_mode,
 )
 from ..formatting import (
     api_url,
@@ -34,7 +39,7 @@ from ..sync import (
 from ..invoicing import (
     find_contact_matches,
 )
-from ._params import FilterString, Limit
+from ._params import FilterString, GenericGetPath, Limit, SearchRecordId
 from ._registry import mcp
 from . import _context as ctx
 
@@ -74,7 +79,10 @@ def list_administrations() -> dict[str, Any]:
     """Use this when you need to inspect which Moneybird administrations are available to the token."""
     client = ctx.get_client(require_administration=False)
     administrations = client.list_administrations()
-    configured_id = os.environ.get("MONEYBIRD_ADMINISTRATION_ID", "").strip() or None
+    # The caller's resolved credential context is authoritative. Consulting the
+    # process-global environment here would expose an operator default to hosted
+    # request-scoped callers.
+    configured_id = client.administration_id
     return {
         "administrations": [
             {
@@ -96,8 +104,15 @@ def search(
 ) -> dict[str, Any]:
     """Use this when you want ChatGPT to search Moneybird records in a connector-friendly way."""
     client = ctx.get_client()
+    # Administration-keyed files are not an authorization boundary. Revalidate
+    # the active token/grant before touching JSON or FTS cache state.
+    client.require_current_administration_access()
     results: list[dict[str, Any]] = []
-    index = load_sync_index(client.administration_id)
+    use_durable_cache = get_credential_mode() != CREDENTIAL_MODE_HOSTED_REQUEST_ONLY
+    # Hosted request credentials have no durable principal/grant identifier yet.
+    # Keep that mode live-only so two grants to the same administration can never
+    # share a process-local JSON or FTS artifact.
+    index = load_sync_index(client.administration_id) if use_durable_cache else {}
     indexed_buckets = (
         "contacts",
         "sales_invoices",
@@ -107,7 +122,8 @@ def search(
         "financial_mutations",
     )
     use_index = (
-        index.get("administration_id") == client.administration_id
+        use_durable_cache
+        and index.get("administration_id") == client.administration_id
         and any(index[bucket]["records"] for bucket in indexed_buckets)
     )
 
@@ -258,23 +274,25 @@ def search(
     }
     if scan_warnings:
         response["warnings"] = scan_warnings
-        response["hint"] = (
-            "Some live sources were skipped. Run sync_search_index to build the local "
-            "cache; search then uses the sync index instead of live scans."
-        )
+        if use_durable_cache:
+            response["hint"] = (
+                "Some live sources were skipped. Run sync_search_index to build the "
+                "local cache; search then uses the sync index instead of live scans."
+            )
+        else:
+            response["hint"] = (
+                "Some live sources were skipped. hosted_request_only mode is "
+                "intentionally live-only, so local cache sync is unavailable; retry "
+                "the search or use a narrower typed read tool."
+            )
     return response
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def fetch(
-    id: Annotated[
-        str,
-        Field(description="Prefixed record id from search, e.g. 'contact:123', 'sales_invoice:123', 'purchase_invoice:123', 'receipt:123', 'financial_mutation:123'."),
-    ],
+    id: SearchRecordId,
 ) -> dict[str, Any]:
     """Use this when you already know a Moneybird record id from search and need the full record."""
-    client = ctx.get_client()
-
     if ":" not in id:
         raise MoneybirdError(
             "Expected an id like contact:123, sales_invoice:123, purchase_invoice:123, receipt:123, general_journal_document:123, financial_mutation:123, ledger_account:123, or financial_account:123."
@@ -283,6 +301,24 @@ def fetch(
     kind, record_id = id.split(":", 1)
     kind = kind.strip()
     record_id = record_id.strip()
+    supported_kinds = {
+        "contact",
+        "sales_invoice",
+        "purchase_invoice",
+        "receipt",
+        "general_journal_document",
+        "financial_mutation",
+        "ledger_account",
+        "financial_account",
+    }
+    if kind not in supported_kinds:
+        raise MoneybirdError(
+            "Unsupported record kind. Use contact:<id>, sales_invoice:<id>, "
+            "purchase_invoice:<id>, receipt:<id>, general_journal_document:<id>, "
+            "financial_mutation:<id>, ledger_account:<id>, or financial_account:<id>."
+        )
+    record_id = validate_moneybird_id(record_id, f"{kind}_id")
+    client = ctx.get_client()
 
     if kind == "contact":
         record = client.get_contact(record_id)
@@ -380,30 +416,27 @@ def fetch(
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def moneybird_request(
-    path: Annotated[
-        str,
-        Field(description="GET path relative to the administration, e.g. 'estimates', 'time_entries/123', or 'administrations' for the API root."),
-    ],
+    path: GenericGetPath,
     query: Annotated[
         dict[str, Any] | None,
         Field(description="Optional query-string params, e.g. {'filter': 'state:open', 'per_page': 50}."),
     ] = None,
 ) -> dict[str, Any]:
-    """Read-only escape hatch for any Moneybird endpoint this server does not wrap explicitly.
+    """Read-only escape hatch for allowlisted Moneybird GET endpoints.
 
     Performs a single GET within the configured administration. `path` is relative to the
     administration, e.g. 'estimates', 'subscriptions', 'time_entries/123',
     'documents/purchase_invoices', or 'projects'. Use 'administrations' to hit the API root.
-    `query` is an optional dict of query-string params, e.g. {'filter': 'state:open', 'per_page': 50}.
+    Put query-string params in `query`, e.g. {'filter': 'state:open', 'per_page': 50}.
 
     This can ONLY read. To change anything, use the matching prepare_* / *_from_approval tools.
     """
-    cleaned = str(path).strip().lstrip("/")
-    need_admin = not (cleaned == "administrations" or cleaned.startswith("administrations/"))
+    cleaned = normalize_generic_get_path(path)
+    need_admin = cleaned != "administrations"
     client = ctx.get_client(require_administration=need_admin)
-    data = client.raw_get(path, query=query)
+    data = client.raw_get(cleaned, query=query)
     return {
-        "path": str(path),
+        "path": cleaned,
         "result": data,
     }
 

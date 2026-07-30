@@ -162,6 +162,16 @@ FINANCIAL_MUTATION_LINK_BOOKING_TYPES = {
     "VatDocument",
 }
 
+# The guarded MCP write only exposes link types whose exact target can be
+# proven by an independent financial-mutation GET after dispatch. Other API
+# enum values create or fan out records whose identity is not recoverable from
+# that response and therefore remain available only at the raw client layer.
+VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES = {
+    "SalesInvoice",
+    "Document",
+    "LedgerAccount",
+}
+
 
 # Valid booking_type values for unlinking a booking from a financial mutation.
 FINANCIAL_MUTATION_UNLINK_BOOKING_TYPES = {"Payment", "LedgerAccountBooking"}
@@ -199,7 +209,23 @@ def data_dir() -> Path:
         return Path(".")
     path = Path(override).expanduser()
     path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except (NotImplementedError, OSError):
+        # Windows ACLs and some mounted filesystems do not implement POSIX mode
+        # bits. Operators must still restrict the directory ACL there.
+        pass
     return path
+
+
+def harden_private_file(path: Path) -> None:
+    """Best-effort owner-only mode for local files containing financial data."""
+    try:
+        os.chmod(path, 0o600)
+    except (FileNotFoundError, NotImplementedError, OSError):
+        # Creation races, Windows ACL semantics, and unusual filesystems can
+        # prevent chmod. Callers still rely on the containing directory ACL.
+        pass
 
 
 

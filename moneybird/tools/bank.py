@@ -12,6 +12,7 @@ from ..config import (
     MoneybirdError,
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
+    VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
     WRITE_ANNOTATIONS,
 )
 from ..formatting import (
@@ -39,7 +40,12 @@ from ._params import (
     UnlinkBookingType,
 )
 from ._registry import mcp
-from ._writes import run_approved_write, stage_write
+from ._writes import (
+    mark_write_dispatch_started,
+    mark_write_verifying,
+    run_approved_write,
+    stage_write,
+)
 from .payments import _open_amount
 from . import _context as ctx
 
@@ -69,41 +75,87 @@ def list_financial_mutations(
     }
 
 
-def _link_target_summary(client, booking_type: str, booking_id: str) -> dict[str, Any]:
-    """Best-effort lookup of the booking target so the preview names what gets linked."""
-    try:
-        if booking_type == "SalesInvoice":
-            record = client.get_sales_invoice(booking_id)
-            return {
-                "title": invoice_title(record),
-                "contact": document_contact_title(record),
-                "total_price_incl_tax": record.get("total_price_incl_tax"),
-                "open_amount": _open_amount(record),
-                "state": record.get("state"),
-            }
-        if booking_type == "LedgerAccount":
-            record = client.get_ledger_account(booking_id)
-            return {
-                "title": record.get("name"),
-                "account_type": record.get("account_type"),
-            }
-        if booking_type == "Document":
-            for kind in ("purchase_invoice", "receipt", "general_journal_document"):
-                try:
-                    record = client.get_document(kind, booking_id)
-                except MoneybirdError:
-                    continue
-                return {
-                    "title": purchase_document_title(kind, record),
-                    "document_kind": kind,
-                    "contact": document_contact_title(record),
-                    "total_price_incl_tax": record.get("total_price_incl_tax"),
-                    "open_amount": _open_amount(record),
-                    "state": record.get("state"),
-                }
-    except MoneybirdError as exc:
-        return {"lookup_error": str(exc)}
-    return {"note": f"No preview lookup implemented for booking_type {booking_type}."}
+def _link_target_contract(
+    client,
+    booking_type: str,
+    booking_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return a durable target snapshot and the human-facing preview."""
+
+    if booking_type == "SalesInvoice":
+        record = client.get_sales_invoice(booking_id)
+        kind = ""
+    elif booking_type == "LedgerAccount":
+        record = client.get_ledger_account(booking_id)
+        kind = ""
+    elif booking_type == "Document":
+        record = None
+        kind = ""
+        errors: list[str] = []
+        for candidate in ("purchase_invoice", "receipt"):
+            try:
+                record = client.get_document(candidate, booking_id)
+                kind = candidate
+                break
+            except MoneybirdError as exc:
+                errors.append(str(exc))
+        if record is None:
+            raise MoneybirdError(
+                f"Document {booking_id} was not found as a purchase invoice or "
+                f"receipt. Lookups: {errors}."
+            )
+    else:
+        raise MoneybirdError(
+            f"booking_type {booking_type} has no exact post-write verifier."
+        )
+
+    record_id = str(record.get("id") or "")
+    if record_id != str(booking_id):
+        raise MoneybirdError(
+            f"{booking_type} lookup for {booking_id} returned record {record_id or '<none>'}."
+        )
+    occurrence = str(record.get("version") or record.get("updated_at") or "")
+    if booking_type == "LedgerAccount":
+        snapshot = {
+            "id": record_id,
+            "occurrence": occurrence,
+            "name": record.get("name"),
+            "account_type": record.get("account_type"),
+            "active": record.get("active"),
+        }
+        if record.get("active") is False:
+            raise MoneybirdError(f"Ledger account {booking_id} is inactive.")
+        preview = {
+            "id": record_id,
+            "title": record.get("name"),
+            "account_type": record.get("account_type"),
+            "active": record.get("active"),
+        }
+    else:
+        snapshot = {
+            "id": record_id,
+            "occurrence": occurrence,
+            "document_kind": kind,
+            "state": record.get("state"),
+            "currency": record.get("currency"),
+            "total_price_incl_tax": record.get("total_price_incl_tax"),
+            "open_amount": _open_amount(record),
+        }
+        preview = {
+            "id": record_id,
+            "title": (
+                invoice_title(record)
+                if booking_type == "SalesInvoice"
+                else purchase_document_title(kind, record)
+            ),
+            "document_kind": kind or None,
+            "contact": document_contact_title(record),
+            "currency": record.get("currency"),
+            "total_price_incl_tax": record.get("total_price_incl_tax"),
+            "open_amount": _open_amount(record),
+            "state": record.get("state"),
+        }
+    return snapshot, preview
 
 
 def _mutation_link_state(record: dict[str, Any]) -> dict[str, Any]:
@@ -606,6 +658,7 @@ def _execute_reclassify_bank_mutation_bookings(
         item["financial_mutation_id"]: item for item in items
     }
 
+    mark_write_dispatch_started()
     for item in items:
         mutation_id = item["financial_mutation_id"]
         source = item["source_booking"]
@@ -695,6 +748,7 @@ def _execute_reclassify_bank_mutation_bookings(
             )
             break
 
+    mark_write_verifying()
     # The endpoint responses above provide immediate, per-step verification.
     # Re-fetch every completed mutation independently in one synchronization
     # batch before reporting success.
@@ -798,12 +852,35 @@ def prepare_link_bank_mutation_booking(
     if booking_type not in FINANCIAL_MUTATION_LINK_BOOKING_TYPES:
         supported = ", ".join(sorted(FINANCIAL_MUTATION_LINK_BOOKING_TYPES))
         raise MoneybirdError(f"booking_type must be one of: {supported}.")
+    if booking_type not in VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES:
+        supported = ", ".join(
+            sorted(VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES)
+        )
+        raise MoneybirdError(
+            f"The guarded link tool supports only exactly verifiable booking types: "
+            f"{supported}."
+        )
     if not str(booking_id).strip():
         raise MoneybirdError("booking_id is required.")
 
     client = ctx.get_client()
     mutation = client.get_financial_mutation(financial_mutation_id)
+    target_snapshot, target_preview = _link_target_contract(
+        client,
+        booking_type,
+        str(booking_id).strip(),
+    )
+    mutation_version = str(
+        mutation.get("version") or mutation.get("updated_at") or ""
+    )
+    if not mutation_version:
+        raise MoneybirdError(
+            "Moneybird did not return a mutation version/updated_at value; "
+            "cannot bind this repeatable link safely."
+        )
     amount = parse_decimal_number(price, label="price") if str(price).strip() else None
+    if amount == 0:
+        raise MoneybirdError("price must be non-zero when supplied.")
 
     booking = clean_dict(
         {
@@ -818,6 +895,9 @@ def prepare_link_bank_mutation_booking(
         payload={
             "financial_mutation_id": str(financial_mutation_id),
             "booking": booking,
+            "expected_mutation_version": mutation_version,
+            "expected_mutation_state": _mutation_link_state(mutation),
+            "expected_target": target_snapshot,
         },
         preview={
             "financial_mutation": {
@@ -828,7 +908,7 @@ def prepare_link_bank_mutation_booking(
                 **_mutation_link_state(mutation),
             },
             "booking": booking,
-            "booking_target": _link_target_summary(client, booking_type, str(booking_id)),
+            "booking_target": target_preview,
             "price_note": (
                 "No price given: Moneybird links the full open amount."
                 if amount is None
@@ -837,25 +917,83 @@ def prepare_link_bank_mutation_booking(
         },
         fingerprint=duplicate_fingerprint(
             "link_bank_mutation_booking",
-            {"financial_mutation_id": str(financial_mutation_id), "booking": booking},
+            {
+                "financial_mutation_id": str(financial_mutation_id),
+                "booking": booking,
+                "mutation_occurrence": mutation_version,
+                "target_occurrence": target_snapshot,
+            },
         ),
     )
 
 
 def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
     mutation_id = payload["financial_mutation_id"]
-    before = _mutation_link_state(client.get_financial_mutation(mutation_id))
+    before_record = client.get_financial_mutation(mutation_id)
+    if str(before_record.get("id") or "") != str(mutation_id):
+        raise MoneybirdError(
+            f"Financial mutation {mutation_id} lookup returned a different record. "
+            "Prepare again."
+        )
+    current_version = str(
+        before_record.get("version") or before_record.get("updated_at") or ""
+    )
+    if current_version != str(payload.get("expected_mutation_version") or ""):
+        raise MoneybirdError(
+            f"Financial mutation {mutation_id} changed after preview. Prepare again."
+        )
+    before = _mutation_link_state(before_record)
+    if before != payload.get("expected_mutation_state"):
+        raise MoneybirdError(
+            f"Financial mutation {mutation_id} booking state changed after preview. "
+            "Prepare again."
+        )
+    current_target, _target_preview = _link_target_contract(
+        client,
+        str(payload["booking"]["booking_type"]),
+        str(payload["booking"]["booking_id"]),
+    )
+    if current_target != payload.get("expected_target"):
+        raise MoneybirdError(
+            f"The {payload['booking']['booking_type']} target changed after preview. "
+            "Prepare again."
+        )
+    mark_write_dispatch_started()
     client.link_financial_mutation_booking(mutation_id, payload["booking"])
-    after = _mutation_link_state(client.get_financial_mutation(mutation_id))
+    mark_write_verifying()
+    after_record = client.get_financial_mutation(mutation_id)
+    after = _mutation_link_state(after_record)
     before_ids = {
         str(item.get("id") or "")
         for item in before["payments"] + before["ledger_account_bookings"]
     }
-    new_links = [
+    new_payment_links = [
         item
-        for item in after["payments"] + after["ledger_account_bookings"]
+        for item in after["payments"]
         if str(item.get("id") or "") not in before_ids
     ]
+    new_ledger_links = [
+        item
+        for item in after["ledger_account_bookings"]
+        if str(item.get("id") or "") not in before_ids
+    ]
+    new_links = new_payment_links + new_ledger_links
+    requested_type = str(payload["booking"]["booking_type"])
+    requested_id = str(payload["booking"]["booking_id"])
+    target_links = (
+        [
+            item
+            for item in new_ledger_links
+            if str(item.get("ledger_account_id") or "") == requested_id
+        ]
+        if requested_type == "LedgerAccount"
+        else [
+            item
+            for item in new_payment_links
+            if str(item.get("invoice_id") or "") == requested_id
+            and str(item.get("invoice_type") or "") == requested_type
+        ]
+    )
     requested_price = str(payload["booking"].get("price") or "").strip()
     expected_open = (
         Decimal("0.00")
@@ -867,13 +1005,16 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
         f"{money_decimal(requested_price):.2f}" if requested_price else ""
     )
     verification = {
-        "new_link_visible_on_mutation": bool(new_links),
+        "mutation_id_matches": str(after_record.get("id") or "") == str(mutation_id),
+        "exactly_one_new_link_visible": len(new_links) == 1,
+        "new_link_visible_on_mutation": len(target_links) == 1,
+        "booking_target_matches": len(target_links) == 1,
         "new_link_price_matches": (
             True
             if not requested_price
             else any(
                 f"{money_decimal(item.get('price')):.2f}" == expected_price
-                for item in new_links
+                for item in target_links
             )
         ),
         "amount_open_matches": (
@@ -887,7 +1028,7 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
     fully_verified = all(verification.values())
     return {
         "_status": "linked" if fully_verified else "completed_with_errors",
-        "_audit_result": "success" if fully_verified else "partial_failure",
+        "_audit_result": "success" if fully_verified else "verification_failed",
         "_audit": {
             "financial_mutation_id": str(mutation_id),
             "booking": payload["booking"],
@@ -932,6 +1073,14 @@ def prepare_unlink_bank_mutation_booking(
 
     client = ctx.get_client()
     mutation = client.get_financial_mutation(financial_mutation_id)
+    mutation_version = str(
+        mutation.get("version") or mutation.get("updated_at") or ""
+    )
+    if not mutation_version:
+        raise MoneybirdError(
+            "Moneybird did not return a mutation version/updated_at value; "
+            "cannot bind this repeatable unlink safely."
+        )
     state = _mutation_link_state(mutation)
     haystack = (
         state["payments"] if booking_type == "Payment" else state["ledger_account_bookings"]
@@ -946,8 +1095,6 @@ def prepare_unlink_bank_mutation_booking(
             f"{financial_mutation_id}. Present: {haystack}."
         )
 
-    # No fingerprint: unlinking the same booking again after a re-link is legitimate,
-    # so duplicate suppression is intentionally disabled for this action.
     return stage_write(
         "unlink_bank_mutation_booking",
         summary=f"Unlink {booking_type} {booking_id} from financial mutation {financial_mutation_id}",
@@ -955,6 +1102,8 @@ def prepare_unlink_bank_mutation_booking(
             "financial_mutation_id": str(financial_mutation_id),
             "booking_type": booking_type,
             "booking_id": str(booking_id).strip(),
+            "expected_mutation_version": mutation_version,
+            "expected_booking": target,
         },
         preview={
             "financial_mutation": {
@@ -965,17 +1114,60 @@ def prepare_unlink_bank_mutation_booking(
             },
             "unlink": target,
         },
+        fingerprint=duplicate_fingerprint(
+            "unlink_bank_mutation_booking",
+            {
+                "financial_mutation_id": str(financial_mutation_id),
+                "booking_type": booking_type,
+                "booking_id": str(booking_id).strip(),
+                "mutation_occurrence": mutation_version,
+            },
+        ),
     )
 
 
 def _execute_unlink_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
     mutation_id = payload["financial_mutation_id"]
+    before_record = client.get_financial_mutation(mutation_id)
+    if str(before_record.get("id") or "") != str(mutation_id):
+        raise MoneybirdError(
+            f"Financial mutation {mutation_id} lookup returned a different record. "
+            "Prepare again."
+        )
+    current_version = str(
+        before_record.get("version") or before_record.get("updated_at") or ""
+    )
+    if current_version != str(payload.get("expected_mutation_version") or ""):
+        raise MoneybirdError(
+            f"Financial mutation {mutation_id} changed after preview. Prepare again."
+        )
+    before_state = _mutation_link_state(before_record)
+    before_haystack = (
+        before_state["payments"]
+        if payload["booking_type"] == "Payment"
+        else before_state["ledger_account_bookings"]
+    )
+    current_booking = next(
+        (
+            item
+            for item in before_haystack
+            if str(item.get("id")) == payload["booking_id"]
+        ),
+        None,
+    )
+    if current_booking != payload.get("expected_booking"):
+        raise MoneybirdError(
+            f"Booking {payload['booking_id']} changed after preview. Prepare again."
+        )
+    mark_write_dispatch_started()
     client.unlink_financial_mutation_booking(
         mutation_id,
         booking_type=payload["booking_type"],
         booking_id=payload["booking_id"],
     )
-    after = _mutation_link_state(client.get_financial_mutation(mutation_id))
+    mark_write_verifying()
+    after_record = client.get_financial_mutation(mutation_id)
+    after = _mutation_link_state(after_record)
     haystack = (
         after["payments"]
         if payload["booking_type"] == "Payment"
@@ -984,14 +1176,23 @@ def _execute_unlink_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
     still_present = any(
         str(item.get("id")) == payload["booking_id"] for item in haystack
     )
+    record_id_matches = str(after_record.get("id") or "") == str(mutation_id)
+    fully_verified = record_id_matches and not still_present
     return {
-        "_status": "unlinked",
+        "_status": (
+            "unlinked" if fully_verified else "completed_with_verification_errors"
+        ),
+        "_audit_result": (
+            "success" if fully_verified else "verification_failed"
+        ),
         "_audit": {
             "financial_mutation_id": str(mutation_id),
             "booking_type": payload["booking_type"],
             "booking_id": payload["booking_id"],
+            "fully_verified": fully_verified,
         },
         "verification": {
+            "record_id_matches": record_id_matches,
             "booking_removed_from_mutation": not still_present,
             "after": after,
         },

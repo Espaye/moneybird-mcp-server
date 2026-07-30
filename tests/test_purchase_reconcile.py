@@ -31,7 +31,7 @@ class PurchaseInvoiceReferenceLookupTests(unittest.TestCase):
     def test_uses_server_side_reference_filter_and_exact_match(self):
         from moneybird.client import MoneybirdClient
 
-        client = MoneybirdClient("token", "admin")
+        client = MoneybirdClient("token", "123")
         document = {
             "id": "doc-1",
             "reference": "2112179204",
@@ -59,7 +59,7 @@ class PurchaseInvoiceReferenceLookupTests(unittest.TestCase):
     def test_rejects_ambiguous_exact_reference(self):
         from moneybird.client import MoneybirdClient
 
-        client = MoneybirdClient("token", "admin")
+        client = MoneybirdClient("token", "123")
         matches = [
             {"id": "doc-1", "reference": "same"},
             {"id": "doc-2", "reference": "same"},
@@ -295,7 +295,13 @@ class ReconcileExecutionSafetyTests(unittest.TestCase):
             reference_document_id="ref",
         )["payload"]
 
-        result = _execute_reconcile(client, payload)
+        with (
+            mock.patch(
+                "moneybird.tools.purchases.mark_write_dispatch_started"
+            ),
+            mock.patch("moneybird.tools.purchases.mark_write_verifying"),
+        ):
+            result = _execute_reconcile(client, payload)
 
         self.assertEqual(result["_status"], "completed")
         self.assertTrue(result["verified_total_unchanged"])
@@ -331,7 +337,13 @@ class ReconcileExecutionSafetyTests(unittest.TestCase):
             target_total="800.00",
         )["payload"]
 
-        result = _execute_reconcile(client, payload)
+        with (
+            mock.patch(
+                "moneybird.tools.purchases.mark_write_dispatch_started"
+            ),
+            mock.patch("moneybird.tools.purchases.mark_write_verifying"),
+        ):
+            result = _execute_reconcile(client, payload)
 
         self.assertEqual(client.update_calls, 1)
         self.assertEqual(result["total_after"], "800.00")

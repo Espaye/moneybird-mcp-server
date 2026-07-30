@@ -3,10 +3,12 @@ name: Release
 # Version-driven releases: the version in pyproject.toml is the trigger, not a tag.
 # Push a commit to main that bumps it (mcpb/manifest.json must match -- the suite
 # enforces that) and this workflow runs the tests, builds, publishes to PyPI via
-# Trusted Publishing, then tags the commit and creates the GitHub release.
+# Trusted Publishing, with an immutable tag created before publication, then creates
+# the GitHub release.
 #
-# Pushes that don't change the version are a no-op: the `check` job sees the version
-# is already on PyPI and everything after it is skipped, so main stays green.
+# Pushes that don't change the version are a no-op once PyPI, the tag, and the GitHub
+# release all exist. Each stage is checked independently so a failed later stage can
+# be resumed without attempting to republish an immutable PyPI version.
 #
 # The trade-off to know: PyPI versions are immutable. A bump that lands on main is a
 # release you cannot replace, only yank. If you want a hand on the brake, add
@@ -21,7 +23,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  # One release state machine for the repository. A manual run from another ref
+  # must not race the main-branch release.
+  group: release-${{ github.repository }}-main
   # Never cancel a publish that is already under way.
   cancel-in-progress: false
 
@@ -31,58 +35,314 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.check.outputs.version }}
-      release: ${{ steps.check.outputs.release }}
+      publish_needed: ${{ steps.check.outputs.publish_needed }}
+      tag_needed: ${{ steps.check.outputs.tag_needed }}
+      release_needed: ${{ steps.check.outputs.release_needed }}
+      work_needed: ${{ steps.check.outputs.work_needed }}
+      candidate_needed: ${{ steps.check.outputs.candidate_needed }}
+      source_ref: ${{ steps.check.outputs.source_ref }}
+      source_sha: ${{ steps.check.outputs.source_sha }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
       - id: check
-        name: Compare pyproject version against PyPI
+        name: Inspect PyPI, tag, and GitHub release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME_FULL: ${{ github.ref }}
         run: |
           python - <<'PY'
-          import json, os, pathlib, tomllib, urllib.error, urllib.request
+          import json, os, pathlib, tomllib, urllib.error, urllib.parse, urllib.request
 
+          if os.environ["GITHUB_REF_NAME_FULL"] != "refs/heads/main":
+              raise SystemExit(
+                  "Releases may only run from refs/heads/main. Re-run workflow_dispatch "
+                  "with the main branch selected."
+              )
           version = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
-          url = "https://pypi.org/pypi/moneybird-mcp/json"
+          pypi_url = "https://pypi.org/pypi/moneybird-mcp/json"
           try:
-              with urllib.request.urlopen(url, timeout=30) as response:
-                  published = set(json.load(response)["releases"])
+              with urllib.request.urlopen(pypi_url, timeout=30) as response:
+                  project = json.load(response)
           except urllib.error.HTTPError as error:
               if error.code != 404:
                   raise
-              published = set()  # project does not exist on PyPI yet
+              project = {"releases": {}}  # project does not exist on PyPI yet
 
-          new = version not in published
+          release_files = project["releases"].get(version, [])
+          if any(item.get("yanked") for item in release_files):
+              raise SystemExit(
+                  f"PyPI {version} contains yanked artifacts. Refusing automated "
+                  "republication; choose a new version after investigating."
+              )
+          wheels = [
+              item for item in release_files
+              if item.get("packagetype") == "bdist_wheel"
+          ]
+          sdists = [
+              item for item in release_files
+              if item.get("packagetype") == "sdist"
+          ]
+          pypi_complete = len(wheels) == 1 and len(sdists) == 1
+          if release_files and not pypi_complete:
+              raise SystemExit(
+                  f"PyPI {version} is only partially published "
+                  f"({len(wheels)} wheel(s), {len(sdists)} sdist(s)). Refusing to "
+                  "construct a hybrid release automatically; repair the missing "
+                  "artifact from the original tested workflow run."
+              )
+          expected_dist_digests = (
+              {
+                  item["filename"]: str(item["digests"]["sha256"]).lower()
+                  for item in wheels + sdists
+              }
+              if pypi_complete
+              else {}
+          )
+
+          repository = os.environ["REPOSITORY"]
+          github_headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          def github_object(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  headers=github_headers,
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  if error.code == 404:
+                      return None
+                  raise
+
+          tag = github_object(f"git/ref/tags/v{version}")
+          github_release = github_object(f"releases/tags/v{version}")
+          publish_needed = not pypi_complete
+          tag_needed = tag is None
+          release_assets = {
+              str(asset.get("name") or ""): asset
+              for asset in (github_release or {}).get("assets", [])
+          }
+          package_assets = {
+              name: asset
+              for name, asset in release_assets.items()
+              if name.endswith(".whl") or name.endswith(".tar.gz")
+          }
+          expected_sbom_name = f"moneybird-mcp-{version}.cdx.json"
+          sbom_assets = {
+              name: asset
+              for name, asset in release_assets.items()
+              if name.endswith(".cdx.json")
+          }
+          exact_asset_names = (
+              set(package_assets) == set(expected_dist_digests)
+          )
+          exact_asset_digests = exact_asset_names and all(
+              str(package_assets[name].get("digest") or "").lower()
+              == f"sha256:{digest}"
+              for name, digest in expected_dist_digests.items()
+          )
+          exact_sbom = (
+              set(sbom_assets) == {expected_sbom_name}
+              and str(sbom_assets[expected_sbom_name].get("digest") or "")
+              .lower()
+              .startswith("sha256:")
+          )
+          release_needed = (
+              publish_needed
+              or github_release is None
+              or bool(github_release.get("draft"))
+              or bool(github_release.get("prerelease"))
+              or not exact_asset_names
+              or not exact_asset_digests
+              or not exact_sbom
+          )
+          if not publish_needed and tag_needed:
+              raise SystemExit(
+                  f"PyPI {version} exists but tag v{version} is missing. Refusing to "
+                  "guess the published commit; repair this legacy state manually."
+              )
+
+          source_sha = os.environ["COMMIT_SHA"]
+          if tag is not None:
+              tag_object = tag["object"]
+              while tag_object["type"] == "tag":
+                  annotated = github_object(f"git/tags/{tag_object['sha']}")
+                  if annotated is None:
+                      raise SystemExit(f"Could not peel annotated tag v{version}")
+                  tag_object = annotated["object"]
+              if tag_object["type"] != "commit":
+                  raise SystemExit(
+                      f"Tag v{version} points to {tag_object['type']}, not a commit"
+                  )
+              source_sha = str(tag_object["sha"])
+              comparison = github_object(
+                  f"compare/{source_sha}...{os.environ['COMMIT_SHA']}"
+              )
+              if comparison is None or comparison.get("status") not in {
+                  "ahead",
+                  "identical",
+              }:
+                  raise SystemExit(
+                      f"Tag v{version} is not an ancestor of the current main commit."
+                  )
+              if publish_needed and source_sha != os.environ["COMMIT_SHA"]:
+                  raise SystemExit(
+                      f"Tag v{version} exists at {source_sha}, but this run was "
+                      f"triggered at {os.environ['COMMIT_SHA']}. Resume the original "
+                      "failed workflow run so PyPI provenance and source SHA agree."
+                  )
+
+          source_ref = source_sha
+          work_needed = publish_needed or tag_needed or release_needed
+          candidate_needed = publish_needed or tag_needed
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"version={version}\n")
-              out.write(f"release={'true' if new else 'false'}\n")
+              out.write(f"publish_needed={str(publish_needed).lower()}\n")
+              out.write(f"tag_needed={str(tag_needed).lower()}\n")
+              out.write(f"release_needed={str(release_needed).lower()}\n")
+              out.write(f"work_needed={str(work_needed).lower()}\n")
+              out.write(f"candidate_needed={str(candidate_needed).lower()}\n")
+              out.write(f"source_ref={source_ref}\n")
+              out.write(f"source_sha={source_sha}\n")
 
-          state = "not on PyPI yet -> releasing" if new else "already on PyPI -> nothing to do"
-          print(f"pyproject version {version}: {state}")
-          print(f"published versions: {', '.join(sorted(published)) or 'none'}")
+          print(
+              f"version={version} publish_needed={publish_needed} "
+              f"tag_needed={tag_needed} release_needed={release_needed} "
+              f"candidate_needed={candidate_needed} source_sha={source_sha}"
+          )
+          print(
+              f"PyPI artifacts: {len(wheels)} wheel(s), {len(sdists)} sdist(s); "
+              f"GitHub release assets: {sorted(release_assets)}"
+          )
           PY
 
-  build:
-    name: Verify and build ${{ needs.check.outputs.version }}
+  test:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
     needs: check
-    if: needs.check.outputs.release == 'true'
+    if: needs.check.outputs.candidate_needed == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python-version: "3.11"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.check.outputs.source_ref }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Assert checked-out release version
+        run: python scripts/assert_release_version.py "${{ needs.check.outputs.version }}"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Run tests
+        env:
+          MONEYBIRD_MCP_DATA_DIR: ${{ runner.temp }}/moneybird-mcp-state
+        run: python -m pytest -q
+
+  dependency-audit:
+    name: Audit release dependency graph
+    needs: check
+    if: needs.check.outputs.candidate_needed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.check.outputs.source_sha }}
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements.txt
 
+      - name: Assert checked-out release version
+        run: python scripts/assert_release_version.py "${{ needs.check.outputs.version }}"
+
+      - name: Audit direct and resolved transitive dependencies
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          python -m pip_audit -r requirements.txt
+
+  minimum-dependencies:
+    name: Test release minimum dependencies
+    needs: check
+    if: needs.check.outputs.candidate_needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.check.outputs.source_ref }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-minimum.txt
+
+      - name: Assert checked-out release version
+        run: python scripts/assert_release_version.py "${{ needs.check.outputs.version }}"
+
+      - name: Install the lowest supported direct dependency versions
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -c requirements-minimum.txt -r requirements.txt pytest
+
+      - name: Run tests against the minimum dependency graph
+        env:
+          MONEYBIRD_MCP_DATA_DIR: ${{ runner.temp }}/moneybird-mcp-state
+        run: python -m pytest -q
+
+  build:
+    name: Verify and build ${{ needs.check.outputs.version }}
+    needs: [check, test, dependency-audit, minimum-dependencies]
+    if: needs.check.outputs.candidate_needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.check.outputs.source_ref }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Assert checked-out release version
+        run: python scripts/assert_release_version.py "${{ needs.check.outputs.version }}"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest build twine
+          python -m pip install -r requirements.txt pytest build twine cyclonedx-bom==7.3.1
 
       # Gate the publish on the suite even though ci.yml also runs it: this is the
       # last checkpoint before an immutable upload. Also covers the pyproject <->
@@ -92,8 +352,8 @@ jobs:
           MONEYBIRD_MCP_DATA_DIR: ${{ runner.temp }}/moneybird-mcp-state
         run: python -m pytest -q
 
-      - name: Build wheel and sdist
-        run: python -m build
+      - name: Build byte-for-byte reproducible wheel and sdist
+        run: python scripts/check_reproducible_build.py --output-dir dist
 
       - name: twine check
         run: python -m twine check dist/*
@@ -101,14 +361,139 @@ jobs:
       - name: Assert no credentials or local state are packaged
         run: python scripts/check_dist_hygiene.py
 
-      - uses: actions/upload-artifact@v7
+      - name: Install wheel and sdist in clean environments
+        run: python scripts/smoke_dist_install.py
+
+      - name: Generate a reproducible CycloneDX SBOM
+        run: >-
+          python scripts/build_sbom.py
+          --expected-version "${{ needs.check.outputs.version }}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: dist-${{ needs.check.outputs.version }}
+          name: candidate-dist-${{ needs.check.outputs.version }}
           path: dist/
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: candidate-sbom-${{ needs.check.outputs.version }}
+          path: sbom/
+
+  artifact-test:
+    name: artifact smoke (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    needs: [check, build]
+    if: needs.check.outputs.candidate_needed == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python-version: "3.11"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.check.outputs.source_sha }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: candidate-dist-${{ needs.check.outputs.version }}
+          path: dist/
+
+      - name: Install and import the exact release wheel
+        run: >-
+          python scripts/smoke_dist_install.py
+          --wheel-only
+          --expected-version "${{ needs.check.outputs.version }}"
+
+  create-tag:
+    name: Create release tag at the tested commit
+    needs: [check, build, artifact-test]
+    if: needs.check.outputs.tag_needed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create lightweight tag at the tested commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ needs.check.outputs.source_sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          gh api --method POST "repos/$GH_REPO/git/refs" \
+            -f ref="refs/tags/v$VERSION" \
+            -f sha="$SOURCE_SHA"
+
+  verify-tag:
+    name: Verify release tag source
+    needs: [check, build, artifact-test, create-tag]
+    if: >-
+      always() &&
+      needs.check.outputs.work_needed == 'true' &&
+      (
+        needs.check.outputs.candidate_needed != 'true' ||
+        (
+          needs.build.result == 'success' &&
+          needs.artifact-test.result == 'success'
+        )
+      ) &&
+      (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require the current tag to resolve to the tested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ needs.check.outputs.source_sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          repository = os.environ["REPOSITORY"]
+
+          def get(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          current = get(f"git/ref/tags/v{os.environ['VERSION']}")["object"]
+          while current["type"] == "tag":
+              current = get(f"git/tags/{current['sha']}")["object"]
+          if current["type"] != "commit" or current["sha"] != os.environ["SOURCE_SHA"]:
+              raise SystemExit(
+                  f"Release tag moved or points elsewhere: {current}; "
+                  f"expected commit {os.environ['SOURCE_SHA']}"
+              )
+          print(f"Verified tag at {current['sha']}")
+          PY
 
   publish-pypi:
     name: Publish to PyPI
-    needs: [check, build]
+    needs: [check, build, artifact-test, create-tag, verify-tag]
+    if: >-
+      always() &&
+      needs.check.outputs.publish_needed == 'true' &&
+      needs.build.result == 'success' &&
+      needs.artifact-test.result == 'success' &&
+      needs.verify-tag.result == 'success'
     runs-on: ubuntu-latest
     # Trusted Publishing: PyPI mints a short-lived token from this job's OIDC
     # identity, so there is no API token secret in the repo. The publisher on
@@ -118,37 +503,476 @@ jobs:
       url: https://pypi.org/p/moneybird-mcp
     permissions:
       id-token: write
+      contents: read
     steps:
-      - uses: actions/download-artifact@v8
+      # This executes only after any `pypi` environment reviewer approves the
+      # job, closing the tag-movement window during the approval wait.
+      - name: Re-verify tag immediately before PyPI publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ needs.check.outputs.source_sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          repository = os.environ["REPOSITORY"]
+
+          def get(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          current = get(f"git/ref/tags/v{os.environ['VERSION']}")["object"]
+          while current["type"] == "tag":
+              current = get(f"git/tags/{current['sha']}")["object"]
+          if current["type"] != "commit" or current["sha"] != os.environ["SOURCE_SHA"]:
+              raise SystemExit(
+                  f"Release tag moved or points elsewhere: {current}; "
+                  f"expected commit {os.environ['SOURCE_SHA']}"
+              )
+          print(f"Re-verified tag at {current['sha']}")
+          PY
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: dist-${{ needs.check.outputs.version }}
+          name: candidate-dist-${{ needs.check.outputs.version }}
           path: dist/
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          attestations: true
+
+  collect-pypi:
+    name: Verify exact PyPI artifacts
+    needs: [check, build, artifact-test, verify-tag, publish-pypi]
+    if: >-
+      always() &&
+      needs.check.outputs.work_needed == 'true' &&
+      needs.verify-tag.result == 'success' &&
+      (
+        needs.check.outputs.candidate_needed != 'true' ||
+        (
+          needs.build.result == 'success' &&
+          needs.artifact-test.result == 'success'
+        )
+      ) &&
+      (needs.publish-pypi.result == 'success' || needs.publish-pypi.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Recovery may target a historical tag that predates the current
+          # release-verification helpers. Use the guarded workflow commit for
+          # helpers; installed package bytes still come only from candidate/PyPI.
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install provenance and SBOM verification tooling
+        run: >-
+          python -m pip install
+          pypi-attestations==0.0.30
+          cyclonedx-bom==7.3.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        if: needs.check.outputs.candidate_needed == 'true'
+        with:
+          name: candidate-dist-${{ needs.check.outputs.version }}
+          path: candidate-dist/
+
+      - name: Re-verify tag after any publication approval delay
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ needs.check.outputs.source_sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          repository = os.environ["REPOSITORY"]
+
+          def get(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          current = get(f"git/ref/tags/v{os.environ['VERSION']}")["object"]
+          while current["type"] == "tag":
+              current = get(f"git/tags/{current['sha']}")["object"]
+          if current["type"] != "commit" or current["sha"] != os.environ["SOURCE_SHA"]:
+              raise SystemExit(
+                  f"Release tag moved or points elsewhere: {current}; "
+                  f"expected commit {os.environ['SOURCE_SHA']}"
+              )
+          print(f"Re-verified tag at {current['sha']}")
+          PY
+
+      - name: Download and verify the exact published wheel and sdist
+        env:
+          CANDIDATE_NEEDED: ${{ needs.check.outputs.candidate_needed }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, time, urllib.error, urllib.request
+
+          version = os.environ["VERSION"]
+          release = None
+          for attempt in range(12):
+              try:
+                  with urllib.request.urlopen(
+                      f"https://pypi.org/pypi/moneybird-mcp/{version}/json",
+                      timeout=30,
+                  ) as response:
+                      release = json.load(response)
+                  files = [
+                      item for item in release["urls"]
+                      if item["packagetype"] in {"bdist_wheel", "sdist"}
+                      and not item.get("yanked")
+                  ]
+                  wheels = [
+                      item for item in files
+                      if item["packagetype"] == "bdist_wheel"
+                  ]
+                  sdists = [
+                      item for item in files
+                      if item["packagetype"] == "sdist"
+                  ]
+                  if len(wheels) == 1 and len(sdists) == 1:
+                      files = wheels + sdists
+                      break
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+              if attempt == 11:
+                  raise SystemExit(
+                      f"PyPI {version} did not expose exactly one wheel and one "
+                      "sdist within the verification window"
+                  )
+              time.sleep(5)
+
+          target_dir = pathlib.Path("dist")
+          target_dir.mkdir(exist_ok=True)
+          for item in files:
+              target = target_dir / item["filename"]
+              with urllib.request.urlopen(item["url"], timeout=60) as response:
+                  data = response.read()
+              digest = hashlib.sha256(data).hexdigest()
+              expected = item["digests"]["sha256"]
+              if digest != expected:
+                  raise SystemExit(
+                      f"Digest mismatch for {item['filename']}: {digest} != {expected}"
+                  )
+              target.write_bytes(data)
+              print(f"Downloaded verified {target.name}: {digest}")
+
+          if os.environ["CANDIDATE_NEEDED"] == "true":
+              def package_files(directory):
+                  return {
+                      path.name: path
+                      for path in pathlib.Path(directory).iterdir()
+                      if path.name.endswith(".whl")
+                      or path.name.endswith(".tar.gz")
+                  }
+
+              candidate_files = package_files("candidate-dist")
+              pypi_files = package_files("dist")
+              if set(candidate_files) != set(pypi_files):
+                  raise SystemExit(
+                      "Candidate/PyPI artifact names differ: "
+                      f"{sorted(candidate_files)} != {sorted(pypi_files)}"
+                  )
+              for name, candidate in candidate_files.items():
+                  candidate_digest = hashlib.sha256(
+                      candidate.read_bytes()
+                  ).hexdigest()
+                  pypi_digest = hashlib.sha256(
+                      pypi_files[name].read_bytes()
+                  ).hexdigest()
+                  if candidate_digest != pypi_digest:
+                      raise SystemExit(
+                          f"Candidate/PyPI digest mismatch for {name}: "
+                          f"{candidate_digest} != {pypi_digest}"
+                      )
+                  print(
+                      f"Candidate matches exact PyPI artifact {name}: "
+                      f"{candidate_digest}"
+                  )
+          PY
+
+      - name: Cryptographically verify PyPI publish attestations
+        if: needs.check.outputs.publish_needed == 'true'
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, urllib.request
+
+          with urllib.request.urlopen(
+              f"https://pypi.org/pypi/moneybird-mcp/{os.environ['VERSION']}/json",
+              timeout=30,
+          ) as response:
+              release = json.load(response)
+          urls = [
+              item["url"]
+              for item in release["urls"]
+              if item["packagetype"] in {"bdist_wheel", "sdist"}
+              and not item.get("yanked")
+          ]
+          if len(urls) != 2:
+              raise SystemExit(f"Expected two PyPI artifacts, found {len(urls)}")
+          repository = f"https://github.com/{os.environ['REPOSITORY']}"
+          for url in urls:
+              subprocess.run(
+                  [
+                      "pypi-attestations",
+                      "verify",
+                      "pypi",
+                      "--repository",
+                      repository,
+                      url,
+                  ],
+                  check=True,
+              )
+          print(f"Verified PyPI provenance for {len(urls)} artifacts from {repository}")
+          PY
+
+      - name: Assert no credentials or local state are packaged
+        run: python scripts/check_dist_hygiene.py
+
+      - name: Install exact PyPI wheel and sdist in clean environments
+        run: >-
+          python scripts/smoke_dist_install.py
+          --expected-version "${{ needs.check.outputs.version }}"
+
+      - name: Generate release SBOM from the exact published wheel
+        run: >-
+          python scripts/build_sbom.py
+          --expected-version "${{ needs.check.outputs.version }}"
+          --output-dir dist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pypi-dist-${{ needs.check.outputs.version }}
+          path: dist/
 
   tag-and-release:
-    name: Tag and create GitHub release
-    needs: [check, publish-pypi]
+    name: Create GitHub release
+    needs: [check, collect-pypi]
+    if: >-
+      always() &&
+      needs.check.outputs.release_needed == 'true' &&
+      needs.collect-pypi.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: dist-${{ needs.check.outputs.version }}
+          name: pypi-dist-${{ needs.check.outputs.version }}
           path: dist/
 
-      # Creates the tag at this commit as well, so releases stay tagged without
-      # anyone pushing tags by hand. The .mcpb bundle is platform-specific
-      # (dependencies are vendored in), so it is still built on the dev machine
-      # with `python scripts/build_mcpb.py` and uploaded to this release after.
-      - name: Create release with the wheel and sdist attached
+      - name: Re-verify tag immediately before release mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ needs.check.outputs.source_sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          repository = os.environ["REPOSITORY"]
+
+          def get(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          current = get(f"git/ref/tags/v{os.environ['VERSION']}")["object"]
+          while current["type"] == "tag":
+              current = get(f"git/tags/{current['sha']}")["object"]
+          if current["type"] != "commit" or current["sha"] != os.environ["SOURCE_SHA"]:
+              raise SystemExit(
+                  f"Release tag moved or points elsewhere: {current}; "
+                  f"expected commit {os.environ['SOURCE_SHA']}"
+              )
+          print(f"Re-verified tag at {current['sha']}")
+          PY
+
+      - name: Remove stale package assets from an existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, urllib.error, urllib.request
+
+          repository = os.environ["REPOSITORY"]
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{repository}/releases/tags/"
+              f"v{os.environ['VERSION']}",
+              headers=headers,
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  release = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              release = None
+
+          expected = {
+              path.name
+              for path in pathlib.Path("dist").iterdir()
+              if path.name.endswith(".whl")
+              or path.name.endswith(".tar.gz")
+              or path.name.endswith(".cdx.json")
+          }
+          if len(expected) != 3:
+              raise SystemExit(
+                  "Expected one wheel, one sdist, and one SBOM in dist, "
+                  f"found {sorted(expected)}"
+              )
+          for asset in (release or {}).get("assets", []):
+              name = str(asset.get("name") or "")
+              is_managed = (
+                  name.endswith(".whl")
+                  or name.endswith(".tar.gz")
+                  or name.endswith(".cdx.json")
+              )
+              if is_managed and name not in expected:
+                  delete = urllib.request.Request(
+                      f"https://api.github.com/repos/{repository}/releases/assets/"
+                      f"{asset['id']}",
+                      headers=headers,
+                      method="DELETE",
+                  )
+                  with urllib.request.urlopen(delete, timeout=30):
+                      pass
+                  print(f"Deleted stale managed release asset {name}")
+          PY
+
+      - name: Create or repair release with exact PyPI artifacts and SBOM
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.check.outputs.version }}
         run: |
-          gh release create "v$VERSION" dist/* \
-            --target "$GITHUB_SHA" \
-            --title "v$VERSION" \
-            --generate-notes
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" dist/* --clobber
+            gh release edit "v$VERSION" \
+              --draft=false \
+              --prerelease=false \
+              --title "v$VERSION"
+          else
+            gh release create "v$VERSION" dist/* \
+              --verify-tag \
+              --title "v$VERSION" \
+              --generate-notes
+          fi
+
+      - name: Verify final tag and GitHub release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ needs.check.outputs.source_sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, urllib.request
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          repository = os.environ["REPOSITORY"]
+
+          def get(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          current = get(f"git/ref/tags/v{os.environ['VERSION']}")["object"]
+          while current["type"] == "tag":
+              current = get(f"git/tags/{current['sha']}")["object"]
+          if current["type"] != "commit" or current["sha"] != os.environ["SOURCE_SHA"]:
+              raise SystemExit(
+                  f"Final release tag mismatch: {current}; "
+                  f"expected commit {os.environ['SOURCE_SHA']}"
+              )
+
+          release = get(f"releases/tags/v{os.environ['VERSION']}")
+          if release.get("draft") or release.get("prerelease"):
+              raise SystemExit("Final GitHub release is draft or prerelease")
+
+          expected = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in pathlib.Path("dist").iterdir()
+              if path.name.endswith(".whl")
+              or path.name.endswith(".tar.gz")
+              or path.name.endswith(".cdx.json")
+          }
+          assets = {
+              str(asset.get("name") or ""): asset
+              for asset in release.get("assets", [])
+              if str(asset.get("name") or "").endswith(".whl")
+              or str(asset.get("name") or "").endswith(".tar.gz")
+              or str(asset.get("name") or "").endswith(".cdx.json")
+          }
+          if set(assets) != set(expected):
+              raise SystemExit(
+                  f"Final package assets differ: {sorted(assets)} != "
+                  f"{sorted(expected)}"
+              )
+          for name, digest in expected.items():
+              actual = str(assets[name].get("digest") or "").lower()
+              if actual != f"sha256:{digest}":
+                  raise SystemExit(
+                      f"Final GitHub digest mismatch for {name}: "
+                      f"{actual} != sha256:{digest}"
+                  )
+          print(
+              f"Final release verified at {current['sha']} with "
+              f"{sorted(expected)}"
+          )
+          PY

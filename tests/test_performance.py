@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from moneybird.task_context import MoneybirdTaskContext
 from moneybird.telemetry import (
@@ -76,6 +77,70 @@ class TelemetryTests(unittest.TestCase):
             normalize_endpoint("/42/contacts/7.json"),
             "/:id/contacts/:id.json",
         )
+        self.assertEqual(
+            normalize_endpoint(
+                "/42/sales_invoices/find_by_reference/ACME-2026-0001.json"
+            ),
+            "/:id/sales_invoices/find_by_reference/:value",
+        )
+        self.assertEqual(
+            normalize_endpoint("/42/contacts/customer_id/CUST-JANSEN-42.json"),
+            "/:id/contacts/customer_id/:value",
+        )
+
+    def test_declared_operation_is_used_without_runtime_path(self) -> None:
+        record_api_call(
+            method="GET",
+            path="/42/contacts/customer_id/CUST-PRIVATE.json",
+            operation="/:administration/contacts/customer_id/:customer_id.json",
+            status=200,
+            duration_seconds=0.01,
+            retry=0,
+        )
+        snapshot = performance_snapshot(recent_tools=1)
+        endpoint = snapshot["api"]["top_endpoints"][0]["endpoint"]
+        self.assertEqual(
+            endpoint,
+            "GET /:administration/contacts/customer_id/:customer_id.json",
+        )
+        self.assertNotIn("CUST-PRIVATE", endpoint)
+
+    def test_declared_operation_is_still_normalized_defensively(self) -> None:
+        record_api_call(
+            method="GET",
+            operation="/42/sales_invoices/987.json",
+            status=200,
+            duration_seconds=0.01,
+            retry=0,
+        )
+        endpoint = performance_snapshot(recent_tools=1)["api"]["top_endpoints"][0][
+            "endpoint"
+        ]
+        self.assertEqual(endpoint, "GET /:id/sales_invoices/:id.json")
+        self.assertNotIn("42", endpoint)
+        self.assertNotIn("987", endpoint)
+
+    def test_client_normalizes_default_operation_before_telemetry(self) -> None:
+        import moneybird.client as client_module
+
+        client = client_module.MoneybirdClient("token", "123")
+        response = mock.Mock()
+        response.status_code = 200
+        response.text = '{"id":"456"}'
+        response.headers = {}
+        with mock.patch.object(
+            client_module,
+            "get_shared_http_client",
+            return_value=mock.Mock(request=mock.Mock(return_value=response)),
+        ):
+            client._request("GET", "/123/sales_invoices/456.json")
+
+        endpoint = performance_snapshot(recent_tools=1)["api"]["top_endpoints"][0][
+            "endpoint"
+        ]
+        self.assertEqual(endpoint, "GET /:id/sales_invoices/:id.json")
+        self.assertNotIn("123", endpoint)
+        self.assertNotIn("456", endpoint)
 
     def test_tool_metric_includes_grouped_api_call_count(self) -> None:
         trace_id, trace_token, tool_token = begin_tool_trace("demo_tool")

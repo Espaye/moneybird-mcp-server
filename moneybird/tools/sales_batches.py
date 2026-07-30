@@ -5,6 +5,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..capabilities import require_write_capability
 from ..config import (
     MoneybirdError,
     PREPARE_ANNOTATIONS,
@@ -15,9 +16,16 @@ from ..formatting import (
     chunked,
     duplicate_fingerprint,
     iso_now,
+    money_decimal,
     render_preview_table,
 )
-from ..safety import make_approval, pop_approval
+from ..safety import (
+    approval_execution_state,
+    make_approval,
+    pop_approval,
+    record_approval_phase,
+    record_approval_outcome,
+)
 from ..invoicing import (
     apply_batch_group_merge_checks,
     build_batch_invoice_payload,
@@ -27,9 +35,25 @@ from ..invoicing import (
     list_scheduled_merge_candidates,
     summarize_batch_preview,
 )
+from ..write_contracts import (
+    assert_patch_precondition,
+    build_patch_precondition,
+    verify_sales_invoice_payload,
+    verify_sales_invoice_patch,
+)
 from ._params import ApprovalId, DateString, OptionalDateString
 from ._registry import mcp
 from . import _context as ctx
+
+
+def _money_values_equal(left: Any, right: Any) -> bool:
+    """Compare Moneybird monetary values at the supported cent precision."""
+    try:
+        left_value = money_decimal(left)
+        right_value = money_decimal(right)
+    except Exception:
+        return False
+    return left_value.is_finite() and right_value.is_finite() and left_value == right_value
 
 
 def _prepare_batch_create_sales_invoices(
@@ -86,16 +110,25 @@ def prepare_batch_create_sales_invoices(
 def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared batch invoice creation."""
     client = ctx.get_client()
+    require_write_capability(action="batch_create_sales_invoices")
     pending = pop_approval(approval_id, "batch_create_sales_invoices", administration_id=client.administration_id)
     payload = pending["payload"]
     fingerprint = payload["fingerprint"]
     if ctx.audit_log_contains_success("batch_create_sales_invoices", fingerprint):
+        record_approval_outcome(
+            approval_id,
+            "duplicate_suppressed",
+            administration_id=client.administration_id,
+        )
         raise MoneybirdError(
             "This batch payload already completed successfully according to the local audit log."
         )
 
     created: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    expected_by_created_id: dict[str, dict[str, Any]] = {}
+    writes_applied = 0
+    dispatch_started = False
     try:
         for item in payload["items"]:
             if item["duplicates"] and payload["skip_if_duplicate"]:
@@ -108,7 +141,15 @@ def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
                 )
                 continue
 
+            if not dispatch_started:
+                record_approval_phase(
+                    approval_id,
+                    "dispatching",
+                    administration_id=client.administration_id,
+                )
+                dispatch_started = True
             record = client.create_sales_invoice(item["sales_invoice"])
+            writes_applied += 1
             result_row = {
                 "customer_id": item["contact"].get("customer_id"),
                 "sales_invoice_id": str(record.get("id")),
@@ -120,8 +161,10 @@ def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
                 "expected_invoice_date": item["schedule_send_on"]
                 or item["sales_invoice"].get("invoice_date"),
             }
+            expected_by_created_id[str(record.get("id"))] = item["sales_invoice"]
             if item["schedule_send_on"]:
                 record = client.send_sales_invoice(str(record["id"]), item["send_payload"])
+                writes_applied += 1
                 result_row.update(
                     {
                         "state": record.get("state"),
@@ -130,12 +173,38 @@ def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
                     }
                 )
             created.append(result_row)
+        if dispatch_started:
+            record_approval_phase(
+                approval_id,
+                "verifying",
+                administration_id=client.administration_id,
+            )
     except Exception as exc:
+        phase = approval_execution_state(
+            approval_id,
+            administration_id=client.administration_id,
+        )["phase"]
+        audit_result = (
+            "partial_failure"
+            if writes_applied
+            else ("failed_pre_write" if phase == "preflight" else "ambiguous")
+        )
+        record_approval_outcome(
+            approval_id,
+            audit_result,
+            administration_id=client.administration_id,
+            error=str(exc),
+        )
         ctx.append_failed_audit_log(
             "batch_create_sales_invoices",
             fingerprint=fingerprint,
             error=str(exc),
-            partial={"created": created, "skipped": skipped},
+            partial={
+                "writes_applied": writes_applied,
+                "created": created,
+                "skipped": skipped,
+            },
+            result=audit_result,
         )
         raise
 
@@ -147,15 +216,24 @@ def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
     verification: list[dict[str, Any]] = []
     for row in created:
         invoice = fetched_by_id.get(row["sales_invoice_id"], {})
+        payload_verification = verify_sales_invoice_payload(
+            expected_by_created_id.get(row["sales_invoice_id"], {}),
+            invoice,
+        )
         checks = {
-            "total_matches": str(invoice.get("total_price_incl_tax"))
-            == str(row.get("expected_total_incl_tax")),
+            "total_matches": _money_values_equal(
+                invoice.get("total_price_incl_tax"),
+                row.get("expected_total_incl_tax"),
+            ),
             "state_matches": str(invoice.get("state")) == str(row.get("expected_state")),
             "invoice_date_matches": (
                 not row.get("expected_invoice_date")
                 or str(invoice.get("invoice_date")) == str(row.get("expected_invoice_date"))
             ),
             "not_sent_yet": invoice.get("sent_at") in (None, ""),
+            "payload_fields_and_lines_match": payload_verification[
+                "fully_verified"
+            ],
         }
         verification.append(
             {
@@ -167,16 +245,23 @@ def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
                 "total_price_incl_tax": invoice.get("total_price_incl_tax"),
                 "expected_total_incl_tax": row.get("expected_total_incl_tax"),
                 "checks": checks,
+                "payload_verification": payload_verification,
                 "verified": all(checks.values()),
             }
         )
     all_verified = all(row["verified"] for row in verification)
+    audit_result = "success" if all_verified else "verification_failed"
 
+    record_approval_outcome(
+        approval_id,
+        audit_result,
+        administration_id=client.administration_id,
+    )
     ctx.append_audit_log(
         {
             "action": "batch_create_sales_invoices",
             "fingerprint": fingerprint,
-            "result": "success",
+            "result": audit_result,
             "created": created,
             "skipped": skipped,
             "verification": verification,
@@ -208,6 +293,7 @@ def prepare_batch_update_sales_invoices(
     client = ctx.get_client()
     prepared_items: list[dict[str, Any]] = []
     preview_rows: list[dict[str, Any]] = []
+    seen_invoice_ids: set[str] = set()
 
     for entry in entries:
         sales_invoice_id = str(entry.get("sales_invoice_id", "")).strip()
@@ -231,6 +317,13 @@ def prepare_batch_update_sales_invoices(
                     f"Expected exactly one invoice for customer_id {customer_id}, got {len(matches)}."
                 )
             invoice = client.get_sales_invoice(str(matches[0]["id"]))
+
+        resolved_invoice_id = str(invoice["id"])
+        if resolved_invoice_id in seen_invoice_ids:
+            raise MoneybirdError(
+                f"Sales invoice {resolved_invoice_id} is listed more than once."
+            )
+        seen_invoice_ids.add(resolved_invoice_id)
 
         details_patch = []
         for detail_update in entry.get("detail_updates", []):
@@ -265,10 +358,14 @@ def prepare_batch_update_sales_invoices(
         )
         prepared_items.append(
             {
-                "sales_invoice_id": str(invoice["id"]),
+                "sales_invoice_id": resolved_invoice_id,
                 "invoice_id": invoice.get("invoice_id"),
                 "customer_id": invoice.get("contact", {}).get("customer_id"),
                 "patch": sales_invoice_patch,
+                "precondition": build_patch_precondition(
+                    invoice,
+                    sales_invoice_patch,
+                ),
             }
         )
         preview_rows.append(
@@ -308,18 +405,47 @@ def prepare_batch_update_sales_invoices(
 def batch_update_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared batch invoice update."""
     client = ctx.get_client()
+    require_write_capability(action="batch_update_sales_invoices")
     pending = pop_approval(approval_id, "batch_update_sales_invoices", administration_id=client.administration_id)
     payload = pending["payload"]
     fingerprint = payload["fingerprint"]
     if ctx.audit_log_contains_success("batch_update_sales_invoices", fingerprint):
+        record_approval_outcome(
+            approval_id,
+            "duplicate_suppressed",
+            administration_id=client.administration_id,
+        )
         raise MoneybirdError(
             "This batch update payload already completed successfully according to the local audit log."
         )
 
     updated: list[dict[str, Any]] = []
+    verification: list[dict[str, Any]] = []
+    writes_applied = 0
     try:
+        # Validate the complete batch before the first mutation. A stale later
+        # row must never turn an otherwise avoidable batch into a partial write.
+        for item in payload["items"]:
+            current = client.get_sales_invoice(item["sales_invoice_id"])
+            if str(current.get("id") or "") != str(item["sales_invoice_id"]):
+                raise MoneybirdError(
+                    f"Sales invoice {item['sales_invoice_id']} lookup returned a "
+                    "different record. Prepare again."
+                )
+            assert_patch_precondition(
+                current,
+                item.get("precondition") or {},
+                record_label=f"Sales invoice {item['sales_invoice_id']}",
+            )
+
+        record_approval_phase(
+            approval_id,
+            "dispatching",
+            administration_id=client.administration_id,
+        )
         for item in payload["items"]:
             record = client.update_sales_invoice(item["sales_invoice_id"], item["patch"])
+            writes_applied += 1
             updated.append(
                 {
                     "sales_invoice_id": str(record.get("id")),
@@ -328,28 +454,80 @@ def batch_update_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
                     "state": record.get("state"),
                 }
             )
+
+        record_approval_phase(
+            approval_id,
+            "verifying",
+            administration_id=client.administration_id,
+        )
+        for item in payload["items"]:
+            record = client.get_sales_invoice(item["sales_invoice_id"])
+            checked = verify_sales_invoice_patch(item["patch"], record)
+            verification.append(
+                {
+                    "sales_invoice_id": item["sales_invoice_id"],
+                    **checked,
+                }
+            )
     except Exception as exc:
+        phase = approval_execution_state(
+            approval_id,
+            administration_id=client.administration_id,
+        )["phase"]
+        audit_result = (
+            "partial_failure"
+            if writes_applied
+            else ("failed_pre_write" if phase == "preflight" else "ambiguous")
+        )
+        record_approval_outcome(
+            approval_id,
+            audit_result,
+            administration_id=client.administration_id,
+            error=str(exc),
+        )
         ctx.append_failed_audit_log(
             "batch_update_sales_invoices",
             fingerprint=fingerprint,
             error=str(exc),
-            partial={"updated": updated},
+            partial={
+                "writes_applied": writes_applied,
+                "updated": updated,
+                "verification": verification,
+            },
+            result=audit_result,
         )
         raise
 
+    all_verified = (
+        len(verification) == len(payload["items"])
+        and all(item["fully_verified"] for item in verification)
+    )
+    audit_result = "success" if all_verified else "verification_failed"
+    record_approval_outcome(
+        approval_id,
+        audit_result,
+        administration_id=client.administration_id,
+    )
     ctx.append_audit_log(
         {
             "action": "batch_update_sales_invoices",
             "fingerprint": fingerprint,
-            "result": "success",
+            "result": audit_result,
             "updated": updated,
+            "verification": verification,
         }
     )
     return {
-        "status": "completed",
+        "status": (
+            "completed"
+            if all_verified
+            else "completed_with_verification_errors"
+        ),
         "approved_at": iso_now(),
         "summary": pending["summary"],
         "updated": updated,
+        "verification": verification,
+        "all_verified": all_verified,
         "fingerprint": fingerprint,
     }
 
@@ -436,6 +614,18 @@ def prepare_batch_schedule_sales_invoices(
                 "sales_invoice_id": sales_invoice_id,
                 "customer_id": (invoice.get("contact") or {}).get("customer_id"),
                 "before_total_price_incl_tax": invoice.get("total_price_incl_tax"),
+                "expected_record": {
+                    key: invoice.get(key)
+                    for key in (
+                        "version",
+                        "updated_at",
+                        "state",
+                        "invoice_date",
+                        "sent_at",
+                        "total_price_incl_tax",
+                    )
+                    if invoice.get(key) is not None
+                },
                 "already_scheduled": already_scheduled,
                 "sales_invoice_sending": send_payload,
             }
@@ -473,6 +663,7 @@ def prepare_batch_schedule_sales_invoices(
 def batch_schedule_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Schedule a prepared invoice batch and verify every resulting invoice."""
     client = ctx.get_client()
+    require_write_capability(action="batch_schedule_sales_invoices")
     pending = pop_approval(
         approval_id,
         "batch_schedule_sales_invoices",
@@ -481,12 +672,40 @@ def batch_schedule_sales_invoices_from_approval(approval_id: ApprovalId) -> dict
     payload = pending["payload"]
     fingerprint = payload["fingerprint"]
     if ctx.audit_log_contains_success("batch_schedule_sales_invoices", fingerprint):
+        record_approval_outcome(
+            approval_id,
+            "duplicate_suppressed",
+            administration_id=client.administration_id,
+        )
         raise MoneybirdError(
             "This schedule batch already completed successfully according to the local audit log."
         )
 
     scheduled: list[dict[str, Any]] = []
+    writes_applied = 0
+    dispatch_started = False
     try:
+        for item in payload["items"]:
+            current = client.get_sales_invoice(item["sales_invoice_id"])
+            changed = {
+                key: {"expected": value, "actual": current.get(key)}
+                for key, value in (item.get("expected_record") or {}).items()
+                if (
+                    not _money_values_equal(current.get(key), value)
+                    if key == "total_price_incl_tax"
+                    else str(current.get(key) or "") != str(value or "")
+                )
+            }
+            if str(current.get("id") or "") != str(item["sales_invoice_id"]):
+                changed["id"] = {
+                    "expected": item["sales_invoice_id"],
+                    "actual": current.get("id"),
+                }
+            if changed:
+                raise MoneybirdError(
+                    f"Sales invoice {item['sales_invoice_id']} changed after "
+                    f"preview: {changed}. Prepare again."
+                )
         for item in payload["items"]:
             if item.get("already_scheduled"):
                 scheduled.append(
@@ -497,10 +716,18 @@ def batch_schedule_sales_invoices_from_approval(approval_id: ApprovalId) -> dict
                     }
                 )
                 continue
+            if not dispatch_started:
+                record_approval_phase(
+                    approval_id,
+                    "dispatching",
+                    administration_id=client.administration_id,
+                )
+                dispatch_started = True
             record = client.send_sales_invoice(
                 item["sales_invoice_id"],
                 item["sales_invoice_sending"],
             )
+            writes_applied += 1
             scheduled.append(
                 {
                     "sales_invoice_id": str(record.get("id")),
@@ -508,12 +735,37 @@ def batch_schedule_sales_invoices_from_approval(approval_id: ApprovalId) -> dict
                     "action": "scheduled",
                 }
             )
+        if dispatch_started:
+            record_approval_phase(
+                approval_id,
+                "verifying",
+                administration_id=client.administration_id,
+            )
     except Exception as exc:
+        phase = approval_execution_state(
+            approval_id,
+            administration_id=client.administration_id,
+        )["phase"]
+        audit_result = (
+            "partial_failure"
+            if writes_applied
+            else ("failed_pre_write" if phase == "preflight" else "ambiguous")
+        )
+        record_approval_outcome(
+            approval_id,
+            audit_result,
+            administration_id=client.administration_id,
+            error=str(exc),
+        )
         ctx.append_failed_audit_log(
             "batch_schedule_sales_invoices",
             fingerprint=fingerprint,
             error=str(exc),
-            partial={"scheduled": scheduled},
+            partial={
+                "writes_applied": writes_applied,
+                "scheduled": scheduled,
+            },
+            result=audit_result,
         )
         raise
 
@@ -528,8 +780,10 @@ def batch_schedule_sales_invoices_from_approval(approval_id: ApprovalId) -> dict
         invoice = fetched_by_id.get(item["sales_invoice_id"], {})
         expected_date = item["sales_invoice_sending"]["invoice_date"]
         checks = {
-            "total_unchanged": str(invoice.get("total_price_incl_tax"))
-            == str(item.get("before_total_price_incl_tax")),
+            "total_unchanged": _money_values_equal(
+                invoice.get("total_price_incl_tax"),
+                item.get("before_total_price_incl_tax"),
+            ),
             "state_scheduled": invoice.get("state") == "scheduled",
             "invoice_date_matches": invoice.get("invoice_date") == expected_date,
             "not_sent_yet": invoice.get("sent_at") in (None, ""),
@@ -547,11 +801,17 @@ def batch_schedule_sales_invoices_from_approval(approval_id: ApprovalId) -> dict
             }
         )
     all_verified = all(item["verified"] for item in verification)
+    audit_result = "success" if all_verified else "verification_failed"
+    record_approval_outcome(
+        approval_id,
+        audit_result,
+        administration_id=client.administration_id,
+    )
     ctx.append_audit_log(
         {
             "action": "batch_schedule_sales_invoices",
             "fingerprint": fingerprint,
-            "result": "success",
+            "result": audit_result,
             "scheduled": scheduled,
             "verification": verification,
         }

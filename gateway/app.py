@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,10 @@ from starlette.routing import Route
 from moneybird import oauth
 from moneybird.client import MoneybirdClient
 from moneybird.config import MoneybirdError, data_dir
+from moneybird.credentials import (
+    CREDENTIAL_MODE_ENV,
+    CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+)
 
 # A pending OAuth state is valid this long between /oauth/login and the callback.
 STATE_TTL_SECONDS = 600
@@ -49,6 +55,7 @@ class GatewayStore:
 
     def __init__(self) -> None:
         self._pending_states: dict[str, float] = {}
+        self._users_lock = threading.RLock()
 
     def _users_path(self) -> Path:
         return data_dir() / USERS_FILENAME
@@ -60,9 +67,18 @@ class GatewayStore:
         return json.loads(path.read_text(encoding="utf-8"))
 
     def _save_users(self, users: dict[str, dict[str, Any]]) -> None:
-        self._users_path().write_text(
+        path = self._users_path()
+        temporary = path.with_name(
+            f".{path.name}.{secrets.token_hex(8)}.tmp"
+        )
+        temporary.write_text(
             json.dumps(users, indent=2, sort_keys=True), encoding="utf-8"
         )
+        try:
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     # --- OAuth state (CSRF) ----------------------------------------------------
 
@@ -83,7 +99,7 @@ class GatewayStore:
         tokens: dict[str, Any],
         administrations: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        user_id = secrets.token_hex(4)
+        user_id = secrets.token_hex(16)
         gateway_key = secrets.token_urlsafe(32)
         profile = f"gateway-{user_id}"
         oauth.store_tokens(tokens, profile=profile)
@@ -96,16 +112,19 @@ class GatewayStore:
             "administration_count": len(administrations),
             "created_at": int(time.time()),
         }
-        users = self._load_users()
-        users[gateway_key] = record
-        self._save_users(users)
+        with self._users_lock:
+            users = self._load_users()
+            users[gateway_key] = record
+            self._save_users(users)
         return {**record, "gateway_key": gateway_key}
 
     def lookup(self, gateway_key: str) -> dict[str, Any] | None:
-        return self._load_users().get(gateway_key)
+        with self._users_lock:
+            return self._load_users().get(gateway_key)
 
     def user_count(self) -> int:
-        return len(self._load_users())
+        with self._users_lock:
+            return len(self._load_users())
 
 
 # --- Onboarding pages ----------------------------------------------------------
@@ -253,6 +272,9 @@ async def _send_plain(send: Any, status: int, text: str) -> None:
 def build_gateway_app(mcp_app: Any | None = None) -> GatewayDispatcher:
     """The complete demo app. ``mcp_app`` is injectable for tests; by default the
     real Moneybird MCP streamable-HTTP app is mounted in-process."""
+    # A gateway process must never inherit local env/OAuth fallback semantics.
+    # Force the mode even if its surrounding environment was misconfigured.
+    os.environ[CREDENTIAL_MODE_ENV] = CREDENTIAL_MODE_HOSTED_REQUEST_ONLY
     if mcp_app is None:
         os.environ.setdefault(
             "MONEYBIRD_TOOL_DISCOVERY",

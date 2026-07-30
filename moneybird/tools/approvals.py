@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from ..capabilities import require_write_capability
 from ..config import MoneybirdError, WRITE_ANNOTATIONS
 from ..safety import peek_approval
+from ..write_contracts import WRITE_SPECS
 from ._params import ApprovalId
 from ._registry import mcp
 from . import _context as ctx
@@ -74,6 +76,14 @@ APPROVAL_EXECUTORS: dict[str, ApprovalExecutor] = {
     "update_contact": update_contact_from_approval,
 }
 
+if set(APPROVAL_EXECUTORS) != set(WRITE_SPECS):
+    missing_specs = sorted(set(APPROVAL_EXECUTORS) - set(WRITE_SPECS))
+    orphan_specs = sorted(set(WRITE_SPECS) - set(APPROVAL_EXECUTORS))
+    raise RuntimeError(
+        "Approval executor / WriteSpec registry mismatch: "
+        f"missing_specs={missing_specs}, orphan_specs={orphan_specs}"
+    )
+
 
 @mcp.tool(
     annotations=WRITE_ANNOTATIONS,
@@ -87,6 +97,9 @@ def execute_approved_action(approval_id: ApprovalId) -> dict[str, Any]:
     and single-use; this tool only removes the need to rediscover a separate
     action-specific ``*_from_approval`` tool.
     """
+    # Reject hosted/read-only execution before resolving credentials or opening
+    # the local approvals database.
+    require_write_capability(action="execute_approved_action")
     client = ctx.get_client()
     pending = peek_approval(
         approval_id,

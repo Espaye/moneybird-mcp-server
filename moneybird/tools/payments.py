@@ -1,6 +1,7 @@
 """Guarded payment registration on sales invoices, purchase invoices, and receipts."""
 from __future__ import annotations
 
+from collections import Counter
 from typing import Annotated, Any
 
 from pydantic import Field
@@ -32,7 +33,12 @@ from ._params import (
     PriceString,
 )
 from ._registry import mcp
-from ._writes import run_approved_write, stage_write
+from ._writes import (
+    mark_write_dispatch_started,
+    mark_write_verifying,
+    run_approved_write,
+    stage_write,
+)
 from . import _context as ctx
 
 
@@ -89,6 +95,67 @@ def _payable_record_summary(
     }
 
 
+def _payment_key(payment: dict[str, Any]) -> tuple[str, ...]:
+    amount = money_decimal(payment.get("price") or 0)
+    return (
+        str(payment.get("payment_date") or ""),
+        format(amount.normalize(), "f"),
+        str(payment.get("financial_account_id") or ""),
+        str(payment.get("financial_mutation_id") or ""),
+        str(payment.get("transaction_identifier") or ""),
+        str(payment.get("manual_payment_action") or ""),
+    )
+
+
+def _payment_keys(record: dict[str, Any]) -> list[list[str]]:
+    return [
+        list(_payment_key(payment))
+        for payment in record.get("payments") or []
+        if isinstance(payment, dict)
+    ]
+
+
+def _payment_precondition(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "version": str(record.get("version") or ""),
+        "updated_at": str(record.get("updated_at") or ""),
+        "total_price_incl_tax": str(record.get("total_price_incl_tax") or "0"),
+        "open_amount": _open_amount(record),
+        "payment_keys": _payment_keys(record),
+    }
+
+
+def _assert_payment_precondition(
+    record: dict[str, Any],
+    expected: dict[str, Any],
+    *,
+    document_id: str,
+) -> None:
+    if not expected:
+        raise MoneybirdError(
+            "This payment approval predates exact payment preconditions. Prepare it again."
+        )
+    current = _payment_precondition(record)
+    for field in ("version", "updated_at"):
+        expected_value = str(expected.get(field) or "")
+        if expected_value and str(current.get(field) or "") != expected_value:
+            raise MoneybirdError(
+                f"Document {document_id} changed after the payment preview "
+                f"({field} {expected_value} -> {current.get(field)}). Prepare again."
+            )
+    monetary_fields = ("total_price_incl_tax", "open_amount")
+    for field in monetary_fields:
+        if money_decimal(current[field]) != money_decimal(expected[field]):
+            raise MoneybirdError(
+                f"Document {document_id} {field} changed after the payment preview. "
+                "Prepare again."
+            )
+    if current["payment_keys"] != expected.get("payment_keys"):
+        raise MoneybirdError(
+            f"Document {document_id} payments changed after the preview. Prepare again."
+        )
+
+
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_register_payment(
     document_type: PayableDocumentType,
@@ -124,6 +191,8 @@ def prepare_register_payment(
     if not payment_date.strip():
         raise MoneybirdError("payment_date is required (YYYY-MM-DD).")
     amount = parse_decimal_number(price, label="price")
+    if amount <= 0:
+        raise MoneybirdError("price must be greater than zero.")
 
     client = ctx.get_client()
     record = _fetch_payable_record(client, kind, document_id)
@@ -155,6 +224,13 @@ def prepare_register_payment(
             "manual_payment_action": manual_payment_action.strip(),
         }
     )
+    precondition = _payment_precondition(record)
+    fingerprint_payload = {
+        "document_type": kind,
+        "document_id": str(document_id),
+        "payment": payment,
+        "precondition": precondition,
+    }
     return stage_write(
         "register_payment",
         summary=f"Register payment of {amount} on {summary['title']}",
@@ -163,6 +239,7 @@ def prepare_register_payment(
             "document_id": str(document_id),
             "payment": payment,
             "total_before": str(record.get("total_price_incl_tax") or "0"),
+            "precondition": precondition,
         },
         preview={
             "document": summary,
@@ -171,7 +248,7 @@ def prepare_register_payment(
         },
         fingerprint=duplicate_fingerprint(
             "register_payment",
-            {"document_type": kind, "document_id": str(document_id), "payment": payment},
+            fingerprint_payload,
         ),
     )
 
@@ -179,33 +256,105 @@ def prepare_register_payment(
 def _execute_register_payment(client, payload: dict[str, Any]) -> dict[str, Any]:
     kind = payload["document_type"]
     document_id = payload["document_id"]
+    before = _fetch_payable_record(client, kind, document_id)
+    if str(before.get("id") or "") != str(document_id):
+        raise MoneybirdError(
+            f"Document {document_id} lookup returned a different record. Prepare again."
+        )
+    _assert_payment_precondition(
+        before,
+        payload.get("precondition") or {},
+        document_id=document_id,
+    )
+    mark_write_dispatch_started()
     if kind == "sales_invoice":
         client.register_sales_invoice_payment(document_id, payload["payment"])
     else:
         client.register_document_payment(kind, document_id, payload["payment"])
+    mark_write_verifying()
     record = _fetch_payable_record(client, kind, document_id)
     summary = _payable_record_summary(client, kind, record)
+    record_id_matches = str(record.get("id") or "") == str(document_id)
     total_after = str(record.get("total_price_incl_tax") or "0")
     total_unchanged = money_decimal(total_after) == money_decimal(payload["total_before"])
-    payment_present = any(
-        str(item.get("payment_date")) == payload["payment"]["payment_date"]
-        and money_decimal(item.get("price") or 0) == money_decimal(payload["payment"]["price"])
-        for item in record.get("payments") or []
+    before_counter = Counter(
+        tuple(key)
+        for key in payload["precondition"]["payment_keys"]
+    )
+    after_counter = Counter(tuple(key) for key in _payment_keys(record))
+    added_payments = after_counter - before_counter
+    removed_payments = before_counter - after_counter
+    requested_key = _payment_key(payload["payment"])
+    exact_payment_delta = (
+        not removed_payments
+        and sum(added_payments.values()) == 1
+        and added_payments[requested_key] == 1
+    )
+    expected_open_after = (
+        money_decimal(payload["precondition"]["open_amount"])
+        - money_decimal(payload["payment"]["price"])
+    )
+    open_amount_after = money_decimal(summary["open_amount"])
+    open_amount_delta_matches = open_amount_after == expected_open_after
+    fully_verified = (
+        record_id_matches
+        and total_unchanged
+        and exact_payment_delta
+        and open_amount_delta_matches
     )
     return {
-        "_status": "payment_registered",
+        "_status": (
+            "payment_registered"
+            if fully_verified
+            else "completed_with_verification_errors"
+        ),
+        "_audit_result": (
+            "success" if fully_verified else "verification_failed"
+        ),
         "_audit": {
             "document_type": kind,
             "document_id": str(document_id),
             "price": payload["payment"]["price"],
             "payment_date": payload["payment"]["payment_date"],
+            "total_unchanged_to_the_cent": total_unchanged,
+            "record_id_matches": record_id_matches,
+            "exact_new_payment_delta": exact_payment_delta,
+            "open_amount_delta_matches": open_amount_delta_matches,
         },
         "document": summary,
         "verification": {
             "total_before": payload["total_before"],
             "total_after": total_after,
+            "record_id_matches": record_id_matches,
             "total_unchanged_to_the_cent": total_unchanged,
-            "payment_visible_on_document": payment_present,
+            "payment_visible_on_document": exact_payment_delta,
+            "exact_new_payment_delta": exact_payment_delta,
+            "payments_added": [
+                {
+                    "payment_date": key[0],
+                    "price": key[1],
+                    "financial_account_id": key[2] or None,
+                    "financial_mutation_id": key[3] or None,
+                    "transaction_identifier": key[4] or None,
+                    "manual_payment_action": key[5] or None,
+                    "count": count,
+                }
+                for key, count in sorted(added_payments.items())
+            ],
+            "payments_removed": [
+                {
+                    "payment_date": key[0],
+                    "price": key[1],
+                    "financial_account_id": key[2] or None,
+                    "financial_mutation_id": key[3] or None,
+                    "transaction_identifier": key[4] or None,
+                    "manual_payment_action": key[5] or None,
+                    "count": count,
+                }
+                for key, count in sorted(removed_payments.items())
+            ],
+            "expected_open_amount_after": str(expected_open_after),
+            "open_amount_delta_matches": open_amount_delta_matches,
             "open_amount_after": summary["open_amount"],
         },
     }

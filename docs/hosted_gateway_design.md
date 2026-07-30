@@ -1,114 +1,102 @@
-# Hosted gateway design — Moneybird MCP for non-technical users
+# Hosted gateway design
 
-Status: **M1 localhost demo built; production hosting (M2+) is not built.** This is the
-architecture for the possible paid product: a web app where a non-technical Moneybird user
-connects their bookkeeping in a few clicks and gets a working MCP connection for
-Claude/ChatGPT — no pip, no config files, no tokens to paste. The local-first distribution
-(PyPI wheel, `.mcpb` bundle) remains the free, self-hosted path and the adoption funnel.
+Status: **the repository contains an M1 loopback demo, not a production hosted
+service.** Do not expose `gateway/` to the internet or treat it as a supported
+multi-user deployment.
 
-## Constraints (decided)
+The local PyPI and `.mcpb` distributions remain the supported path. A future hosted
+product would need a separate identity, authorization, storage, and operations layer.
 
-- The target user cannot do local MCP setup; first-run success in the web app is the
-  yardstick for every choice.
-- The product is AI-facing only: the user talks to an AI client, the model drives the
-  guarded tools. No human-facing CLI/REPL.
-- The preview-and-approve write flow and verified totals are non-negotiable — for a
-  user who can't inspect raw API calls, they *are* the trust layer.
-- Hosting domain and branding are TBD, published under the same pseudonymous identity
-  as the package. It must not run on any existing company's domain or branding.
+## Current containment
 
-## What already exists in this repo (verified, load-bearing)
+The demo starts the MCP app in `hosted_request_only` credential mode. In that mode:
 
-The MCP server is **already multi-tenant and gateway-ready**; the hosted product is a
-*new front service*, not a rework of this one:
+- only gateway-injected request credentials are accepted; environment and local OAuth
+  fallback are disabled;
+- tools may perform live Moneybird reads only;
+- all writes are refused, even if `MONEYBIRD_CAPABILITY_MODE=write_enabled`;
+- durable search synchronization and reads from JSON/SQLite/FTS caches are refused;
+- attachment download and PDF parsing are refused.
 
-1. **Per-request tenancy.** `moneybird/credentials.py` resolves credentials per request:
-   `X-Moneybird-Token` (+ optional `X-Moneybird-Administration-Id`) headers → env →
-   local OAuth store. One running server serves many administrations; the token is the
-   tenant boundary and is never logged.
-2. **Per-administration state.** Approvals (SQLite), audit logs, and sync/FTS caches are
-   keyed by administration id, so tenants cannot see each other's state.
-3. **OAuth building blocks.** `moneybird/oauth.py` implements the authorization-code
-   flow with an arbitrary `redirect_uri` and CSRF `state`
-   (`build_authorize_url`, `exchange_authorization_code`,
-   `parse_authorization_callback`, `refresh_access_token`), and a profile-keyed token
-   store. The out-of-band variant used by `scripts/oauth_login.py` is just the
-   local-dev special case of the same flow.
-4. **Transports.** FastMCP serves stdio (local), SSE, and streamable HTTP; the HTTP
-   modes are what the gateway fronts.
-5. **Compact discovery.** The runnable server and the M1 gateway expose the compact Tool
-   Search profile by default: seven pinned Moneybird tools plus `search_tools`/`call_tool`.
-   Full discovery remains available for compatibility, but is not the scalable hosted default.
+This makes the demo useful for exercising OAuth, routing, and live read isolation
+without presenting the repository's local durable state as a hosted tenant boundary.
+It does not make the demo production-ready.
 
-## Architecture
+The standalone MCP server has a different network mode:
+`network_single_user`. Every SSE or streamable-HTTP listener requires
+`MCP_AUTH_TOKEN`; a non-loopback bind also requires
+`MCP_TRUSTED_TLS_PROXY=true`. That static bearer secret protects one server instance.
+It is not user identity, delegated authorization, or a multi-tenant gateway.
 
-```
-end user's MCP client (Claude/ChatGPT)
-        │  MCP over HTTPS + per-user gateway key
-        ▼
-┌─ gateway web app (NEW, separate service) ─────────────────┐
-│ sign-up / login            Moneybird OAuth (redirect flow) │
-│ per-user token store (encrypted at rest)                   │
-│ per-user MCP endpoint → proxy that injects                 │
-│   X-Moneybird-Token / X-Moneybird-Administration-Id        │
-└──────────────┬─────────────────────────────────────────────┘
-               ▼  localhost / private network
-   moneybird-mcp server (THIS repo, unmodified)
-               ▼
-        Moneybird REST API
-```
+## What M1 actually implements
 
-- **The gateway owns users; the MCP server owns bookkeeping semantics.** The gateway
-  never interprets tool calls; the MCP server never sees user accounts.
-- **Onboarding flow:** sign up → "Connect Moneybird" → Moneybird OAuth consent
-  (redirect flow with `state`) → gateway exchanges the code, stores tokens server-side
-  → user gets a personal MCP endpoint URL + key (or a one-click Claude connector
-  config) ready to paste into their AI client. Nothing else to configure.
-- **Per-user gateway key, never the Moneybird token.** The end user's MCP client
-  authenticates to the gateway with a revocable random key; the Moneybird token stays
-  server-side. Compromise of the key is contained by revoking it, not the Moneybird
-  grant.
-- **Administration selection**: after OAuth, the gateway lists the token's
-  administrations (`/administrations.json`) and stores the chosen id with the token, so
-  the header pair is always complete and auto-selection ambiguity never reaches the
-  end user.
+`python -m gateway` runs a loopback-only, in-process demo:
 
-## Security model
+1. A minimal web flow starts Moneybird OAuth and validates callback state.
+2. The demo creates a 128-bit random user/profile identifier and a random personal
+   URL key.
+3. It stores user-to-profile and token data in local plaintext JSON files.
+4. Requests to `/u/<key>/mcp` are mapped to that profile. Client-supplied Moneybird
+   credential headers are stripped and the selected profile's credentials are
+   injected into the in-process MCP request.
+5. The MCP app resolves only that authenticated request context and performs live
+   Moneybird reads.
 
-- Moneybird tokens: encrypted at rest, never logged, never sent to the browser after
-  the OAuth exchange, only ever forwarded to the local MCP server over the private hop.
-- OAuth `state` is generated per login attempt and validated on the callback
-  (`parse_authorization_callback` enforces this); redirect URI is fixed and registered.
-- Scopes: request only what the tool surface needs (`DEFAULT_OAUTH_SCOPES`).
-- TLS at the edge (Cloudflare tunnel or equivalent); the header-credential path is
-  TLS-only by design.
-- This is financial data: per-tenant isolation must extend to any server-side sync/FTS
-  caches the gateway enables (already keyed by administration id), and deletion of an
-  account must delete tokens and cached data (GDPR).
+JSON updates are serialized within the process, written through an atomic replace,
+and given best-effort owner-only permissions (`0600`). Those measures reduce ordinary
+local file corruption and disclosure; they do not provide encryption, cross-process
+coordination, transactional identity storage, or a production secret store.
 
-## Open decisions (do not invent — decide with Sipke when concrete)
+Other important limitations:
 
-- Billing model and provider; free-tier boundaries.
-- Domain and product name/branding.
-- Bring-your-own-AI-client only, or an embedded chat (an Agent-SDK app talking to the
-  same MCP endpoint) as the zero-setup tier.
-- Where the gateway runs (VPS + tunnel vs. managed platform) and data residency (EU).
-- Key rotation / session policy; whether Moneybird refresh-token rotation needs a
-  scheduled job (Moneybird tokens currently do not expire).
+- the personal secret is embedded in the URL, so browser history, access logs,
+  referrers, screenshots, or copied links can disclose it;
+- there is no end-user MCP OAuth resource-server flow, session management, key
+  rotation UI, account recovery, or robust revocation/deletion workflow;
+- the demo automatically selects the first Moneybird administration instead of
+  presenting and persisting an explicit administration choice;
+- there is no TLS termination, fixed canonical public origin, proxy trust policy,
+  rate limiting, quota system, job isolation, backpressure, monitoring, backup, or
+  restore design;
+- the process-local storage and locking model does not support horizontal scaling;
+- the gateway package is source-only and is intentionally absent from the wheel,
+  sdist, and `.mcpb`.
 
-## Milestones
+The URL key and injected request context are demo routing mechanisms, not proof of a
+human's identity or confirmation of a bookkeeping change.
 
-1. **M0 (done):** library is gateway-ready — multi-tenant headers, per-administration
-   state, redirect-capable OAuth with state validation.
-2. **M1 (done):** localhost end-to-end demo — the `gateway/` package
-   (`python -m gateway`, loopback-only). A minimal web page runs the redirect OAuth
-   flow, stores tokens under per-user OAuth profiles, issues a gateway key, and
-   dispatches `/u/<key>/mcp` into the in-process MCP app with tenant headers injected
-   (client-supplied tenant headers are stripped). The initial demo was live-verified with a
-   real MCP client listing the then-complete catalog and calling `list_tax_rates` through a
-   gateway key; the gateway now defaults to the compact Tool Search profile (9 initially
-   visible tools, with the full catalog searchable on demand). Tests:
-   `tests/test_gateway_demo.py`. The package is deliberately not part of the wheel.
-3. **M2:** deploy that demo behind TLS on the chosen domain with per-user keys and an
-   encrypted token store; invite-only alpha.
-4. **M3:** accounts, billing, administration picker UI, revocation; public beta.
+## Production trust boundaries
+
+A hosted service must own and enforce:
+
+- authenticated user identity and account lifecycle;
+- an OAuth callback with fixed registered origins and durable, one-time state;
+- encrypted credential storage, key management, rotation, revocation, deletion,
+  export, backup, and restore;
+- explicit Moneybird administration selection and authorization revalidation;
+- a gateway credential that is not exposed in URLs or logs;
+- tenant-aware quotas, audit access, incident response, and retention policy;
+- TLS and a narrowly configured trusted-proxy boundary;
+- isolation for any future durable index or document parser;
+- an external confirmation channel if writes are ever introduced.
+
+The MCP server should continue to own Moneybird tool semantics. The hosted boundary
+must not rely on administration IDs alone, local SQLite keying, prompt text, or an
+approval token as cross-tenant authorization.
+
+## Milestones and release gates
+
+1. **M0 (done):** local MCP server, OAuth helpers, compact discovery, and explicit
+   credential/capability modes.
+2. **M1 (done):** loopback OAuth/routing demo with forced live-read-only containment.
+3. **M2 (not built):** identity, encrypted durable credential storage, explicit
+   administration choice, revocation/deletion, TLS/proxy policy, abuse controls, and
+   operational recovery. An invite-only read-only alpha is acceptable only after
+   those controls are implemented and reviewed.
+4. **M3 (not designed):** public product concerns such as billing and support. Hosted
+   writes remain out of scope until a separate authorization and trusted human
+   confirmation design exists.
+
+Brand, domain, billing, provider, data residency, and whether to offer an embedded
+chat remain product decisions. Deploying the M1 demo behind TLS does not by itself
+satisfy M2.

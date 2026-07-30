@@ -23,10 +23,19 @@ from ..purchase_reconcile import (
     build_explicit_purchase_invoice_reconcile,
     build_reconcile_purchase_invoice,
 )
+from ..credentials import (
+    CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+    get_credential_mode,
+)
 from ..purchase_review import scan_purchase_invoices_for_attention
-from ._params import ApprovalId, FilterString, Limit, Page, Period
+from ._params import ApprovalId, FilterString, Limit, MoneybirdId, Page, Period
 from ._registry import mcp
-from ._writes import run_approved_write, stage_write
+from ._writes import (
+    mark_write_dispatch_started,
+    mark_write_verifying,
+    run_approved_write,
+    stage_write,
+)
 from . import _context as ctx
 
 
@@ -206,11 +215,12 @@ AttachmentDocumentKind = Annotated[
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def read_document_attachment(
     document_id: Annotated[
-        str, Field(description="Id of the document whose attachment to read.")
+        MoneybirdId, Field(description="Id of the document whose attachment to read.")
     ],
     attachment_id: Annotated[
         str,
         Field(
+            pattern=r"^(?:|[0-9]+)$",
             description=(
                 "Id of the attachment (from the document's 'attachments' array). Leave "
                 "empty when the document has exactly one attachment; with several, the "
@@ -222,12 +232,17 @@ def read_document_attachment(
 ) -> dict[str, Any]:
     """Use this to read the actual (PDF) attachment behind a purchase invoice or receipt —
     for example to get the real per-line amounts of a supplier invoice instead of assuming
-    them from a prior month. Downloads the file, saves it locally, and returns the PDF's
-    text layer when one exists. Read-only; it never changes anything. Extracted amounts
-    feed prepare_reconcile_purchase_invoice through desired_lines, never a direct write."""
-    from ..attachments import extract_pdf_text, safe_attachment_filename
-    from ..config import data_dir
+    them from a prior month. Downloads into bounded memory, does not retain the file, and
+    returns the PDF's untrusted text layer when one exists. It never changes Moneybird.
+    Extracted amounts feed prepare_reconcile_purchase_invoice through desired_lines, never
+    a direct write."""
+    from ..attachments import DEFAULT_MAX_ATTACHMENT_BYTES, extract_pdf_text
 
+    if get_credential_mode() == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
+        raise MoneybirdError(
+            "Attachment parsing is disabled in hosted_request_only mode until "
+            "durable capacity, backpressure, abuse, and lifecycle controls exist."
+        )
     client = ctx.get_client()
     document = client.get_document(kind, document_id)
     attachments = document.get("attachments") or []
@@ -264,13 +279,18 @@ def read_document_attachment(
             "note": f"Attachment {wanted} not found on this document; pick one of the listed ids.",
         }
 
-    data, content_type = client.download_attachment(kind, document_id, wanted)
+    declared_size = selected.get("size")
+    if declared_size not in {None, ""}:
+        try:
+            parsed_size = int(declared_size)
+        except (TypeError, ValueError) as exc:
+            raise MoneybirdError("Attachment metadata contains an invalid size.") from exc
+        if parsed_size < 0 or parsed_size > DEFAULT_MAX_ATTACHMENT_BYTES:
+            raise MoneybirdError(
+                f"Attachment exceeds the {DEFAULT_MAX_ATTACHMENT_BYTES}-byte limit."
+            )
 
-    target_dir = data_dir() / "attachments"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    filename = safe_attachment_filename(selected.get("filename") or "")
-    saved_path = target_dir / f"{document.get('id')}_{wanted}_{filename}"
-    saved_path.write_bytes(data)
+    data, content_type = client.download_attachment(kind, document_id, wanted)
 
     return {
         "document_id": str(document.get("id")),
@@ -279,8 +299,8 @@ def read_document_attachment(
         "attachment": selected,
         "content_type": content_type,
         "size_bytes": len(data),
-        "saved_path": str(saved_path),
-        "text": extract_pdf_text(data),
+        "retention": "none",
+        "text": extract_pdf_text(data, content_type=content_type),
     }
 
 
@@ -479,8 +499,13 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
     document_id = payload["document_id"]
     expected_total = money_decimal(payload["expected_total_incl_tax"])
     before = client.get_document(kind, document_id)
+    if str(before.get("id") or "") != str(document_id):
+        raise MoneybirdError(
+            f"Document {document_id} lookup returned a different record. Prepare again."
+        )
     current_version = _validate_reconcile_preflight(before, payload)
 
+    mark_write_dispatch_started()
     client.update_document(
         kind,
         document_id,
@@ -490,7 +515,9 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
         },
     )
 
+    mark_write_verifying()
     after = client.get_document(kind, document_id)
+    record_id_matches = str(after.get("id") or "") == str(document_id)
     total_after = money_decimal(after.get("total_price_incl_tax"))
     verified_total = abs(total_after - expected_total) < Decimal("0.005")
     expected_lines = payload.get("expected_lines") or []
@@ -500,7 +527,12 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
     verified_tax_mode = bool(after.get("prices_are_incl_tax")) == bool(
         payload["prices_are_incl_tax"]
     )
-    verified = verified_total and verified_lines and verified_tax_mode
+    verified = (
+        record_id_matches
+        and verified_total
+        and verified_lines
+        and verified_tax_mode
+    )
     lines = [
         {
             "id": str(detail.get("id")),
@@ -513,12 +545,14 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
     ]
     return {
         "_status": "completed" if verified else "completed_with_verification_errors",
+        "_audit_result": "success" if verified else "verification_failed",
         "_audit": {
             "document_id": document_id,
             "total_after": f"{total_after:.2f}",
             "version_before": current_version or None,
             "version_after": after.get("version"),
             "verified_total_unchanged": verified_total,
+            "record_id_matches": record_id_matches,
             "verified_lines_match": verified_lines,
             "verified_prices_are_incl_tax": verified_tax_mode,
         },
@@ -532,6 +566,7 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
         "version_before": current_version or None,
         "version_after": after.get("version"),
         "verified_total_unchanged": verified_total,
+        "record_id_matches": record_id_matches,
         "verified_lines_match": verified_lines,
         "verified_prices_are_incl_tax": verified_tax_mode,
         "lines": lines,

@@ -8,6 +8,7 @@ diagnostics without turning the MCP server into a second bookkeeping datastore.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import re
 import secrets
@@ -24,6 +25,9 @@ logger = logging.getLogger("moneybird_mcp.performance")
 _MAX_API_EVENTS = 2_000
 _MAX_TOOL_EVENTS = 500
 _ID_SEGMENT = re.compile(r"(?<=/)\d+(?=/|\.|$)")
+_HUMAN_PATH_VALUE = re.compile(
+    r"/(find_by_reference|find_by_invoice_id|customer_id)/(?!:)[^/]+",
+)
 
 _current_trace_id: ContextVar[str | None] = ContextVar(
     "moneybird_trace_id",
@@ -67,11 +71,16 @@ class ToolMetric:
 _api_events: deque[ApiMetric] = deque(maxlen=_MAX_API_EVENTS)
 _tool_events: deque[ToolMetric] = deque(maxlen=_MAX_TOOL_EVENTS)
 _metrics_lock = threading.Lock()
+_TENANT_SCOPE_KEY = secrets.token_bytes(32)
 
 
 def normalize_endpoint(path: str) -> str:
-    """Remove Moneybird/administration record ids while retaining route shape."""
+    """Defensive fallback for legacy callers; prefer a declared operation label."""
     cleaned = str(path).split("?", 1)[0]
+    cleaned = _HUMAN_PATH_VALUE.sub(
+        lambda match: f"/{match.group(1)}/:value",
+        cleaned,
+    )
     return _ID_SEGMENT.sub(":id", cleaned)
 
 
@@ -105,7 +114,11 @@ def current_tool_name() -> str:
 
 def tenant_scope_for_token(token: str) -> str:
     """Derive an opaque process-local grouping key without retaining the token."""
-    return hashlib.sha256(str(token).encode("utf-8")).hexdigest()[:24]
+    return hmac.new(
+        _TENANT_SCOPE_KEY,
+        str(token).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:24]
 
 
 def set_current_tenant_scope(scope: str) -> None:
@@ -119,7 +132,8 @@ def current_tenant_scope() -> str:
 def record_api_call(
     *,
     method: str,
-    path: str,
+    path: str | None = None,
+    operation: str | None = None,
     status: str | int,
     duration_seconds: float,
     retry: int,
@@ -127,12 +141,15 @@ def record_api_call(
     tool_name: str | None = None,
     tenant_scope: str | None = None,
 ) -> None:
+    endpoint = normalize_endpoint(
+        str(operation or path or "unclassified").strip()
+    )
     metric = ApiMetric(
         timestamp=time.time(),
         trace_id=trace_id or current_trace_id(),
         tool_name=tool_name or current_tool_name(),
         method=str(method).upper(),
-        endpoint=normalize_endpoint(path),
+        endpoint=endpoint,
         status=str(status),
         duration_ms=round(max(0.0, duration_seconds) * 1_000, 3),
         retry=max(0, int(retry)),

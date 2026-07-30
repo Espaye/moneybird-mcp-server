@@ -6,8 +6,8 @@ asset on the docs site (`/assets/api-openapi.yaml-<hash>.js`, referenced from
 `/assets/entry.client-<hash>.js`); evaluate that module with Node and read its `schema`
 export to regenerate this file.
 
-> 296 operations in the API: **77** with a dedicated tool or flow, **60** readable
-> through the generic `moneybird_request` escape hatch, **159** not exposed by this server.
+> 296 operations in the API: **77** with a dedicated tool or flow, **55** readable
+> through the generic `moneybird_request` escape hatch, **164** not exposed by this server.
 
 Legend: ✅ dedicated tool/flow · 🔎 reachable read-only via `moneybird_request` (no dedicated
 tool) · — not exposed (writes are only ever exposed through explicit `prepare_*` /
@@ -104,7 +104,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 | PATCH | `/documents/general_documents/{id}` | Update a general document | — |
 | POST | `/documents/general_documents/{id}/attachments` | Add attachment to general document | — |
 | DELETE | `/documents/general_documents/{id}/attachments/{attachment_id}` | Delete an attachment | — |
-| GET | `/documents/general_documents/{id}/attachments/{attachment_id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/documents/general_documents/{id}/attachments/{attachment_id}/download` | Download attachment | — |
 | GET | `/documents/general_documents/synchronization` | List ids and versions of general documents | 🔎 moneybird_request (generic GET) |
 | POST | `/documents/general_documents/synchronization` | Fetch general documents with given ids | — |
 
@@ -175,7 +175,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 | GET | `/documents/typeless_documents/{id}` | Get a typeless document | 🔎 moneybird_request (generic GET) |
 | POST | `/documents/typeless_documents/{id}/attachments` | Add attachment to typeless document | — |
 | DELETE | `/documents/typeless_documents/{id}/attachments/{attachment_id}` | Delete an attachment | — |
-| GET | `/documents/typeless_documents/{id}/attachments/{attachment_id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/documents/typeless_documents/{id}/attachments/{attachment_id}/download` | Download attachment | — |
 | GET | `/documents/typeless_documents/synchronization` | List ids and versions of typeless documents | 🔎 moneybird_request (generic GET) |
 | POST | `/documents/typeless_documents/synchronization` | Fetch typeless documents with given ids | — |
 
@@ -193,7 +193,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 | GET | `/estimates` | List all estimates | ✅ `list_estimates` |
 | POST | `/estimates` | Creates a new estimate | — |
 | DELETE | `/estimates/{estimate_id}/attachments/{id}` | Delete an attachment | — |
-| GET | `/estimates/{estimate_id}/attachments/{id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/estimates/{estimate_id}/attachments/{id}/download` | Download attachment | — |
 | POST | `/estimates/{estimate_id}/notes` | Adds note to entity | — |
 | DELETE | `/estimates/{estimate_id}/notes/{id}` | Destroys note from entity | — |
 | DELETE | `/estimates/{id}` | Deletes an estimate | — |
@@ -215,7 +215,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 | GET | `/external_sales_invoices` | List all external invoices | 🔎 moneybird_request (generic GET) |
 | POST | `/external_sales_invoices` | Create an external sales invoice | — |
 | DELETE | `/external_sales_invoices/{external_sales_invoice_id}/attachments/{id}` | Delete an attachment | — |
-| GET | `/external_sales_invoices/{external_sales_invoice_id}/attachments/{id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/external_sales_invoices/{external_sales_invoice_id}/attachments/{id}/download` | Download attachment | — |
 | POST | `/external_sales_invoices/{external_sales_invoice_id}/notes` | Adds note to entity | — |
 | DELETE | `/external_sales_invoices/{external_sales_invoice_id}/notes/{id}` | Destroys note from entity | — |
 | POST | `/external_sales_invoices/{external_sales_invoice_id}/payments` | Create a payment | — |
@@ -376,7 +376,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 | POST | `/sales_invoices/{id}/resume` | Resume sales invoice | ✅ `prepare_resume_sales_invoice_workflow` |
 | PATCH | `/sales_invoices/{id}/send_invoice` | Sends an invoice | ✅ `prepare_send_sales_invoice` |
 | DELETE | `/sales_invoices/{sales_invoice_id}/attachments/{id}` | Delete an attachment | — |
-| GET | `/sales_invoices/{sales_invoice_id}/attachments/{id}/download` | Download attachment | 🔎 moneybird_request (generic GET) |
+| GET | `/sales_invoices/{sales_invoice_id}/attachments/{id}/download` | Download attachment | — |
 | POST | `/sales_invoices/{sales_invoice_id}/notes` | Adds note to entity | — |
 | DELETE | `/sales_invoices/{sales_invoice_id}/notes/{id}` | Destroys note from entity | — |
 | POST | `/sales_invoices/{sales_invoice_id}/payments` | Create a payment | — |

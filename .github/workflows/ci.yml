@@ -32,9 +32,9 @@ jobs:
           - os: windows-latest
             python-version: "3.11"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -57,17 +57,19 @@ jobs:
     name: Build and inspect distributions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
       - name: Install build tooling
-        run: python -m pip install --upgrade pip build twine
+        run: >-
+          python -m pip install --upgrade pip build twine
+          cyclonedx-bom==7.3.1
 
-      - name: Build wheel and sdist
-        run: python -m build
+      - name: Build byte-for-byte reproducible wheel and sdist
+        run: python scripts/check_reproducible_build.py --output-dir dist
 
       - name: twine check
         run: python -m twine check dist/*
@@ -75,8 +77,57 @@ jobs:
       - name: Assert no credentials or local state are packaged
         run: python scripts/check_dist_hygiene.py
 
-      - uses: actions/upload-artifact@v7
+      - name: Install wheel and sdist in clean environments
+        run: python scripts/smoke_dist_install.py
+
+      - name: Generate a reproducible CycloneDX SBOM
+        run: python scripts/build_sbom.py
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist-ci
-          path: dist/
+          path: |
+            dist/
+            sbom/
           retention-days: 7
+
+  minimum-dependencies:
+    name: Test supported minimum dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-minimum.txt
+
+      - name: Install the lowest supported direct dependency versions
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -c requirements-minimum.txt -r requirements.txt pytest
+
+      - name: Run tests against the minimum dependency graph
+        env:
+          MONEYBIRD_MCP_DATA_DIR: ${{ runner.temp }}/moneybird-mcp-state
+        run: python -m pytest -q
+
+  dependency-audit:
+    name: Dependency vulnerability audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Audit direct and transitive dependencies
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          python -m pip_audit -r requirements.txt

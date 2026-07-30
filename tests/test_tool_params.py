@@ -6,10 +6,10 @@ import unittest
 from typing import get_args
 
 from moneybird.config import (
-    FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
     FINANCIAL_MUTATION_UNLINK_BOOKING_TYPES,
     PAYABLE_DOCUMENT_KINDS,
     REPORT_ENDPOINTS,
+    VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
 )
 from moneybird.tools import _params
 
@@ -21,7 +21,7 @@ class LiteralSyncTests(unittest.TestCase):
     def test_link_booking_type_literal_matches_config(self) -> None:
         self.assertEqual(
             set(get_args(_params.LinkBookingType)),
-            FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
+            VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
         )
 
     def test_unlink_booking_type_literal_matches_config(self) -> None:
