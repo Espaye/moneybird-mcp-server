@@ -24,6 +24,12 @@ dist/
 build/
 *.egg-info/
 
+# Virtualenvs, including the throwaway ones the verification scripts create in the
+# repo root (.verify-supply, .verify-minimum, .verify-tools, .verify-bandit, ...)
+.venv/
+venv/
+.verify-*/
+
 # Attachment downloads saved by read_document_attachment (financial data)
 attachments/
 
