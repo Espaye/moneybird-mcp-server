@@ -19,9 +19,10 @@ moneybird_approvals.sqlite3
 # OAuth access/refresh tokens obtained via scripts/oauth_login.py (secrets)
 moneybird_oauth_tokens.json
 
-# Build artifacts (wheels, sdists, .mcpb bundles)
+# Build artifacts (wheels, sdists, .mcpb bundles, generated SBOMs)
 dist/
 build/
+sbom/
 *.egg-info/
 
 # Virtualenvs, including the throwaway ones the verification scripts create in the

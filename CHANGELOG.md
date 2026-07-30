@@ -5,6 +5,8 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+## 0.4.0 — 2026-07-30
+
 ### Security
 
 - Defaulted the server and Desktop bundle to `read_only`; experimental writes now require
