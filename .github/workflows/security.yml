@@ -18,21 +18,42 @@ concurrency:
 jobs:
   codeql:
     name: CodeQL (Python)
+    # Private repositories require GitHub Code Security. Opt in only after it
+    # is available; Bandit remains the always-on private-repository SAST gate.
+    if: ${{ !github.event.repository.private || vars.ENABLE_CODEQL == 'true' }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: github/codeql-action/init@47be0dbd5113ab1b79fe2dd3f68bdf7e426cdc87 # v3
+      - uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           languages: python
           build-mode: none
 
-      - uses: github/codeql-action/analyze@47be0dbd5113ab1b79fe2dd3f68bdf7e426cdc87 # v3
+      - uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           category: /language:python
+
+  python-security:
+    name: Bandit (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install pinned Bandit
+        run: python -m pip install --disable-pip-version-check bandit==1.9.4
+
+      - name: Scan production Python
+        run: bandit --quiet --recursive moneybird gateway scripts moneybird_mcp_server.py --severity-level medium --confidence-level medium
 
   full-history-secret-scan:
     name: Gitleaks full history
@@ -48,7 +69,7 @@ jobs:
           cache: false
 
       - name: Install pinned Gitleaks
-        run: go install github.com/gitleaks/gitleaks/v8@v8.30.1
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
 
       - name: Scan every reachable commit
         run: '"$(go env GOPATH)/bin/gitleaks" git --redact --verbose .'

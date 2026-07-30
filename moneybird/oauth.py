@@ -141,7 +141,11 @@ def _token_request(form: dict[str, str]) -> dict[str, Any]:
     request.add_header("Content-Type", "application/x-www-form-urlencoded")
     request.add_header("Accept", "application/json")
     try:
-        with urllib.request.urlopen(request, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
+        # The request URL is the module-owned HTTPS Moneybird token endpoint above.
+        with urllib.request.urlopen(  # nosec B310
+            request,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        ) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         raise MoneybirdError(

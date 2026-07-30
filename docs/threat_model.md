@@ -62,7 +62,9 @@ independent authorization or human-confirmation boundaries.
   through Trusted Publishing with PEP 740 attestations, cryptographically verifies
   the published provenance, creates a CycloneDX SBOM from the exact PyPI wheel, and
   repairs a GitHub release only from verified published files within the workflow.
-  CodeQL and a scheduled full-history Gitleaks scan are separate security signals.
+  Pinned Bandit and a scheduled full-history Gitleaks scan are separate security
+  signals. CodeQL is an additional signal when GitHub Code Security is available
+  and deliberately enabled.
 
 ## Threats, current posture, and remaining gates
 
@@ -78,7 +80,7 @@ independent authorization or human-confirmation boundaries.
 | Prompt injection | Content is treated as untrusted; hard capability gates do not depend on prompts | Provenance UI and trusted confirmation boundary |
 | Attachment exhaustion or parser exploit | Bounded download/page/text parsing plus a time/memory-limited disposable worker; hosted disabled | Hosted backpressure, global/per-tenant capacity, patch and abuse policy |
 | Telemetry/privacy leak | Structured, redacted operation telemetry | Review end-to-end logs/proxies and retention; treat pseudonyms as linkable |
-| Supply-chain compromise | Dependency/CodeQL/history-secret scans, minimum-version lane, SHA-pinned Actions, reproducible build check, SBOM, Trusted Publishing, and verified PyPI provenance | Restrict the `pypi` environment to `main` with an independent reviewer; protect `v*` tags with a ruleset; ongoing dependency review |
+| Supply-chain compromise | Dependency/Bandit/history-secret scans, optional CodeQL when available, minimum-version lane, SHA-pinned Actions, reproducible build check, SBOM, Trusted Publishing, and verified PyPI provenance | Restrict the `pypi` environment to `main` with an independent reviewer; protect `v*` tags with a ruleset; ongoing dependency review |
 
 ## Current invariants
 

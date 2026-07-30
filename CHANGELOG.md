@@ -17,8 +17,9 @@ versioning while allowing pre-1.0 breaking changes.
   hardened signed-storage redirect handling with validated DNS-to-TCP address pinning.
 - Moved local PDF parsing into a disposable spawned process with a hard wall-clock
   timeout and Unix/Windows process-memory containment.
-- Added CodeQL and scheduled full-history Gitleaks scanning; release artifacts now
-  require reproducible builds, a CycloneDX SBOM, and verified PyPI publish provenance.
+- Added capability-aware CodeQL, pinned Bandit scanning for private repositories, and
+  scheduled full-history Gitleaks scanning; release artifacts now require reproducible
+  builds, a CycloneDX SBOM, and verified PyPI publish provenance.
 - Made numeric write inputs reject trailing junk, ambiguous separators, non-finite
   values, non-positive payments, and zero-value explicit bank links.
 - Applied best-effort owner-only modes to explicitly configured data directories and

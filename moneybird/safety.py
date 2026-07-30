@@ -192,16 +192,19 @@ def _approvals_connection() -> sqlite3.Connection:
         f"'{state}'" for state in sorted(UNRESOLVED_APPROVAL_STATES)
     )
     duplicate_groups = connection.execute(
+        # Only values from the module-owned UNRESOLVED_APPROVAL_STATES set
+        # are interpolated into this migration-only query.
         "SELECT administration_id, action, fingerprint "
         "FROM approvals WHERE fingerprint <> '' "
-        f"AND state IN ({unresolved_sql}) "
+        f"AND state IN ({unresolved_sql}) "  # nosec B608
         "GROUP BY administration_id, action, fingerprint HAVING COUNT(*) > 1"
     ).fetchall()
     for administration_id, action, fingerprint in duplicate_groups:
         duplicate_rows = connection.execute(
+            # The dynamic state list has the same fixed internal provenance.
             "SELECT approval_id FROM approvals "
             "WHERE administration_id = ? AND action = ? AND fingerprint = ? "
-            f"AND state IN ({unresolved_sql}) "
+            f"AND state IN ({unresolved_sql}) "  # nosec B608
             "ORDER BY created_at, approval_id",
             (administration_id, action, fingerprint),
         ).fetchall()
@@ -579,8 +582,9 @@ def list_unresolved_approval_executions(
     placeholders = ", ".join("?" for _item in unresolved)
     with _approvals_connection() as connection:
         rows = connection.execute(
+            # Dynamic text is a fixed-length list of SQLite parameter markers.
             "SELECT approval_id FROM approvals WHERE administration_id = ? "
-            f"AND state IN ({placeholders}) ORDER BY claimed_at, approval_id",
+            f"AND state IN ({placeholders}) ORDER BY claimed_at, approval_id",  # nosec B608
             (str(administration_id or ""), *unresolved),
         ).fetchall()
     return [
@@ -654,11 +658,12 @@ def reconcile_approval_execution(
             new_phase = "reconciled"
             completed_at = now
         cursor = connection.execute(
+            # Dynamic text is a fixed-length list of SQLite parameter markers.
             "UPDATE approvals SET state = ?, outcome = ?, phase = ?, "
             "completed_at = COALESCE(?, completed_at), reconciled_at = ?, "
             "reconciled_by = ?, reconciliation_evidence = ? "
             "WHERE approval_id = ? AND administration_id = ? "
-            f"AND state IN ({placeholders})",
+            f"AND state IN ({placeholders})",  # nosec B608
             (
                 new_state,
                 new_outcome,

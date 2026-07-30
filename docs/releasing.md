@@ -139,9 +139,11 @@ production-ready.
 
 No long-lived PyPI API token is needed in the repository.
 
-The separate `security.yml` workflow runs CodeQL on pushes, pull requests, and a
-weekly schedule, plus a weekly full-history Gitleaks scan. All third-party Actions
-are pinned to commit SHAs. Treat those workflow results, the dependency audit,
+The separate `security.yml` workflow runs pinned Bandit and a full-history Gitleaks
+scan on pushes, pull requests, and a weekly schedule. CodeQL also runs when the
+repository is public, or when GitHub Code Security is enabled and the repository
+variable `ENABLE_CODEQL` is explicitly set to `true`. All third-party Actions are
+pinned to commit SHAs. Treat those workflow results, the dependency audit,
 minimum-version lane, reproducibility check, SBOM, and provenance verification as
 release signals; do not waive them by publishing manually.
 

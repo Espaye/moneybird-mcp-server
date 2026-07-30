@@ -248,7 +248,9 @@ asset bundled on developer.moneybird.com.
   the release trigger. Never bump the version as a drive-by edit.
 - `.github/workflows/` — `ci.yml` runs the suite on main + PRs (Ubuntu 3.11–3.14 plus
   Windows 3.11), a lowest-direct-dependency lane, reproducibility/SBOM checks, and
-  distribution inspection. `security.yml` runs CodeQL and a full-history Gitleaks scan.
+  distribution inspection. `security.yml` always runs pinned Bandit and a full-history
+  Gitleaks scan; CodeQL additionally runs for public repositories or when the repository
+  variable `ENABLE_CODEQL` is explicitly set to `true` after Code Security is enabled.
   `release.yml` is a main-only,
   stage-independent state machine: it checks PyPI, tag and release assets; gates the exact
   source SHA through the full test/dependency/artifact matrix; creates and re-verifies the tag
