@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: github/codeql-action/init@47be0dbd5113ab1b79fe2dd3f68bdf7e426cdc87 # v3
+      - uses: github/codeql-action/init@a2983b8bed1923f44751c5c43237f479442827b3 # v3
         with:
           languages: python
           build-mode: none
