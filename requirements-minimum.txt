@@ -3,6 +3,6 @@
 fastmcp==3.4.5
 pydantic==2.13.4
 httpx==0.28.1
-uvicorn==0.35.0
+uvicorn==0.51.0
 chardet==5.0.0
 pypdf==6.14.2
