@@ -46,6 +46,10 @@ pdf = ["pypdf>=6.14.2"]
 Homepage = "https://github.com/Espaye/moneybird-mcp-server"
 Repository = "https://github.com/Espaye/moneybird-mcp-server"
 Issues = "https://github.com/Espaye/moneybird-mcp-server/issues"
+PyPI = "https://pypi.org/project/moneybird-mcp/"
+Documentation = "https://github.com/Espaye/moneybird-mcp-server#readme"
+Changelog = "https://github.com/Espaye/moneybird-mcp-server/blob/main/CHANGELOG.md"
+Security = "https://github.com/Espaye/moneybird-mcp-server/security/policy"
 
 [project.scripts]
 moneybird-mcp = "moneybird.server:main"
