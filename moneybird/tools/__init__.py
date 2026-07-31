@@ -6,24 +6,24 @@ functions are re-exported here so ``from moneybird import tools`` keeps working.
 """
 from __future__ import annotations
 
-from ._registry import mcp, SERVER_INSTRUCTIONS
-from ._context import get_client  # re-exported for back-compat
-from .core import *  # noqa: F401,F403
-from .contacts import *  # noqa: F401,F403
-from .reference import *  # noqa: F401,F403
-from .purchases import *  # noqa: F401,F403
-from .reports import *  # noqa: F401,F403
-from .sales import *  # noqa: F401,F403
-from .sales_batches import *  # noqa: F401,F403
-from .ledger import *  # noqa: F401,F403
-from .payments import *  # noqa: F401,F403
-from .bank import *  # noqa: F401,F403
-from .workflows import *  # noqa: F401,F403
-from .approvals import *  # noqa: F401,F403
-
 # Register the guidance layer (playbook resource + scenario prompts) last, so the
 # mcp instance and all tools already exist; guidance.py imports nothing from here.
 from ..guidance import register_guidance
+from ._context import get_client as get_client  # explicit back-compat re-export
+from ._registry import SERVER_INSTRUCTIONS as SERVER_INSTRUCTIONS
+from ._registry import mcp
+from .approvals import *  # noqa: F401,F403
+from .bank import *  # noqa: F401,F403
+from .contacts import *  # noqa: F401,F403
+from .core import *  # noqa: F401,F403
+from .ledger import *  # noqa: F401,F403
+from .payments import *  # noqa: F401,F403
+from .purchases import *  # noqa: F401,F403
+from .reference import *  # noqa: F401,F403
+from .reports import *  # noqa: F401,F403
+from .sales import *  # noqa: F401,F403
+from .sales_batches import *  # noqa: F401,F403
+from .workflows import *  # noqa: F401,F403
 
 register_guidance(mcp)
 

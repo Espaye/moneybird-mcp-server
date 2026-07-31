@@ -7,43 +7,43 @@ from pydantic import Field
 
 from ..capabilities import require_write_capability
 from ..config import (
-    MoneybirdError,
     PREPARE_ANNOTATIONS,
     WRITE_ANNOTATIONS,
+    MoneybirdError,
 )
 from ..formatting import (
-    clean_dict,
     chunked,
+    clean_dict,
     duplicate_fingerprint,
     iso_now,
     money_decimal,
     render_preview_table,
 )
-from ..safety import (
-    approval_execution_state,
-    make_approval,
-    pop_approval,
-    record_approval_phase,
-    record_approval_outcome,
-)
 from ..invoicing import (
     apply_batch_group_merge_checks,
     build_batch_invoice_payload,
-    build_meter_usage_entries,
     build_merge_snapshot_from_invoice,
+    build_meter_usage_entries,
     evaluate_merge_compatibility,
     list_scheduled_merge_candidates,
     summarize_batch_preview,
 )
+from ..safety import (
+    approval_execution_state,
+    make_approval,
+    pop_approval,
+    record_approval_outcome,
+    record_approval_phase,
+)
 from ..write_contracts import (
     assert_patch_precondition,
     build_patch_precondition,
-    verify_sales_invoice_payload,
     verify_sales_invoice_patch,
+    verify_sales_invoice_payload,
 )
+from . import _context as ctx
 from ._params import ApprovalId, DateString, OptionalDateString
 from ._registry import mcp
-from . import _context as ctx
 
 
 def _money_values_equal(left: Any, right: Any) -> bool:

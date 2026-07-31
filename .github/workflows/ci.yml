@@ -17,6 +17,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned Ruff
+        run: python -m pip install --disable-pip-version-check ruff==0.16.1
+
+      - name: Check production, gateway, scripts, and tests
+        run: ruff check moneybird gateway scripts tests moneybird_mcp_server.py
+
+  coverage:
+    name: Coverage regression floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies and coverage tooling
+        run: |
+          python -m pip install -r requirements.txt pytest
+          python -m pip install --disable-pip-version-check pytest-cov==7.1.0
+
+      - name: Measure production coverage
+        env:
+          MONEYBIRD_MCP_DATA_DIR: ${{ runner.temp }}/moneybird-mcp-state
+        run: >-
+          python -m pytest
+          --cov=moneybird
+          --cov=gateway
+          --cov-report=term-missing
+          --cov-fail-under=70
+
   test:
     name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}

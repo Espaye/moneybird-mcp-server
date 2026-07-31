@@ -7,10 +7,14 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from ..config import (
-    MoneybirdError,
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
     WRITE_ANNOTATIONS,
+    MoneybirdError,
+)
+from ..credentials import (
+    CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+    get_credential_mode,
 )
 from ..formatting import (
     compact_document_summary,
@@ -23,11 +27,8 @@ from ..purchase_reconcile import (
     build_explicit_purchase_invoice_reconcile,
     build_reconcile_purchase_invoice,
 )
-from ..credentials import (
-    CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
-    get_credential_mode,
-)
 from ..purchase_review import scan_purchase_invoices_for_attention
+from . import _context as ctx
 from ._params import ApprovalId, FilterString, Limit, MoneybirdId, Page, Period
 from ._registry import mcp
 from ._writes import (
@@ -36,7 +37,6 @@ from ._writes import (
     run_approved_write,
     stage_write,
 )
-from . import _context as ctx
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)

@@ -9,6 +9,9 @@
 .moneybird_audit_log*.jsonl
 __pycache__/
 *.pyc
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Generated bookkeeping data dumps (financial data, not source code)
 outputs/

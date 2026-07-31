@@ -17,6 +17,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .config import MoneybirdError, load_env_file
 from .credentials import (
     CREDENTIAL_MODE_ENV,
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
@@ -59,9 +60,20 @@ def build_config(
             "Moneybird MCP server. Default transport is stdio (for local MCP "
             "clients); use --transport http for a network deployment. "
             "Local and single-user credentials come from "
-            "MONEYBIRD_ACCESS_TOKEN / MONEYBIRD_ADMINISTRATION_ID (or a .env "
-            "file, or the OAuth token store); hosted request-only mode requires "
+            "MONEYBIRD_ACCESS_TOKEN / MONEYBIRD_ADMINISTRATION_ID (or an "
+            "explicit --env-file, or the OAuth token store); hosted "
+            "request-only mode requires "
             "gateway-injected credentials."
+        ),
+    )
+    parser.add_argument(
+        "--env-file",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Load configuration from this explicitly selected file. The path is "
+            "resolved before use; values already present in the parent process "
+            "environment win. No .env file is discovered automatically."
         ),
     )
     parser.add_argument(
@@ -104,6 +116,12 @@ def build_config(
         help="Port for http/sse (default: MCP_PORT or 8000).",
     )
     args = parser.parse_args(argv)
+
+    if args.env_file is not None:
+        try:
+            load_env_file(args.env_file)
+        except (MoneybirdError, OSError, UnicodeError) as exc:
+            parser.error(str(exc))
 
     transport = (
         args.transport
@@ -207,16 +225,19 @@ def main(argv: list[str] | None = None, *, default_transport: str = "stdio") -> 
     os.environ["MONEYBIRD_TOOL_DISCOVERY"] = config.tool_discovery
     os.environ[CREDENTIAL_MODE_ENV] = config.credential_mode
 
+    if (
+        config.transport == "stdio"
+        and not os.environ.get("MONEYBIRD_MCP_DATA_DIR", "").strip()
+    ):
+        # Local MCP clients may spawn this process with an arbitrary cwd. Set a
+        # stable state root before importing the registered tool surface.
+        os.environ["MONEYBIRD_MCP_DATA_DIR"] = str(Path.home() / ".moneybird-mcp")
+
     # Importing the tools package registers all tools + prompts on the mcp
     # instance; deferred past arg parsing so --help stays instant.
     from .tools import mcp
 
     if config.transport == "stdio":
-        # Local MCP clients spawn this process with an arbitrary cwd (often the
-        # app's own directory), and data_dir() falls back to cwd when unset —
-        # so give server state a stable per-user home instead.
-        if not os.environ.get("MONEYBIRD_MCP_DATA_DIR", "").strip():
-            os.environ["MONEYBIRD_MCP_DATA_DIR"] = str(Path.home() / ".moneybird-mcp")
         mcp.run(transport="stdio")
         return
 

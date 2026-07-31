@@ -9,21 +9,28 @@ os.environ.setdefault(
     tempfile.mkdtemp(prefix="moneybird_mcp_test_reconcile_"),
 )
 
-from moneybird.purchase_reconcile import (
-    build_explicit_purchase_invoice_reconcile,
-    build_reconcile_purchase_invoice,
-    dutch_month_label,
-    _map_lines,
-)
 from purchase_test_support import (
-    FakeClient,
     LEDGER_PRIV,
     LEDGER_ZAK,
     TAX_21,
     TAX_GEEN,
+    FakeClient,
+)
+from purchase_test_support import (
     line as _line,
+)
+from purchase_test_support import (
     reference_june as _reference_june,
+)
+from purchase_test_support import (
     target_july as _target_july,
+)
+
+from moneybird.purchase_reconcile import (
+    _map_lines,
+    build_explicit_purchase_invoice_reconcile,
+    build_reconcile_purchase_invoice,
+    dutch_month_label,
 )
 
 
@@ -191,7 +198,7 @@ class BuildReconcileTests(unittest.TestCase):
             "date": "2026-06-25",
             "prices_are_incl_tax": True,
             "total_price_incl_tax": "825.0",
-            "contact": {"id": "C1", "company_name": "Eneco Services B.V."},
+            "contact": {"id": "C1", "company_name": "Example Energy B.V."},
             "details": [_line("s1", "one liner", "825.0", LEDGER_ZAK, TAX_21)],
         }
         client = FakeClient([_reference_june("ref"), stub, _target_july()])

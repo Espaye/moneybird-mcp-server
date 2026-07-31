@@ -13,12 +13,12 @@ scripts that import the package directly (see below).
 
 ## Credentials — already handled, don't hand-roll it
 
-- Local/single-user credentials live in `.env` at the repo root:
+- Local/single-user credentials are supplied explicitly as
   `MONEYBIRD_ACCESS_TOKEN` and `MONEYBIRD_ADMINISTRATION_ID`.
-- `moneybird/config.py` calls `load_local_env()` **on import**, which loads that `.env`
-  into the environment. As of the cwd-independent fix it looks in the current directory
-  *and* next to the package, so **just `import moneybird...` and credentials are present**
-  — regardless of where you run Python from. Do not parse `.env` yourself.
+- Package imports never discover or load `.env`. For a runnable server, export values
+  in the parent process or pass an absolute `--env-file PATH`. For a one-off script,
+  call `moneybird.config.load_env_file(PATH)` before importing modules that consume
+  configuration. Parent-process values always win.
 - Real env vars always win (`setdefault`). Credential resolution then follows the explicit
   deployment mode:
   - `local` (stdio only): request context → env → local OAuth profile;
@@ -26,8 +26,9 @@ scripts that import the package directly (see below).
     Moneybird headers are rejected;
   - `hosted_request_only`: one nonblank trusted request context; no env/OAuth fallback.
 - **OAuth**: `moneybird/oauth.py` implements the authorization-code flow (app credentials in
-  `.env` as `MONEYBIRD_OAUTH_CLIENT_ID`/`MONEYBIRD_OAUTH_CLIENT_SECRET`; interactive login via
-  `python scripts/oauth_login.py`, out-of-band redirect). Tokens persist in
+  the parent environment or an explicit file as
+  `MONEYBIRD_OAUTH_CLIENT_ID`/`MONEYBIRD_OAUTH_CLIENT_SECRET`; interactive login via
+  `python scripts/oauth_login.py --env-file PATH`, out-of-band redirect). Tokens persist in
   `moneybird_oauth_tokens.json` in the data dir and are used automatically in local or
   network-single-user mode when `MONEYBIRD_ACCESS_TOKEN` is absent. Hosted request mode never
   reads that store.
@@ -38,10 +39,12 @@ Put throwaway scripts in the scratchpad, not in the repo. Template:
 
 ```python
 import sys
-sys.path.insert(0, r"c:\Users\pretm\moneybird_mcp_server")
-from moneybird.client import get_client   # importing the package loads .env for you
+sys.path.insert(0, r"C:\path\to\moneybird-mcp-server")
+from moneybird.config import load_env_file
+load_env_file(r"c:\absolute\operator.env")  # explicit; parent env still wins
+from moneybird.client import get_client
 
-client = get_client()                      # uses MONEYBIRD_* from .env
+client = get_client()
 # read-only first:
 ledgers = {str(l["id"]): l["name"] for l in client.list_ledger_accounts()}
 taxes   = {str(t["id"]): t["name"]  for t in client.list_tax_rates()}
@@ -80,7 +83,7 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   totaal automatisch. Voor bestaande concepten gebruik je
   `prepare_batch_schedule_sales_invoices` → `batch_schedule_sales_invoices_from_approval`.
 
-- **Suppliers invoice *us*.** A vendor like Vitens (water), KPN, etc. has **0 sales
+- **Suppliers invoice *us*.** A utility or telecom vendor has **0 sales
   invoices**; its documents are **purchase invoices** (or receipts). Look under
   `list_documents("purchase_invoice", ...)` / `("receipt", ...)`, then filter by
   `contact.id`. Sales-invoice filters take `contact_id`; the document endpoints don't, so
@@ -155,7 +158,7 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   (circa 90% kleiner). Start tijdelijk met
   `--tool-discovery full` of `MCP_TOOL_DISCOVERY=full` voor oude clients die geen Tool Search
   ondersteunen. Directe package-importen blijven standaard `full` voor compatibiliteit.
-  De legacy entrypoint importeert tools pas na CLI/`.env`-verwerking, zodat ook
+  De legacy entrypoint importeert tools pas na CLI/expliciete env-file-verwerking, zodat ook
   `python moneybird_mcp_server.py --tool-discovery full` werkelijk naar `full` schakelt.
 - `moneybird/http_transport.py` beheert één luie `httpx`-connection pool. Authenticatie blijft
   per request/tenant en staat nooit op de gedeelde client. In een live meting kostte de eerste
@@ -166,8 +169,8 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   API-calls voor prepare+execute in plaats van `2 + 6N`, inclusief een aparte eindverificatie.
 - Duurzame JSON/FTS-sync is alleen beschikbaar in local/network-single-user mode. Hosted request
   mode gebruikt uitsluitend de gedeeltelijke live zoekfallback en weigert `sync_search_index`.
-  `read_document_attachment` is daar eveneens uitgeschakeld totdat PDF-werk in een apart
-  begrensd proces draait.
+  `read_document_attachment` blijft daar uitgeschakeld ondanks het disposable begrensde
+  parserproces: hosted capacity, backpressure, abusebeleid en lifecycle-controls ontbreken.
 - De zes sync-feeds lopen begrensd parallel (maximaal drie workers), met een lock per
   administratie en atomaire JSON-save. `updated_at` is de freshness-tijd; alleen
   `content_updated_at` triggert een FTS-rebuild. Een live no-change sync daalde van 4,21 s naar
@@ -233,7 +236,7 @@ asset bundled on developer.moneybird.com.
   deterministic state and supplier-pattern checks remain available independently. Tests live in
   `tests/test_purchase_reconcile.py` and `tests/test_purchase_review.py`. PDF-reading design note:
   `docs/reading_pdf_attachments.md`.
-- `moneybird/config.py` — constants, `MoneybirdError`, `.env` loading, and `data_dir()`
+- `moneybird/config.py` — constants, `MoneybirdError`, explicit env-file parsing, and `data_dir()`
   (where approvals DB / audit logs / sync caches live; override with
   `MONEYBIRD_MCP_DATA_DIR`). Approvals are persisted in SQLite and survive restarts.
 - `moneybird/search_fts.py` — SQLite FTS5 layer derived from the JSON sync index (the
@@ -243,28 +246,30 @@ asset bundled on developer.moneybird.com.
 - `moneybird/playbooks/boekhoud_playbook.md` — btw rules, categorization, consistency
   checklist, bank-mutation diagnosis. Read it before a bookkeeping task.
 - `scripts/` — runnable read-only/reclassify scripts (good examples of the patterns above).
-- `docs/releasing.md` — the release checklist. Releases are **version-driven**: a
-  commit on `main` that bumps `version` in pyproject **and** mcpb/manifest.json is
-  the release trigger. Never bump the version as a drive-by edit.
+- `docs/releasing.md` — the release checklist. A push or merge never publishes.
+  Releases require an explicit default-branch `workflow_dispatch` with the exact
+  package version and full commit SHA. Never bump or dispatch a version as a
+  drive-by edit.
 - `.github/workflows/` — `ci.yml` runs the suite on main + PRs (Ubuntu 3.11–3.14 plus
   Windows 3.11), a lowest-direct-dependency lane, reproducibility/SBOM checks, and
   distribution inspection. `security.yml` always runs pinned Bandit and a full-history
   Gitleaks scan; CodeQL additionally runs for public repositories or when the repository
   variable `ENABLE_CODEQL` is explicitly set to `true` after Code Security is enabled.
-  `release.yml` is a main-only,
-  stage-independent state machine: it checks PyPI, tag and release assets; gates the exact
-  source SHA through the full test/dependency/artifact matrix; creates and re-verifies the tag
-  before Trusted Publishing, re-verifies it after any environment-approval delay, and compares
-  the tested candidate's filenames/hashes with the exact downloaded PyPI wheel/sdist.
+  `release.yml` is a manual, default-branch-only state machine: it requires exact
+  version and full-SHA inputs, refuses any existing PyPI version/tag/release, gates
+  the exact source SHA through the full test/dependency/artifact matrix, creates
+  and re-verifies the tag before Trusted Publishing, re-verifies it after any
+  environment-approval delay, and compares the tested candidate's filenames/hashes
+  with the exact downloaded PyPI wheel/sdist.
   Trusted Publishing emits attestations; the workflow cryptographically verifies their
   repository identity, generates a reproducible CycloneDX SBOM from the exact published
-  wheel, then creates or repairs the GitHub release and verifies the final tag, exact
-  package/SBOM names, and digests. Historical recovery uses helpers from the guarded workflow
-  commit; when that provenance cannot be reproduced/reviewed, recovery is manual rather than
-  a rebuild. Partial PyPI publication fails closed. These workflow checks
-  are defense in depth: the live repository still needs a `pypi` environment restricted to
-  `main` with an independent required reviewer, plus a protected `v*` tag ruleset, before the
-  release boundary is production-ready.
+  wheel, then creates the GitHub release once and verifies the final tag, exact
+  package/SBOM names, and digests. Partial PyPI publication fails closed and forces
+  selection of the next legal version. These workflow checks are defense in depth:
+  the live repository still needs a `pypi` environment restricted to protected
+  `main` plus a `v*` tag ruleset that prevents updates and deletion. The
+  solo-maintainer beta has no independent human deployment reviewer; that residual
+  limitation must remain explicit.
   Both workflows gate on `scripts/check_dist_hygiene.py`, which asserts the wheel
   ships only the `moneybird` package and that no `.env`/tokens/approvals DB/sync
   cache/audit log is packaged. CI never has credentials — keep the suite fully
@@ -301,8 +306,8 @@ prompt-name set).
   release of andere GitHub-API-actie vraagt. Test in dat geval `gh auth status` en laat zo
   nodig `gh auth login -h github.com` uitvoeren.
 - **`origin` is sinds 2026-07-29 een SSH-remote, en dat is opzettelijk.** Pushen hangt
-  daardoor niet meer van het OAuth-token af — relevant nu een push naar `main` een
-  PyPI-release kan zijn. Zet het niet terug naar HTTPS zonder de volgende val te kennen:
+  daardoor niet meer van het OAuth-token af. Zet het niet terug naar HTTPS zonder de volgende
+  val te kennen:
   GitHub weigert elke HTTPS-push die `.github/workflows/**` aanraakt zolang het token de
   `workflow`-scope mist (`refusing to allow an OAuth App to create or update workflow ...
   without 'workflow' scope` — live geraakt op 2026-07-29). Een SSH-sleutel kent die

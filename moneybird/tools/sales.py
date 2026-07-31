@@ -6,21 +6,20 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from ..config import (
-    MoneybirdError,
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
     WRITE_ANNOTATIONS,
+    MoneybirdError,
 )
 from ..formatting import (
     api_url,
     build_filter_string,
     clean_dict,
-    document_contact_title,
-    money_decimal,
     contact_title,
+    document_contact_title,
     duplicate_fingerprint,
     invoice_title,
-    iso_now,
+    money_decimal,
 )
 from ..invoicing import (
     build_merge_snapshot_from_invoice,
@@ -36,6 +35,7 @@ from ..write_contracts import (
     compare_controlled_rows,
     verify_sales_invoice_payload,
 )
+from . import _context as ctx
 from ._params import (
     ApprovalId,
     ContactId,
@@ -53,7 +53,6 @@ from ._writes import (
     run_approved_write,
     stage_write,
 )
-from . import _context as ctx
 
 
 def _invoice_precondition_snapshot(record: dict[str, Any]) -> dict[str, Any]:

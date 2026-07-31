@@ -22,6 +22,12 @@ This makes the demo useful for exercising OAuth, routing, and live read isolatio
 without presenting the repository's local durable state as a hosted tenant boundary.
 It does not make the demo production-ready.
 
+Hosted live search is a safe but incomplete fallback. It may make several sequential
+Moneybird API calls and scans only bounded first pages; it is not a production search
+solution. Production search requires a principal/grant-bound index, authorization and
+revocation checks before reads, asynchronous synchronization, deletion/retention jobs,
+rate limits, monitoring, backup, and tested recovery. That system is not built here.
+
 The standalone MCP server has a different network mode:
 `network_single_user`. Every SSE or streamable-HTTP listener requires
 `MCP_AUTH_TOKEN`; a non-loopback bind also requires

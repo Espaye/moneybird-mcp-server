@@ -1,5 +1,10 @@
 # Moneybird MCP server
 
+> **Beta (0.4.0):** the supported production scope is local stdio with a
+> mechanically read-only default. Experimental writes require an explicit local
+> opt-in and supervised approval; the localhost gateway is a demonstration, not
+> a hosted product.
+
 Chat with your [Moneybird](https://www.moneybird.nl) bookkeeping from Claude, ChatGPT, or any
 other MCP client: read invoices, contacts, bank mutations, and reports. The supported default
 is mechanically **read-only**. Experimental writes remain available for an explicitly
@@ -17,7 +22,7 @@ verification.
   diagnosis, purchase-invoice reconciliation against a supplier's usual booking, meter-usage
   invoicing, and PDF attachment reading to check the real invoice split.
 
-Quick start for MCP clients: `pip install moneybird-mcp` and run the `moneybird-mcp` console
+Beta quick start for MCP clients: `pip install moneybird-mcp` and run the `moneybird-mcp` console
 script (stdio). See **Install and run** below for the Claude Desktop one-file extension and
 the authenticated HTTP/SSE options. The package and Desktop extension start read-only.
 
@@ -125,7 +130,15 @@ Moneybird uses a Bearer token for personal API access. You can find the docs her
 
 ## 2. Configure the environment
 
-Copy `.env.example` to `.env` and fill in your values:
+The package never discovers `.env` files automatically. Supply configuration in
+the MCP client's process environment (recommended), or copy `.env.example` to a
+protected operator file and select it explicitly with an absolute path:
+
+```powershell
+moneybird-mcp --env-file C:\Users\you\.config\moneybird-mcp.env
+```
+
+The file format is:
 
 ```env
 MONEYBIRD_ACCESS_TOKEN=mb_xxx
@@ -193,9 +206,11 @@ Local and single-user notes:
      `urn:ietf:wg:oauth:2.0:oob` (out-of-band: Moneybird displays the code in the browser, so no
      public callback endpoint is needed). A future hosted service would instead need its own
      fixed HTTPS callback, identity boundary, and durable OAuth-state design.
-  2. Put the credentials in `.env`: `MONEYBIRD_OAUTH_CLIENT_ID` and
-     `MONEYBIRD_OAUTH_CLIENT_SECRET`.
-  3. Run `python scripts/oauth_login.py`, authorize in the browser, and paste the code. Tokens
+  2. Supply `MONEYBIRD_OAUTH_CLIENT_ID` and `MONEYBIRD_OAUTH_CLIENT_SECRET`
+     through the parent environment or a protected explicit environment file.
+  3. Run `python scripts/oauth_login.py --env-file C:\absolute\operator.env`
+     (omit the option when the parent environment already supplies the values),
+     authorize in the browser, and paste the code. Tokens
      land in `moneybird_oauth_tokens.json` in the data dir (gitignored; contains secrets), the
      script verifies them by listing the reachable administrations, and expired access tokens
      are refreshed automatically from then on. The requested scopes are
@@ -255,6 +270,13 @@ $env:MCP_TRANSPORT = "http"
 python .\moneybird_mcp_server.py
 ```
 
+For migration from older clone-based setups, use
+`python .\moneybird_mcp_server.py --env-file C:\absolute\operator.env`.
+Neither the legacy entrypoint nor package imports load a repository or
+working-directory `.env`; this deliberate compatibility break prevents an
+untrusted launch directory from changing capability, tenant, listener, or
+credential policy. Values already supplied by the parent process always win.
+
 This serves the current streamable-HTTP transport at:
 
 ```text
@@ -280,7 +302,7 @@ pyproject.toml            # PyPI packaging: `moneybird-mcp` console script (stdi
 mcpb/                     # Claude Desktop extension: manifest + bundle entry script
 moneybird/
   server.py               # shared entrypoint: stdio | http | sse (build_config + main)
-  config.py               # constants, MoneybirdError, .env loading, data_dir()
+  config.py               # constants, MoneybirdError, explicit env-file parser, data_dir()
   credentials.py          # explicit local, network-single-user, hosted-request-only modes
   capabilities.py         # read-only default + explicit local/single-user write opt-in
   client.py               # Moneybird REST client (pooled HTTP, retry/backoff)

@@ -6,10 +6,10 @@ uses only :func:`list_documents_for_contact` when it needs a reference invoice.
 """
 from __future__ import annotations
 
-from collections import Counter
 import re
-from typing import Any
 import unicodedata
+from collections import Counter
+from typing import Any
 
 from .config import MoneybirdError
 from .formatting import chunked, normalize_document_kind

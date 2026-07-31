@@ -11,9 +11,9 @@ from ..config import (
 from ..formatting import (
     compact_financial_account_summary,
 )
+from . import _context as ctx
 from ._params import FilterString, Limit, Page, Period
 from ._registry import mcp
-from . import _context as ctx
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)

@@ -7,8 +7,8 @@ import sys
 import tempfile
 import types
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault(
     "MONEYBIRD_MCP_DATA_DIR",

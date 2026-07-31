@@ -1,20 +1,23 @@
 # Releasing `moneybird-mcp`
 
-Releases are version-driven and fail closed. A commit on `main` whose version is not
-fully present on PyPI starts the release workflow. The workflow tests the source,
-publishes exact artifacts with Trusted Publishing, verifies those artifacts after
-download from PyPI, and creates or repairs the GitHub release from the verified PyPI
-files.
+Releases are manual and fail closed. A push or merge never publishes. After the
+version commit has passed review and landed on the default branch, a maintainer
+must explicitly dispatch `release.yml` with the exact package version and full
+40-character commit SHA. The workflow requires those inputs to match the selected
+default-branch commit, tests that source, publishes its exact artifacts through
+Trusted Publishing, verifies them after download from PyPI, and creates the GitHub
+Release once from those verified files.
 
 The platform-specific `.mcpb` bundle remains a separate local build and manual
 GitHub-release upload.
 
-## 1. Prepare the version commit
+## 1. Prepare and review the version commit
 
 - Bump `version` in both `pyproject.toml` and `mcpb/manifest.json`.
 - Update `CHANGELOG.md`.
-- Keep the version bump on `main`; the workflow refuses other refs.
-- Check PyPI and existing `vX.Y.Z` tag/release state before pushing.
+- Open a pull request into the default branch and require the applicable CI and
+  security checks before merge.
+- Check PyPI and existing `vX.Y.Z` tag/release state before dispatching.
 
 PyPI versions are immutable. Do not reuse a published version or assume a partially
 published version can be repaired by uploading a replacement file.
@@ -22,7 +25,12 @@ published version can be repaired by uploading a replacement file.
 ## 2. Verify locally
 
 ```text
+ruff check moneybird gateway scripts tests moneybird_mcp_server.py
+python -m compileall moneybird gateway scripts
 python -m pytest -q
+python -m pytest --cov=moneybird --cov=gateway --cov-report=term-missing --cov-fail-under=70
+bandit --quiet --recursive moneybird gateway scripts moneybird_mcp_server.py --severity-level medium --confidence-level medium
+python -m pip_audit -r requirements.txt
 python -m pip install -c requirements-minimum.txt -r requirements.txt pytest
 python -m pytest -q
 python scripts/assert_release_version.py X.Y.Z
@@ -32,6 +40,7 @@ python -m twine check dist/moneybird_mcp-X.Y.Z*
 python scripts/check_dist_hygiene.py
 python scripts/smoke_dist_install.py --expected-version X.Y.Z
 python scripts/build_sbom.py --expected-version X.Y.Z
+gitleaks git --redact --verbose .
 ```
 
 `scripts/check_dist_hygiene.py` expects exactly one wheel and one sdist in `dist/`.
@@ -46,40 +55,45 @@ An optional live read-only check is:
 python scripts/healthcheck_readonly.py
 ```
 
-## 3. Push the bump to `main`
+## 3. Dispatch the exact default-branch commit
 
-```text
-git push origin main
+From the GitHub Actions UI, select **Release**, choose **Run workflow** on the
+default branch, and enter both inputs. The equivalent authenticated CLI command is:
+
+```console
+gh workflow run release.yml --ref main \
+  -f version=X.Y.Z \
+  -f commit_sha=<full-40-character-main-commit-sha>
 ```
 
-Repository-wide release concurrency prevents two release state machines from running
-at once. The workflow then:
+Repository-wide release concurrency prevents two release state machines from
+running at once. The workflow then:
 
-1. asserts the source and manifest versions match;
-2. inspects PyPI for the exact version and requires either no artifacts or exactly
-   one non-yanked wheel plus one non-yanked sdist;
-3. inspects any existing tag and GitHub release;
-4. requires an existing tag to peel to a commit on `main`;
-5. runs the full test matrix, lowest-supported-direct-dependency lane, and
+1. requires a manual dispatch from the repository's default branch;
+2. requires the version input to equal both package and manifest metadata, and
+   the commit input to be the exact full SHA selected by the dispatch;
+3. refuses to continue if the PyPI version, Git tag, or GitHub Release already
+   exists;
+4. runs the full test matrix, lowest-supported-direct-dependency lane, and
    dependency audit;
-6. builds one wheel and one sdist twice from fixed inputs and requires identical
+5. builds one wheel and one sdist twice from fixed inputs and requires identical
    SHA-256 digests, then checks metadata/hygiene, smoke-tests the candidate, and
    generates a reproducible CycloneDX SBOM;
-7. tests the exact wheel artifact across the supported Python matrix;
-8. creates or verifies `vX.Y.Z` at the tested source SHA;
-9. publishes through the `pypi` environment using OIDC Trusted Publishing and
+6. passes those exact tested artifacts between jobs and tests the wheel across
+   the supported Python matrix;
+7. creates `vX.Y.Z` once at the exact tested source SHA and re-verifies it;
+8. publishes through the `pypi` environment using OIDC Trusted Publishing and
    uploads PEP 740 attestations for both distributions;
-10. re-verifies the tag inside the publish job immediately after any environment
+9. re-verifies the tag inside the publish job immediately after any environment
     approval and before upload; after publication it verifies the tag again,
-    downloads the exact version back from PyPI, compares its filenames and SHA-256
-    digests with the tested candidate when one was built, cryptographically verifies
-    each artifact's PyPI provenance against this GitHub repository, checks hygiene,
-    and clean-installs both published artifacts;
-11. re-verifies the tag immediately before release mutation, creates or repairs the
-    GitHub release from those re-downloaded PyPI artifacts plus an SBOM regenerated
-    from the exact published wheel, removes stale package/SBOM assets, clears
-    draft/prerelease state, and finally checks the exact filenames and SHA-256
-    digests again.
+   downloads the exact version back from PyPI, compares filenames and SHA-256
+   digests with the tested candidate, cryptographically verifies each artifact's
+   provenance against this repository, checks hygiene, and clean-installs both
+   published artifacts;
+10. re-verifies the tag immediately before release mutation, creates the GitHub
+    Release once from those re-downloaded PyPI artifacts plus an SBOM regenerated
+    from the exact published wheel, and finally checks the exact tag, filenames,
+    and SHA-256 digests again.
 
 The tag is checked again after creation. A release cannot silently tag a different
 commit from the source that produced the tested artifacts within that workflow run.
@@ -87,28 +101,19 @@ These YAML checks—including final tag and release-asset verification—are def
 depth; repository settings must prevent later tag movement and restrict who can
 approve publication.
 
-## Recovery rules
+## Failure and recovery rules
 
-- **Exactly one valid wheel and one valid sdist already exist on PyPI:** publishing
-  is skipped, but published-artifact verification and GitHub-release repair still
-  run.
-- **Only one artifact exists, an artifact is yanked, or the file set is
-  unexpected:** the workflow fails. Never rebuild an already published version.
-  Repair a missing file only from the exact original tested workflow artifact under
-  an explicit recovery procedure; if that artifact is unavailable, investigate and
-  choose a new version. Do not construct a hybrid release.
-- **A tag exists at a different SHA than the current trigger:** do not move it.
-  Resume or rerun the original failed workflow for the tagged source.
-- **PyPI is complete but the GitHub release is absent or incomplete:** rerun the
-  workflow. It rebuilds the package-asset set from verified PyPI downloads and
-  regenerates the SBOM from the exact published wheel, then deletes differently
-  named stale wheel/sdist/SBOM assets.
-- **A historical tag predates the current verification helpers:** recovery uses
-  helpers from the guarded workflow commit while package bytes still come only from
-  the original candidate or PyPI. If that helper provenance cannot be reproduced
-  and reviewed, stop and perform an explicit manual recovery; never substitute a
-  rebuild of the historical package source.
-- **A pre-publish job fails:** fix the cause and rerun before any immutable upload.
+- **A pre-publish job fails:** fix the cause on a new reviewed commit and dispatch
+  that exact commit only while the version and tag remain unused.
+- **The tag or GitHub Release appears after the initial check:** later mutation
+  steps fail rather than moving, editing, deleting, or overwriting it.
+- **Any PyPI file is uploaded:** stop. The version is immutable and this workflow
+  will refuse every attempt to reuse it. Record exactly what exists, investigate,
+  and choose the next legal version. Never construct a hybrid release.
+- **PyPI succeeds but later verification or GitHub Release creation fails:** stop
+  and use an explicit reviewed recovery procedure based only on the exact original
+  workflow artifacts and PyPI files. The normal workflow intentionally refuses an
+  already published version.
 
 Do not use a manual `twine upload` as the normal fallback. It bypasses the workflow's
 source, artifact, and recovery checks.
@@ -124,18 +129,16 @@ The PyPI publisher must match:
 | Workflow | `release.yml` |
 | Environment | `pypi` |
 
-Production release readiness requires both:
+For this solo-maintainer beta, the `pypi` environment must accept deployments only
+from protected `main`, and a `v*` tag ruleset must prevent tag update and deletion
+while allowing the release workflow to create a new tag. Protected `main`, the
+manual version/SHA dispatch, the restricted environment, exact-artifact handoff,
+and the deliberate pre-publication checkpoint form the release brake.
 
-- a `pypi` environment deployment-branch policy restricted to `main`, with at least
-  one required reviewer who is independent of the triggering workflow; and
-- a repository ruleset protecting `v*` tags from creation, update, or deletion
-  outside the intended release authority.
-
-As of 2026-07-30, those environment and tag protections were not configured. The
-workflow's ref/source/tag checks reduce accidental release drift
-but cannot make an unprotected GitHub tag immutable or add an external publication
-approval. Configure and verify both controls before treating the release path as
-production-ready.
+There is no independent human deployment reviewer in the solo-maintainer setup.
+That is a documented residual beta limitation, not a claim of dual control. Add an
+independent required reviewer and prevent self-review if a suitable maintainer
+becomes available without making releases impossible.
 
 No long-lived PyPI API token is needed in the repository.
 

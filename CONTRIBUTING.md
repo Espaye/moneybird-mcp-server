@@ -8,7 +8,10 @@ Use Python 3.11 or newer in a fresh virtual environment:
 
 ```powershell
 python -m pip install -r requirements.txt
+python -m pip install ruff==0.16.1 pytest-cov==7.1.0
+ruff check moneybird gateway scripts tests moneybird_mcp_server.py
 python -m pytest -q
+python -m pytest --cov=moneybird --cov=gateway --cov-report=term-missing --cov-fail-under=70
 python -m pip install -c requirements-minimum.txt -r requirements.txt pytest
 python -m pytest -q
 ```
@@ -16,6 +19,14 @@ python -m pytest -q
 No real Moneybird credential is needed for the test suite. Keep `.env`, OAuth stores,
 approvals, audit logs, sync indexes, FTS databases, and downloaded attachments out of commits
 and test fixtures.
+
+The initial coverage gate is a 70% regression floor, slightly below the measured
+baseline so platform-specific branches do not make the gate flaky. Raise it after
+merging focused behavioural tests for high-risk modules; never add assertion-free
+tests solely to increase the percentage. Ruff intentionally starts with Pyflakes,
+import ordering, and core syntax/error rules. Broader style and complexity families
+remain outside the gate until they can be adopted in small reviewed changes without
+weakening deliberate fail-closed handling.
 
 ## Change expectations
 

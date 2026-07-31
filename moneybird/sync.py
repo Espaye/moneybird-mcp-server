@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from .config import MoneybirdError, data_dir, harden_private_file
 from .client import MoneybirdClient
+from .config import MoneybirdError, data_dir, harden_private_file
 from .formatting import (
     chunked,
     contact_search_record,

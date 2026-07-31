@@ -61,15 +61,15 @@ class TelemetryTests(unittest.TestCase):
     def test_endpoint_normalization_removes_record_ids(self) -> None:
         self.assertEqual(
             normalize_endpoint(
-                "/463484440785454158/financial_mutations/"
-                "466090469904877383/link_booking.json"
+                "/100000000000000001/financial_mutations/"
+                "100000000000000002/link_booking.json"
             ),
             "/:id/financial_mutations/:id/link_booking.json",
         )
         self.assertEqual(
             normalize_endpoint(
-                "/463484440785454158/financial_mutations/"
-                "466090469904877383.json"
+                "/100000000000000001/financial_mutations/"
+                "100000000000000002.json"
             ),
             "/:id/financial_mutations/:id.json",
         )

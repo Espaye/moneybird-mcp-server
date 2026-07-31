@@ -12,8 +12,7 @@ from moneybird.capabilities import (
     writes_enabled,
 )
 from moneybird.config import MoneybirdError
-from moneybird.credentials import CREDENTIAL_MODE_ENV
-from moneybird.credentials import set_active_administration_id
+from moneybird.credentials import CREDENTIAL_MODE_ENV, set_active_administration_id
 from moneybird.safety import make_approval
 
 

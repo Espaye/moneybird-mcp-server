@@ -1,10 +1,10 @@
 """Pure formatting, normalization, and record-shaping helpers (no network)."""
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from datetime import UTC, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from .config import (
@@ -13,6 +13,7 @@ from .config import (
     DOCUMENT_KIND_CONFIG,
     MoneybirdError,
 )
+
 
 def api_url(resource: str, item_id: str, administration_id: str | None) -> str | None:
     if not administration_id:

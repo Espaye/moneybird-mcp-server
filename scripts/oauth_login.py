@@ -1,10 +1,10 @@
 """Interactive OAuth login against Moneybird (out-of-band flow).
 
 Prerequisites: register an application at https://moneybird.com/user/applications/new
-with redirect URI ``urn:ietf:wg:oauth:2.0:oob`` and put its credentials in .env as
-MONEYBIRD_OAUTH_CLIENT_ID / MONEYBIRD_OAUTH_CLIENT_SECRET. Then:
+with redirect URI ``urn:ietf:wg:oauth:2.0:oob`` and supply its credentials through
+the parent environment or an explicitly selected environment file. Then:
 
-    python scripts/oauth_login.py
+    python scripts/oauth_login.py --env-file C:\\absolute\\operator.env
 
 The script prints the authorization URL; open it, click "Sta toe" (allow), copy the
 code Moneybird displays, and paste it back here. Tokens are stored in the data dir
@@ -18,21 +18,35 @@ Options:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import webbrowser
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from moneybird import oauth  # importing the package loads .env
+from moneybird import oauth
 from moneybird.client import MoneybirdClient
+from moneybird.config import load_env_file
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        help=(
+            "Explicit configuration file. Existing parent-process environment "
+            "values win; no .env file is discovered automatically."
+        ),
+    )
     parser.add_argument("--redirect-uri", default=oauth.OOB_REDIRECT_URI)
     parser.add_argument("--profile", default=oauth.DEFAULT_PROFILE)
     args = parser.parse_args()
+    if args.env_file is not None:
+        load_env_file(args.env_file)
+    if not os.environ.get("MONEYBIRD_MCP_DATA_DIR", "").strip():
+        os.environ["MONEYBIRD_MCP_DATA_DIR"] = str(Path.home() / ".moneybird-mcp")
 
     url = oauth.build_authorize_url(redirect_uri=args.redirect_uri)
     print("Open this URL in your browser and authorize the application:\n")

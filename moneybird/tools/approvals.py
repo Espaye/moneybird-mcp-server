@@ -4,12 +4,12 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ..capabilities import require_write_capability
-from ..config import MoneybirdError, WRITE_ANNOTATIONS
+from ..config import WRITE_ANNOTATIONS, MoneybirdError
 from ..safety import peek_approval
 from ..write_contracts import WRITE_SPECS
+from . import _context as ctx
 from ._params import ApprovalId
 from ._registry import mcp
-from . import _context as ctx
 from .bank import (
     link_bank_mutation_booking_from_approval,
     reclassify_bank_mutation_bookings_from_approval,

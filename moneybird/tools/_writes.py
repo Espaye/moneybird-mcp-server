@@ -29,11 +29,10 @@ from ..safety import (
     classify_write_exception,
     make_approval,
     pop_approval,
-    record_approval_phase,
     record_approval_outcome,
+    record_approval_phase,
 )
 from . import _context as ctx
-
 
 EXECUTOR_AUDIT_RESULTS = {
     "success",
