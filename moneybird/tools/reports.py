@@ -4,16 +4,16 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import (
-    MoneybirdError,
     READ_ONLY_ANNOTATIONS,
     REPORT_ENDPOINTS,
+    MoneybirdError,
 )
 from ..formatting import (
     report_title,
 )
+from . import _context as ctx
 from ._params import Period, ReportName, ReportPage
 from ._registry import mcp
-from . import _context as ctx
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)

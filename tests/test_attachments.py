@@ -119,6 +119,32 @@ class ExtractPdfTextTests(unittest.TestCase):
         self.assertEqual(result["isolation"], "worker_process")
         self.assertIn("time limit", result["note"])
 
+    def test_parser_worker_failure_is_closed_and_joined(self) -> None:
+        parent_connection = mock.Mock()
+        parent_connection.poll.return_value = True
+        parent_connection.recv.side_effect = EOFError
+        child_connection = mock.Mock()
+        process = mock.Mock()
+        process.exitcode = 17
+        process.is_alive.return_value = False
+        context = mock.Mock()
+        context.Pipe.return_value = (parent_connection, child_connection)
+        context.Process.return_value = process
+
+        with mock.patch(
+            "moneybird.attachments.multiprocessing.get_context",
+            return_value=context,
+        ):
+            result = extract_pdf_text(_minimal_pdf("worker failure"))
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["isolation"], "worker_process")
+        self.assertIn("failed safely", result["note"])
+        process.start.assert_called_once()
+        parent_connection.close.assert_called_once()
+        child_connection.close.assert_called_once()
+        process.join.assert_called_once_with(2)
+
     def test_safe_attachment_filename(self) -> None:
         self.assertEqual(
             safe_attachment_filename("Termijnnota juli / 2026 €.pdf"),
@@ -298,6 +324,124 @@ class BinaryRequestRedirectTests(unittest.TestCase):
                     "https://moneybird.com/api/v2/123/file",
                     "https://storage.example/file",
                 )
+
+    def test_pinned_connection_uses_numeric_tcp_target_and_original_tls_name(self) -> None:
+        from moneybird.client import _PinnedHTTPSConnection
+
+        raw_socket = mock.Mock()
+        tls_socket = object()
+        context = mock.Mock()
+        context.wrap_socket.return_value = tls_socket
+        connection = _PinnedHTTPSConnection(
+            "storage.example",
+            ("93.184.216.34",),
+            context=context,
+            timeout=7,
+        )
+
+        with mock.patch("moneybird.client.socket.socket", return_value=raw_socket):
+            connection.connect()
+
+        raw_socket.connect.assert_called_once_with(("93.184.216.34", 443))
+        context.wrap_socket.assert_called_once_with(
+            raw_socket,
+            server_hostname="storage.example",
+        )
+        self.assertIs(connection.sock, tls_socket)
+
+    def test_pinned_handler_uses_supported_https_handler_api(self) -> None:
+        from moneybird.client import _PinnedHTTPSConnection, _PinnedHTTPSHandler
+
+        handler = _PinnedHTTPSHandler(("93.184.216.34",))
+        request = urllib.request.Request("https://storage.example/file")
+        with mock.patch.object(handler, "do_open", return_value="response") as do_open:
+            self.assertEqual(handler.https_open(request), "response")
+
+        factory = do_open.call_args.args[0]
+        connection = factory("storage.example", timeout=5)
+        self.assertIsInstance(connection, _PinnedHTTPSConnection)
+        self.assertEqual(connection._pinned_addresses, ("93.184.216.34",))
+        self.assertTrue(do_open.call_args.kwargs["context"].check_hostname)
+
+    def test_mixed_public_private_dns_answers_fail_closed(self) -> None:
+        from moneybird.client import _validated_attachment_redirect_target
+        from moneybird.config import MoneybirdError
+
+        answers = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 443)),
+        ]
+        with (
+            mock.patch("moneybird.client.socket.getaddrinfo", return_value=answers),
+            self.assertRaisesRegex(MoneybirdError, "non-public"),
+        ):
+            _validated_attachment_redirect_target(
+                "https://moneybird.com/api/v2/123/file",
+                "https://storage.example/file",
+            )
+
+    def test_non_public_and_malformed_dns_answers_fail_closed(self) -> None:
+        from moneybird.client import _validated_attachment_redirect_target
+        from moneybird.config import MoneybirdError
+
+        addresses = [
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.1.2",
+            "192.0.2.1",
+            "224.0.0.1",
+            "::1",
+            "fe80::1",
+            "fec0::1",
+            "ff02::1",
+            "4000::1",
+            "not-an-address",
+        ]
+        for address in addresses:
+            with self.subTest(address=address):
+                answers = [
+                    (
+                        socket.AF_INET6 if ":" in address else socket.AF_INET,
+                        socket.SOCK_STREAM,
+                        6,
+                        "",
+                        (address, 443),
+                    )
+                ]
+                with (
+                    mock.patch(
+                        "moneybird.client.socket.getaddrinfo",
+                        return_value=answers,
+                    ),
+                    self.assertRaises(MoneybirdError),
+                ):
+                    _validated_attachment_redirect_target(
+                        "https://moneybird.com/api/v2/123/file",
+                        "https://storage.example/file",
+                    )
+
+    def test_redirect_rejects_credentials_fragment_and_nondefault_port(self) -> None:
+        from moneybird.client import _validated_attachment_redirect_target
+        from moneybird.config import MoneybirdError
+
+        locations = [
+            "http://storage.example/file",
+            "file:///tmp/file.pdf",
+            "https://user:pass@storage.example/file",
+            "https://storage.example/file#fragment",
+            "https://storage.example:8443/file",
+            "https://storage.example:not-a-port/file",
+        ]
+        for location in locations:
+            with (
+                self.subTest(location=location),
+                self.assertRaises(MoneybirdError),
+            ):
+                _validated_attachment_redirect_target(
+                    "https://moneybird.com/api/v2/123/file",
+                    location,
+                )
+
     def test_direct_response_returns_bytes(self) -> None:
         from moneybird.client import MoneybirdClient
 
@@ -338,7 +482,7 @@ class ReadDocumentAttachmentToolTests(unittest.TestCase):
         def get_document(self, kind, document_id):
             return {
                 "id": document_id,
-                "reference": "1168011272",
+                "reference": "1000000002",
                 "attachments": self.attachments,
             }
 
@@ -347,8 +491,8 @@ class ReadDocumentAttachmentToolTests(unittest.TestCase):
 
     def _call(self, fake, **kwargs):
         from moneybird import tools
-        from moneybird.tools import _context as tool_context
         from moneybird.credentials import set_active_administration_id
+        from moneybird.tools import _context as tool_context
 
         def get_fake_client(*args, **_kwargs):
             set_active_administration_id(fake.administration_id)

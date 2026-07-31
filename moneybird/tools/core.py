@@ -8,8 +8,8 @@ from pydantic import Field
 
 from ..client import normalize_generic_get_path, validate_moneybird_id
 from ..config import (
-    MoneybirdError,
     READ_ONLY_ANNOTATIONS,
+    MoneybirdError,
 )
 from ..credentials import (
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
@@ -30,18 +30,18 @@ from ..formatting import (
     purchase_document_title,
     stringify_record,
 )
+from ..invoicing import (
+    find_contact_matches,
+)
 from ..search_fts import refresh_fts_index, search_fts
-from ..telemetry import performance_snapshot, tenant_scope_for_token
 from ..sync import (
     load_sync_index,
     sync_search_index_data,
 )
-from ..invoicing import (
-    find_contact_matches,
-)
+from ..telemetry import performance_snapshot, tenant_scope_for_token
+from . import _context as ctx
 from ._params import FilterString, GenericGetPath, Limit, SearchRecordId
 from ._registry import mcp
-from . import _context as ctx
 
 
 @mcp.tool(

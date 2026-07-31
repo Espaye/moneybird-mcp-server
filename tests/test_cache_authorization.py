@@ -4,10 +4,10 @@ import os
 import unittest
 from unittest import mock
 
+from moneybird import sync
 from moneybird.client import MoneybirdClient
 from moneybird.config import MoneybirdError
 from moneybird.credentials import CREDENTIAL_MODE_ENV
-from moneybird import sync
 from moneybird.tools import core
 
 

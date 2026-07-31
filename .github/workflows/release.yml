@@ -1,37 +1,38 @@
 name: Release
 
-# Version-driven releases: the version in pyproject.toml is the trigger, not a tag.
-# Push a commit to main that bumps it (mcpb/manifest.json must match -- the suite
-# enforces that) and this workflow runs the tests, builds, publishes to PyPI via
-# Trusted Publishing, with an immutable tag created before publication, then creates
-# the GitHub release.
+# Releases are deliberate manual operations. A push or merge never publishes.
+# Start this workflow from the repository's default branch and provide the exact
+# package version plus the full commit SHA currently at that branch. The workflow
+# fails unless both inputs match the checked-out source, PyPI has never seen the
+# version, and neither the tag nor GitHub Release exists.
 #
-# Pushes that don't change the version are a no-op once PyPI, the tag, and the GitHub
-# release all exist. Each stage is checked independently so a failed later stage can
-# be resumed without attempting to republish an immutable PyPI version.
-#
-# The trade-off to know: PyPI versions are immutable. A bump that lands on main is a
-# release you cannot replace, only yank. If you want a hand on the brake, add
-# required reviewers to the `pypi` environment in the repo settings -- the publish
-# job then waits for your approval. See docs/releasing.md.
+# PyPI versions are immutable. This workflow never repairs, overwrites, or reuses an
+# existing version. If any publication is partial, stop and choose the next legal
+# version after investigating. See docs/releasing.md.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      version:
+        description: Exact package version to publish (for example, 0.4.0)
+        required: true
+        type: string
+      commit_sha:
+        description: Full 40-character commit SHA currently at the default branch
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  # One release state machine for the repository. A manual run from another ref
-  # must not race the main-branch release.
+  # One release state machine for the repository.
   group: release-${{ github.repository }}-main
   # Never cancel a publish that is already under way.
   cancel-in-progress: false
 
 jobs:
   check:
-    name: Is this a new version?
+    name: Validate manual release request
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.check.outputs.version }}
@@ -50,23 +51,63 @@ jobs:
           python-version: "3.12"
 
       - id: check
-        name: Inspect PyPI, tag, and GitHub release state
+        name: Validate inputs and require unused release state
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
           GITHUB_REF_NAME_FULL: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_COMMIT_SHA: ${{ inputs.commit_sha }}
         run: |
           python - <<'PY'
-          import json, os, pathlib, tomllib, urllib.error, urllib.parse, urllib.request
+          import json, os, pathlib, re, tomllib, urllib.error, urllib.parse, urllib.request
 
-          if os.environ["GITHUB_REF_NAME_FULL"] != "refs/heads/main":
+          expected_ref = f"refs/heads/{os.environ['DEFAULT_BRANCH']}"
+          if os.environ["GITHUB_REF_NAME_FULL"] != expected_ref:
               raise SystemExit(
-                  "Releases may only run from refs/heads/main. Re-run workflow_dispatch "
-                  "with the main branch selected."
+                  f"Releases may only run from the default branch ({expected_ref}). "
+                  "Re-run workflow_dispatch with that branch selected."
               )
+          requested_version = os.environ["REQUESTED_VERSION"]
+          if requested_version != requested_version.strip() or not requested_version:
+              raise SystemExit("The requested version must be a nonblank exact value.")
+          requested_commit = os.environ["REQUESTED_COMMIT_SHA"]
+          if not re.fullmatch(r"[0-9a-f]{40}", requested_commit):
+              raise SystemExit(
+                  "The requested commit must be a full lowercase 40-character SHA."
+              )
+          if requested_commit != os.environ["COMMIT_SHA"]:
+              raise SystemExit(
+                  f"Requested commit {requested_commit} does not equal the selected "
+                  f"default-branch commit {os.environ['COMMIT_SHA']}."
+              )
+
           version = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
-          pypi_url = "https://pypi.org/pypi/moneybird-mcp/json"
+          package_name = tomllib.loads(
+              pathlib.Path("pyproject.toml").read_text()
+          )["project"]["name"]
+          manifest_version = json.loads(
+              pathlib.Path("mcpb/manifest.json").read_text(encoding="utf-8")
+          )["version"]
+          if requested_version != version:
+              raise SystemExit(
+                  f"Requested version {requested_version!r} does not equal package "
+                  f"version {version!r}."
+              )
+          if manifest_version != version:
+              raise SystemExit(
+                  f"Manifest version {manifest_version!r} does not equal package "
+                  f"version {version!r}."
+              )
+          if package_name != "moneybird-mcp":
+              raise SystemExit(f"Unexpected package name: {package_name!r}")
+
+          pypi_url = (
+              "https://pypi.org/pypi/"
+              f"{urllib.parse.quote(package_name, safe='')}/json"
+          )
           try:
               with urllib.request.urlopen(pypi_url, timeout=30) as response:
                   project = json.load(response)
@@ -75,36 +116,11 @@ jobs:
                   raise
               project = {"releases": {}}  # project does not exist on PyPI yet
 
-          release_files = project["releases"].get(version, [])
-          if any(item.get("yanked") for item in release_files):
+          if version in project.get("releases", {}):
               raise SystemExit(
-                  f"PyPI {version} contains yanked artifacts. Refusing automated "
-                  "republication; choose a new version after investigating."
+                  f"PyPI already contains version {version}. Versions are immutable; "
+                  "refusing to overwrite, repair, or reuse it."
               )
-          wheels = [
-              item for item in release_files
-              if item.get("packagetype") == "bdist_wheel"
-          ]
-          sdists = [
-              item for item in release_files
-              if item.get("packagetype") == "sdist"
-          ]
-          pypi_complete = len(wheels) == 1 and len(sdists) == 1
-          if release_files and not pypi_complete:
-              raise SystemExit(
-                  f"PyPI {version} is only partially published "
-                  f"({len(wheels)} wheel(s), {len(sdists)} sdist(s)). Refusing to "
-                  "construct a hybrid release automatically; repair the missing "
-                  "artifact from the original tested workflow run."
-              )
-          expected_dist_digests = (
-              {
-                  item["filename"]: str(item["digests"]["sha256"]).lower()
-                  for item in wheels + sdists
-              }
-              if pypi_complete
-              else {}
-          )
 
           repository = os.environ["REPOSITORY"]
           github_headers = {
@@ -128,85 +144,23 @@ jobs:
 
           tag = github_object(f"git/ref/tags/v{version}")
           github_release = github_object(f"releases/tags/v{version}")
-          publish_needed = not pypi_complete
-          tag_needed = tag is None
-          release_assets = {
-              str(asset.get("name") or ""): asset
-              for asset in (github_release or {}).get("assets", [])
-          }
-          package_assets = {
-              name: asset
-              for name, asset in release_assets.items()
-              if name.endswith(".whl") or name.endswith(".tar.gz")
-          }
-          expected_sbom_name = f"moneybird-mcp-{version}.cdx.json"
-          sbom_assets = {
-              name: asset
-              for name, asset in release_assets.items()
-              if name.endswith(".cdx.json")
-          }
-          exact_asset_names = (
-              set(package_assets) == set(expected_dist_digests)
-          )
-          exact_asset_digests = exact_asset_names and all(
-              str(package_assets[name].get("digest") or "").lower()
-              == f"sha256:{digest}"
-              for name, digest in expected_dist_digests.items()
-          )
-          exact_sbom = (
-              set(sbom_assets) == {expected_sbom_name}
-              and str(sbom_assets[expected_sbom_name].get("digest") or "")
-              .lower()
-              .startswith("sha256:")
-          )
-          release_needed = (
-              publish_needed
-              or github_release is None
-              or bool(github_release.get("draft"))
-              or bool(github_release.get("prerelease"))
-              or not exact_asset_names
-              or not exact_asset_digests
-              or not exact_sbom
-          )
-          if not publish_needed and tag_needed:
-              raise SystemExit(
-                  f"PyPI {version} exists but tag v{version} is missing. Refusing to "
-                  "guess the published commit; repair this legacy state manually."
-              )
-
-          source_sha = os.environ["COMMIT_SHA"]
           if tag is not None:
-              tag_object = tag["object"]
-              while tag_object["type"] == "tag":
-                  annotated = github_object(f"git/tags/{tag_object['sha']}")
-                  if annotated is None:
-                      raise SystemExit(f"Could not peel annotated tag v{version}")
-                  tag_object = annotated["object"]
-              if tag_object["type"] != "commit":
-                  raise SystemExit(
-                      f"Tag v{version} points to {tag_object['type']}, not a commit"
-                  )
-              source_sha = str(tag_object["sha"])
-              comparison = github_object(
-                  f"compare/{source_sha}...{os.environ['COMMIT_SHA']}"
+              raise SystemExit(
+                  f"Tag v{version} already exists. Refusing to move or reuse it."
               )
-              if comparison is None or comparison.get("status") not in {
-                  "ahead",
-                  "identical",
-              }:
-                  raise SystemExit(
-                      f"Tag v{version} is not an ancestor of the current main commit."
-                  )
-              if publish_needed and source_sha != os.environ["COMMIT_SHA"]:
-                  raise SystemExit(
-                      f"Tag v{version} exists at {source_sha}, but this run was "
-                      f"triggered at {os.environ['COMMIT_SHA']}. Resume the original "
-                      "failed workflow run so PyPI provenance and source SHA agree."
-                  )
+          if github_release is not None:
+              raise SystemExit(
+                  f"A GitHub Release for v{version} already exists. Refusing to "
+                  "overwrite or reuse it."
+              )
 
-          source_ref = source_sha
-          work_needed = publish_needed or tag_needed or release_needed
-          candidate_needed = publish_needed or tag_needed
+          source_sha = requested_commit
+          source_ref = requested_commit
+          publish_needed = True
+          tag_needed = True
+          release_needed = True
+          work_needed = True
+          candidate_needed = True
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"version={version}\n")
               out.write(f"publish_needed={str(publish_needed).lower()}\n")
@@ -218,13 +172,8 @@ jobs:
               out.write(f"source_sha={source_sha}\n")
 
           print(
-              f"version={version} publish_needed={publish_needed} "
-              f"tag_needed={tag_needed} release_needed={release_needed} "
-              f"candidate_needed={candidate_needed} source_sha={source_sha}"
-          )
-          print(
-              f"PyPI artifacts: {len(wheels)} wheel(s), {len(sdists)} sdist(s); "
-              f"GitHub release assets: {sorted(release_assets)}"
+              f"Validated new manual release: package={package_name} "
+              f"version={version} source_sha={source_sha}"
           )
           PY
 
@@ -571,9 +520,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # Recovery may target a historical tag that predates the current
-          # release-verification helpers. Use the guarded workflow commit for
-          # helpers; installed package bytes still come only from candidate/PyPI.
+          # The dispatch guard proved github.sha is the exact requested default-
+          # branch commit, so verification helpers and candidate source agree.
           ref: ${{ github.sha }}
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -829,83 +777,20 @@ jobs:
           print(f"Re-verified tag at {current['sha']}")
           PY
 
-      - name: Remove stale package assets from an existing release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPOSITORY: ${{ github.repository }}
-          VERSION: ${{ needs.check.outputs.version }}
-        run: |
-          python - <<'PY'
-          import json, os, pathlib, urllib.error, urllib.request
-
-          repository = os.environ["REPOSITORY"]
-          headers = {
-              "Accept": "application/vnd.github+json",
-              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
-              "X-GitHub-Api-Version": "2022-11-28",
-          }
-          request = urllib.request.Request(
-              f"https://api.github.com/repos/{repository}/releases/tags/"
-              f"v{os.environ['VERSION']}",
-              headers=headers,
-          )
-          try:
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  release = json.load(response)
-          except urllib.error.HTTPError as error:
-              if error.code != 404:
-                  raise
-              release = None
-
-          expected = {
-              path.name
-              for path in pathlib.Path("dist").iterdir()
-              if path.name.endswith(".whl")
-              or path.name.endswith(".tar.gz")
-              or path.name.endswith(".cdx.json")
-          }
-          if len(expected) != 3:
-              raise SystemExit(
-                  "Expected one wheel, one sdist, and one SBOM in dist, "
-                  f"found {sorted(expected)}"
-              )
-          for asset in (release or {}).get("assets", []):
-              name = str(asset.get("name") or "")
-              is_managed = (
-                  name.endswith(".whl")
-                  or name.endswith(".tar.gz")
-                  or name.endswith(".cdx.json")
-              )
-              if is_managed and name not in expected:
-                  delete = urllib.request.Request(
-                      f"https://api.github.com/repos/{repository}/releases/assets/"
-                      f"{asset['id']}",
-                      headers=headers,
-                      method="DELETE",
-                  )
-                  with urllib.request.urlopen(delete, timeout=30):
-                      pass
-                  print(f"Deleted stale managed release asset {name}")
-          PY
-
-      - name: Create or repair release with exact PyPI artifacts and SBOM
+      - name: Create release once with exact PyPI artifacts and SBOM
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           if gh release view "v$VERSION" >/dev/null 2>&1; then
-            gh release upload "v$VERSION" dist/* --clobber
-            gh release edit "v$VERSION" \
-              --draft=false \
-              --prerelease=false \
-              --title "v$VERSION"
-          else
-            gh release create "v$VERSION" dist/* \
-              --verify-tag \
-              --title "v$VERSION" \
-              --generate-notes
+            echo "GitHub Release v$VERSION already exists; refusing to overwrite it." >&2
+            exit 1
           fi
+          gh release create "v$VERSION" dist/* \
+            --verify-tag \
+            --title "v$VERSION" \
+            --generate-notes
 
       - name: Verify final tag and GitHub release artifacts
         env:

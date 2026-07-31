@@ -8,9 +8,9 @@ from pydantic import Field
 
 from ..capabilities import require_write_capability
 from ..config import (
-    MoneybirdError,
     PREPARE_ANNOTATIONS,
     WRITE_ANNOTATIONS,
+    MoneybirdError,
 )
 from ..formatting import duplicate_fingerprint, iso_now
 from ..safety import (
@@ -18,13 +18,13 @@ from ..safety import (
     make_approval,
     peek_approval,
     pop_approval,
-    record_approval_phase,
     record_approval_outcome,
+    record_approval_phase,
 )
 from ..task_context import MoneybirdTaskContext
+from . import _context as ctx
 from ._params import ApprovalId
 from ._registry import mcp
-from . import _context as ctx
 from .bank import (
     _preflight_bank_reclassification,
     prepare_reclassify_bank_mutation_bookings,

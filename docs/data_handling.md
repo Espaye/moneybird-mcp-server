@@ -66,8 +66,11 @@ In local and authenticated single-user use, the current attachment tool:
   limit, and 40,000-character output limit;
 - holds current downloads in memory and does not retain an attachment file.
 
-Parsing is still in the server process. Hosted mode disables the operation entirely;
-a future hosted parser needs isolation and explicit abuse/retention controls.
+Parsing runs in a disposable spawned worker process with a hard wall-clock timeout
+and best-effort process-memory containment on supported Unix and Windows platforms.
+Hosted mode still disables the operation entirely: per-document process isolation is
+not a hosted queue, global/per-tenant capacity controller, abuse policy, or operational
+lifecycle.
 
 Older releases wrote attachment files to the data directory. The current server
 does not automatically adopt or delete those legacy files. Review, quarantine, or

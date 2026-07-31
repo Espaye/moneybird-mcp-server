@@ -7,25 +7,25 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from ..config import (
-    MoneybirdError,
     PREPARE_ANNOTATIONS,
     WRITE_ANNOTATIONS,
+    MoneybirdError,
 )
 from ..formatting import (
     api_url,
     clean_dict,
     document_contact_title,
-    money_decimal,
-    normalize_document_kind,
     document_url,
     duplicate_fingerprint,
     invoice_title,
-    iso_now,
+    money_decimal,
+    normalize_document_kind,
     purchase_document_title,
 )
 from ..invoicing import (
     parse_decimal_number,
 )
+from . import _context as ctx
 from ._params import (
     ApprovalId,
     DateString,
@@ -39,7 +39,6 @@ from ._writes import (
     run_approved_write,
     stage_write,
 )
-from . import _context as ctx
 
 
 def _fetch_payable_record(client, document_type: str, document_id: str) -> dict[str, Any]:

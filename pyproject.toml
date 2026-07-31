@@ -64,4 +64,23 @@ include = [
     "CHANGELOG.md",
     ".env.example",
 ]
-exclude = ["**/__pycache__"]
+exclude = [
+    "**/__pycache__",
+    # Validation reports contain artifact digests and therefore cannot be part
+    # of the sdist whose digest they record.
+    "docs/release_validation_*.md",
+]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# The initial gate targets correctness, unused code, and deterministic imports.
+# Broader style/complexity families are intentionally deferred so the first
+# lint adoption remains reviewable and does not rewrite fail-closed exception
+# handling merely to satisfy a metric.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Registration must finish before compact discovery transforms the tool catalog.
+"moneybird/tools/__init__.py" = ["E402"]

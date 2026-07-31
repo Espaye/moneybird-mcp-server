@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import json
 import re
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
+from .client import MoneybirdClient
 from .config import (
     DOCUMENT_POSTABLE_ACCOUNT_TYPES,
     MERGE_FIELD_LABELS,
     MoneybirdError,
 )
-from .client import MoneybirdClient
 from .formatting import (
     api_url,
     chunked,

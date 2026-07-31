@@ -1,9 +1,10 @@
 """Thin HTTP client for the Moneybird REST API, with retry/backoff."""
 from __future__ import annotations
 
-import ipaddress
 import http.client
+import ipaddress
 import json
+import logging
 import re
 import socket
 import ssl
@@ -25,11 +26,11 @@ from .config import (
     DEFAULT_RETRY_BACKOFF_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
     MAX_RETRY_DELAY_SECONDS,
-    MoneybirdError,
     PAGINATED_REPORTS,
     REPORT_ENDPOINTS,
     REPORT_PERIOD_PARAM_OVERRIDES,
     RETRYABLE_HTTP_STATUS_CODES,
+    MoneybirdError,
 )
 from .credentials import resolve_credentials, set_active_administration_id
 from .formatting import (
@@ -46,7 +47,6 @@ from .telemetry import (
     tenant_scope_for_token,
 )
 
-import logging
 logger = logging.getLogger("moneybird_mcp")
 
 def retry_delay_seconds(
@@ -169,7 +169,6 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
             connection_factory,
             request,
             context=self._context,
-            check_hostname=self._check_hostname,
         )
 
 
@@ -481,7 +480,12 @@ def _validated_attachment_redirect_target(
             raise MoneybirdError(
                 "Attachment redirect resolved to an invalid address."
             ) from exc
-        if not parsed_address.is_global:
+        if (
+            not parsed_address.is_global
+            or parsed_address.is_multicast
+            or parsed_address.is_reserved
+            or getattr(parsed_address, "is_site_local", False)
+        ):
             raise MoneybirdError(
                 "Attachment redirect to a non-public network address was refused."
             )
@@ -505,7 +509,8 @@ class MoneybirdClient:
     ) -> None:
         if not token:
             raise MoneybirdError(
-                "MONEYBIRD_ACCESS_TOKEN is missing. Set it in your environment or .env file."
+                "MONEYBIRD_ACCESS_TOKEN is missing. Supply it in the parent "
+                "environment or select a file explicitly with --env-file PATH."
             )
 
         self.token = token
@@ -668,7 +673,7 @@ class MoneybirdClient:
                     f"Moneybird returned HTTP {response_status} for operation "
                     f"{operation}.{retry_note}"
                 )
-            except httpx.TransportError as exc:
+            except httpx.TransportError:
                 record_api_call(
                     method=method,
                     operation=operation,
@@ -1264,7 +1269,7 @@ class MoneybirdClient:
                 raise MoneybirdError(
                     f"Moneybird returned HTTP {exc.code} for an attachment request."
                 ) from None
-            except urllib.error.URLError as exc:
+            except urllib.error.URLError:
                 if attempt < DEFAULT_RETRY_ATTEMPTS:
                     time.sleep(retry_delay_seconds(attempt=attempt))
                     continue

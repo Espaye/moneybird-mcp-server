@@ -5,10 +5,13 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
-## 0.4.0 — 2026-07-30
+## 0.4.0 — 2026-07-31
 
 ### Security
 
+- Removed import-time and working-directory `.env` discovery. Configuration files
+  are now loaded only through an explicit `--env-file PATH`, and cannot override
+  values supplied by the parent process.
 - Defaulted the server and Desktop bundle to `read_only`; experimental writes now require
   an explicit local or authenticated single-user capability opt-in.
 - Forced hosted request mode to live reads only: all writes, durable search sync/cache
@@ -21,7 +24,8 @@ versioning while allowing pre-1.0 breaking changes.
   timeout and Unix/Windows process-memory containment.
 - Added capability-aware CodeQL, pinned Bandit scanning for private repositories, and
   scheduled full-history Gitleaks scanning; release artifacts now require reproducible
-  builds, a CycloneDX SBOM, and verified PyPI publish provenance.
+  builds and a CycloneDX SBOM, while newly published PyPI artifacts require verified
+  publish provenance.
 - Made numeric write inputs reject trailing junk, ambiguous separators, non-finite
   values, non-positive payments, and zero-value explicit bank links.
 - Applied best-effort owner-only modes to explicitly configured data directories and
@@ -30,9 +34,16 @@ versioning while allowing pre-1.0 breaking changes.
   documenting its plaintext, URL-key, and production no-go limitations.
 - Added vulnerability reporting, supported-deployment guidance, and reconciled threat/data
   boundaries.
+- Added direct transport tests for numeric-address TCP pinning with original-hostname
+  TLS verification, closed mixed/non-public DNS answers, and fixed Python 3.14
+  compatibility in the pinned HTTPS handler.
 
 ### Changed
 
+- Added a scoped Ruff correctness/import gate and a 70% CI coverage regression floor.
+- Replaced push-triggered publication with a default-branch-only manual release
+  dispatch that requires the exact version and full commit SHA, refuses any
+  existing PyPI version/tag/release, and never overwrites release assets.
 - Added durable atomic write claims, typed outcomes, and action-specific postcondition
   checks where defined; partial or ambiguous execution is no longer presented as verified
   success, without claiming independent bookkeeping correctness.
@@ -57,11 +68,13 @@ versioning while allowing pre-1.0 breaking changes.
 - Hardened release automation with a `main` ref guard, source/tag verification, dependency
   audit, exact artifact matrix tests, late tag re-verification, tested-candidate/PyPI
   digest comparison, and final GitHub tag/asset repair and verification from published
-  artifacts. Partial or yanked PyPI state now fails closed; legacy repair requires
-  reproducible, reviewed helper provenance.
+  artifacts. Partial or yanked PyPI state now fails closed; legacy repair uses helpers
+  from the guarded workflow commit, whose review trust still depends on repository
+  controls.
 - Added a lowest-supported-dependency test lane, pinned the isolated build backend,
   required two-build hash equality, emitted a reproducible CycloneDX SBOM, and
-  required cryptographic verification of Trusted Publishing attestations.
+  required cryptographic verification of Trusted Publishing attestations for new
+  publications.
 - Made the reproducibility check emit the exact compared artifacts, so CI and the
   release publisher cannot accidentally use a separately built, non-deterministic
   wheel or source distribution.

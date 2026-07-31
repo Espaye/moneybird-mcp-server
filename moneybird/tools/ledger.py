@@ -7,9 +7,9 @@ from pydantic import Field
 
 from ..capabilities import require_write_capability
 from ..config import (
-    MoneybirdError,
     PREPARE_ANNOTATIONS,
     WRITE_ANNOTATIONS,
+    MoneybirdError,
 )
 from ..formatting import (
     clean_dict,
@@ -18,23 +18,24 @@ from ..formatting import (
     duplicate_fingerprint,
     iso_now,
 )
-from ..safety import (
-    approval_execution_state,
-    make_approval,
-    pop_approval,
-    record_approval_phase,
-    record_approval_outcome,
-)
 from ..invoicing import (
     details_attributes_payload,
     prepare_general_journal_entries,
     prepare_reclassification_batch,
+)
+from ..safety import (
+    approval_execution_state,
+    make_approval,
+    pop_approval,
+    record_approval_outcome,
+    record_approval_phase,
 )
 from ..write_contracts import (
     assert_patch_precondition,
     verify_document_reclassification,
     verify_general_journal_payload,
 )
+from . import _context as ctx
 from ._params import ApprovalId, DateString
 from ._registry import mcp
 from ._writes import (
@@ -43,7 +44,6 @@ from ._writes import (
     run_approved_write,
     stage_write,
 )
-from . import _context as ctx
 
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)

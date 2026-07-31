@@ -7,10 +7,10 @@ from pydantic import Field
 
 from ..capabilities import require_write_capability
 from ..config import (
-    MoneybirdError,
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
     WRITE_ANNOTATIONS,
+    MoneybirdError,
 )
 from ..formatting import (
     api_url,
@@ -22,16 +22,17 @@ from ..formatting import (
     render_contact_delivery_table,
     stringify_record,
 )
+from ..invoicing import (
+    build_invoice_delivery_audit,
+)
 from ..safety import (
     approval_execution_state,
     make_approval,
     pop_approval,
-    record_approval_phase,
     record_approval_outcome,
+    record_approval_phase,
 )
-from ..invoicing import (
-    build_invoice_delivery_audit,
-)
+from . import _context as ctx
 from ._params import ApprovalId, ContactId, CustomerId, Limit, Page
 from ._registry import mcp
 from ._writes import (
@@ -40,7 +41,6 @@ from ._writes import (
     run_approved_write,
     stage_write,
 )
-from . import _context as ctx
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)

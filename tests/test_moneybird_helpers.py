@@ -465,8 +465,9 @@ class GuidanceTests(unittest.TestCase):
 
 class CredentialsTests(unittest.TestCase):
     def setUp(self) -> None:
-        from moneybird import credentials as cr
         import fastmcp.server.dependencies as dep
+
+        from moneybird import credentials as cr
 
         self.cr = cr
         self.dep = dep
@@ -758,8 +759,8 @@ class MeterUsageTests(unittest.TestCase):
 
     def test_meter_usage_prepare_tool_returns_single_approval_preview(self) -> None:
         from moneybird import tools
-        from moneybird.tools import _context as tool_context
         from moneybird.credentials import set_active_administration_id
+        from moneybird.tools import _context as tool_context
 
         fake = self.FakeClient()
 
@@ -851,8 +852,8 @@ class BatchScheduleTests(unittest.TestCase):
 
     def test_batch_schedule_executes_and_verifies(self) -> None:
         from moneybird import tools
-        from moneybird.tools import _context as tool_context
         from moneybird.credentials import set_active_administration_id
+        from moneybird.tools import _context as tool_context
 
         fake = self.FakeClient()
 
@@ -884,9 +885,8 @@ class _ToolPatches:
         self.fake = fake
 
     def __enter__(self):
-        from moneybird import tools
-        from moneybird.tools import _context as tool_context
         from moneybird.credentials import set_active_administration_id
+        from moneybird.tools import _context as tool_context
 
         def get_fake_client(*args, **kwargs):
             set_active_administration_id(self.fake.administration_id)
@@ -1113,7 +1113,7 @@ class ReclassifyBankMutationBookingsTests(unittest.TestCase):
                 "amount_open": "0.00",
                 "message": "",
                 "contra_account_name": "Belastingdienst",
-                "sepa_fields": {"strd_remi": "2124886207560014"},
+                "sepa_fields": {"strd_remi": "0000000000000000"},
                 "payments": [],
                 "ledger_account_bookings": [
                     {

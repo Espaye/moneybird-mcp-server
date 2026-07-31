@@ -8,12 +8,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import venv
 import zipfile
+from pathlib import Path
 
 
 def _venv_python(environment: Path) -> Path:

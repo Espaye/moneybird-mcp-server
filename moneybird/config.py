@@ -1,12 +1,14 @@
-"""Constants, shared configuration, the MoneybirdError type, and .env loading."""
+"""Constants, shared configuration, and explicit environment-file loading."""
 from __future__ import annotations
 
+import logging
 import os
+import re
 from pathlib import Path
 
-import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("moneybird_mcp")
+_ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 BASE_URL = "https://moneybird.com/api/v2"
 
@@ -230,7 +232,18 @@ def harden_private_file(path: Path) -> None:
 
 
 
-def _apply_env_file(env_path: Path) -> None:
+def load_env_file(path: str | Path) -> Path:
+    """Load one operator-selected environment file without overriding its parent.
+
+    Importing :mod:`moneybird` never calls this function. Runnable entrypoints may
+    call it only after parsing an explicit ``--env-file PATH`` argument and before
+    importing modules that consume security-sensitive configuration.
+    """
+    env_path = Path(path).expanduser().resolve(strict=True)
+    if not env_path.is_file():
+        raise MoneybirdError(f"Environment file is not a regular file: {env_path}")
+
+    parsed_values: list[tuple[str, str]] = []
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -238,31 +251,13 @@ def _apply_env_file(env_path: Path) -> None:
 
         key, value = line.split("=", 1)
         key = key.strip()
+        if not _ENVIRONMENT_NAME.fullmatch(key):
+            raise MoneybirdError(
+                f"Environment file contains an invalid variable name: {key!r}"
+            )
         value = value.strip().strip('"').strip("'")
+        parsed_values.append((key, value))
+
+    for key, value in parsed_values:
         os.environ.setdefault(key, value)
-
-
-def load_local_env() -> None:
-    """Load .env into the environment so scripts/tests work without manual export.
-
-    Looks first in the current working directory, then alongside the package
-    (the project root). This makes the loader independent of where Python is
-    invoked from: a one-off script no longer has to be run from the repo root,
-    and importing ``moneybird`` is enough to pick up credentials. Existing
-    environment variables (e.g. per-request headers, CI secrets) always win
-    because values are applied with ``setdefault``.
-    """
-    seen: set[Path] = set()
-    candidates = [
-        Path(".env"),
-        Path(__file__).resolve().parent.parent / ".env",
-    ]
-    for env_path in candidates:
-        resolved = env_path.resolve()
-        if resolved in seen or not env_path.exists():
-            continue
-        seen.add(resolved)
-        _apply_env_file(env_path)
-
-
-load_local_env()
+    return env_path

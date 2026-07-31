@@ -23,11 +23,17 @@ for an accountant, access-control gateway, or independently verified payment sys
 
 Do not expose the demo gateway or a local data directory as a hosted tenant boundary.
 
-Release automation also depends on external repository controls. Before treating the
-publication path as production-ready, restrict the `pypi` environment to `main`, add
-an independent required reviewer, and protect `v*` tags with a repository ruleset.
-The workflow's own ref/SHA/tag checks are defense in depth and cannot make an
-otherwise unprotected tag immutable.
+Release automation also depends on external repository controls. The `pypi`
+environment must accept deployments only from protected `main`, and a `v*` tag
+ruleset must prevent updates and deletion. Publication requires a manual dispatch
+with the exact version and full default-branch commit SHA; pushes and merges do not
+publish.
+
+This solo-maintainer beta does not claim independent human deployment approval.
+The manual dispatch, protected branch, restricted environment, immutable-version
+checks, exact-artifact handoff, and deliberate final operator checkpoint are the
+proportionate controls. Add an independent required reviewer and prevent
+self-review if a suitable additional maintainer becomes available.
 
 ## Reporting a vulnerability
 

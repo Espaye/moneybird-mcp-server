@@ -1,15 +1,16 @@
 import unittest
 
-from moneybird.purchase_review import scan_purchase_invoices_for_attention
 from purchase_test_support import (
-    FakeClient,
     LEDGER_PRIV,
     LEDGER_ZAK,
     TAX_GEEN,
+    FakeClient,
     line,
     reference_june,
     target_july,
 )
+
+from moneybird.purchase_review import scan_purchase_invoices_for_attention
 
 
 class ScanAttentionTests(unittest.TestCase):

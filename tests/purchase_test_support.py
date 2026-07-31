@@ -1,10 +1,10 @@
 """Shared fixtures for purchase reconciliation and review tests."""
 from decimal import Decimal
 
-LEDGER_ZAK = "470383517976495829"
-TAX_21 = "463484441733366960"
-LEDGER_PRIV = "470713678791967922"
-TAX_GEEN = "470712958464296361"
+LEDGER_ZAK = "100000000000000001"
+TAX_21 = "100000000000000002"
+LEDGER_PRIV = "100000000000000003"
+TAX_GEEN = "100000000000000004"
 
 
 def line(detail_id, description, price, ledger, tax):
@@ -25,15 +25,15 @@ def reference_june(doc_id="ref"):
         "updated_at": "2026-06-19T10:00:00Z",
         "date": "2026-06-19",
         "state": "paid",
-        "reference": "1163421300",
+        "reference": "1000000001",
         "prices_are_incl_tax": True,
         "total_price_incl_tax": "825.0",
-        "contact": {"id": "C1", "company_name": "Eneco Services B.V."},
+        "contact": {"id": "C1", "company_name": "Example Energy B.V."},
         "details": [
-            line("r1", "Eneco termijnnota juni 2026 – stroom zakelijk (60%)", "296.54", LEDGER_ZAK, TAX_21),
-            line("r2", "Eneco termijnnota juni 2026 – gas zakelijk (25%)", "82.70", LEDGER_ZAK, TAX_21),
-            line("r3", "Eneco termijnnota juni 2026 – stroom privé (40%)", "197.68", LEDGER_PRIV, TAX_GEEN),
-            line("r4", "Eneco termijnnota juni 2026 – gas privé (75%)", "248.08", LEDGER_PRIV, TAX_GEEN),
+            line("r1", "Termijnnota juni 2026 – stroom zakelijk (60%)", "296.54", LEDGER_ZAK, TAX_21),
+            line("r2", "Termijnnota juni 2026 – gas zakelijk (25%)", "82.70", LEDGER_ZAK, TAX_21),
+            line("r3", "Termijnnota juni 2026 – stroom privé (40%)", "197.68", LEDGER_PRIV, TAX_GEEN),
+            line("r4", "Termijnnota juni 2026 – gas privé (75%)", "248.08", LEDGER_PRIV, TAX_GEEN),
         ],
     }
 
@@ -45,13 +45,13 @@ def target_july(doc_id="tgt", total="825.0"):
         "updated_at": "2026-07-19T10:00:00Z",
         "date": "2026-07-19",
         "state": "new",
-        "reference": "1168011272",
+        "reference": "1000000002",
         "prices_are_incl_tax": False,
         "total_price_incl_tax": total,
-        "contact": {"id": "C1", "company_name": "Eneco Services B.V."},
+        "contact": {"id": "C1", "company_name": "Example Energy B.V."},
         "details": [
-            line("L1", "Eneco termijnnota juli 2026 – gas en stroom", "681.82", LEDGER_ZAK, TAX_21),
-            line("L2", "Eneco termijnnota juli 2026 – stroom privé (40%)", "0.0", LEDGER_PRIV, TAX_GEEN),
+            line("L1", "Termijnnota juli 2026 – gas en stroom", "681.82", LEDGER_ZAK, TAX_21),
+            line("L2", "Termijnnota juli 2026 – stroom privé (40%)", "0.0", LEDGER_PRIV, TAX_GEEN),
         ],
     }
 

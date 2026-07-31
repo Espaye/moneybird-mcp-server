@@ -9,19 +9,18 @@ from pydantic import Field
 from ..config import (
     FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
     FINANCIAL_MUTATION_UNLINK_BOOKING_TYPES,
-    MoneybirdError,
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
     VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
     WRITE_ANNOTATIONS,
+    MoneybirdError,
 )
 from ..formatting import (
     clean_dict,
-    document_contact_title,
     compact_financial_mutation_summary,
+    document_contact_title,
     duplicate_fingerprint,
     invoice_title,
-    iso_now,
     money_decimal,
     purchase_document_title,
 )
@@ -29,6 +28,7 @@ from ..invoicing import (
     parse_decimal_number,
 )
 from ..task_context import MoneybirdTaskContext
+from . import _context as ctx
 from ._params import (
     ApprovalId,
     FilterString,
@@ -47,7 +47,6 @@ from ._writes import (
     stage_write,
 )
 from .payments import _open_amount
-from . import _context as ctx
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)

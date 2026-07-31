@@ -7,8 +7,9 @@ Moneybird's OAuth endpoints (see https://developer.moneybird.com/authentication)
 
 The app is registered at https://moneybird.com/user/applications/new; its
 ``client_id`` / ``client_secret`` are read from the environment
-(``MONEYBIRD_OAUTH_CLIENT_ID`` / ``MONEYBIRD_OAUTH_CLIENT_SECRET``, normally via
-``.env``). The registered redirect URI must match ``redirect_uri`` exactly;
+(``MONEYBIRD_OAUTH_CLIENT_ID`` / ``MONEYBIRD_OAUTH_CLIENT_SECRET``), optionally
+through an operator-selected ``--env-file``. The registered redirect URI must match
+``redirect_uri`` exactly;
 ``urn:ietf:wg:oauth:2.0:oob`` makes Moneybird display the code in the browser
 instead of redirecting, which is how ``scripts/oauth_login.py`` works.
 
@@ -66,7 +67,8 @@ def oauth_client_config() -> tuple[str, str]:
         raise MoneybirdError(
             "MONEYBIRD_OAUTH_CLIENT_ID / MONEYBIRD_OAUTH_CLIENT_SECRET are not set. "
             "Register an application at https://moneybird.com/user/applications/new "
-            "and put both values in .env."
+            "and supply both values in the parent environment or through the "
+            "script's explicit --env-file option."
         )
     return client_id, client_secret
 
