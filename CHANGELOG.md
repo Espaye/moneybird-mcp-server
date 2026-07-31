@@ -25,10 +25,15 @@ versioning while allowing pre-1.0 breaking changes.
   `CONTRIBUTING.md`.
 
 This change applies to this and all future versions. It does not retroactively withdraw the
-MIT terms from copies already obtained under earlier releases. Version `0.4.0` and earlier
-were published under plain MIT; those artifacts are being withdrawn from normal public
-distribution, which is a distribution decision and not a revocation of rights already granted.
-Third-party dependencies keep their own licences.
+MIT terms from copies already obtained under earlier releases.
+
+Version `0.4.0` and earlier were published under plain MIT. On 2026-07-31 those artifacts were
+withdrawn from normal public distribution: PyPI releases `0.1.0` through `0.4.0` were deleted,
+as were the GitHub releases for `v0.3.0` and `v0.4.0` and their attached assets. The `v0.3.0`
+and `v0.4.0` tags and the project's Git history were deliberately left intact. That withdrawal
+is a distribution decision, not a revocation of rights already granted; copies may persist in
+third-party mirrors and caches outside this project's control. Third-party dependencies keep
+their own licences.
 
 ## 0.4.0 — 2026-07-31
 
