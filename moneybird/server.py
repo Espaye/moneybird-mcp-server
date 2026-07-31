@@ -202,10 +202,9 @@ def build_config(
     ):
         logger.error(
             "Refusing to bind a plaintext network listener to %r. Terminate TLS "
-            "at a trusted reverse proxy and set %s=true only when that boundary "
-            "is actually in place.",
+            "at a trusted reverse proxy and set MCP_TRUSTED_TLS_PROXY=true only "
+            "when that boundary is actually in place.",
             host,
-            TRUSTED_TLS_PROXY_ENV,
         )
         raise SystemExit(1)
 
