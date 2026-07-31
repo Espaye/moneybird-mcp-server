@@ -7,6 +7,12 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Changed
 
+- Reworked the public documentation around a short onboarding-first `README.md`, with
+  dedicated getting-started, deployment-and-safety, tool-reference, and local-data-lifecycle
+  guides under `docs/`. Simplified `SUPPORT.md`. The README no longer doubles as the full
+  manual; it links to the new pages instead.
+- Added PyPI, documentation, changelog, and security-policy links to the `pyproject.toml`
+  project URLs, so they appear in the package metadata sidebar on PyPI.
 - **Relicensed from MIT to MIT with the "Commons Clause" License Condition v1.0.**
   The project is now **source-available, not OSI-approved open source**. Inspecting,
   downloading, modifying, personal use, and internal use within your own organisation
