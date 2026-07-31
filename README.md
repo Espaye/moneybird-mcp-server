@@ -1,6 +1,6 @@
 # Moneybird MCP server
 
-> **Beta (0.4.0):** the supported production scope is local stdio with a
+> **Beta (0.5.0):** the supported production scope is local stdio with a
 > mechanically read-only default. Experimental writes require an explicit local
 > opt-in and supervised approval; the localhost gateway is a demonstration, not
 > a hosted product.
@@ -622,3 +622,43 @@ Relevant OpenAI docs:
 - `list_financial_mutations` returns HTTP 400 ("too many ... use sync API") for a wide period; query per month (`period:"JJJJMM01..JJJJMMnn"`) or use the sync index.
 - The `cash_flow`, `tax`, `debtors`, and `creditors` reports accept at most one month of period; the `*_aging` reports require a whole month as reference date (verified live: `{"error":"Period cannot exceed 1 month"}`).
 - `docs/moneybird_api_coverage.md` holds the full catalogue of all 296 Moneybird API operations (from the official OpenAPI spec) with per-endpoint coverage status — consult it before wrapping new endpoints.
+
+## 8. Licensing
+
+This project is **source-available, not OSI-approved open source**. It is distributed
+under the **MIT License with the "Commons Clause" License Condition v1.0**. The complete
+licence text is in [`LICENSE`](LICENSE); the wording below is a plain-language summary and
+the `LICENSE` file governs.
+
+The current repository version and all future versions are released under these terms.
+
+**You may**, free of charge:
+
+- inspect and download the source;
+- modify it;
+- use it personally;
+- use it internally within your own organisation.
+
+**You may not**, without a separate commercial licence from the Licensor (`Espaye`):
+
+- sell the Software;
+- offer it as a paid or commercial hosted service;
+- provide a managed service whose value derives, entirely or substantially, from the
+  functionality of the Software;
+- repackage or redistribute it commercially as a competing product.
+
+In the Commons Clause's own terms, the licence does not grant the right to **Sell** the
+Software, where "Sell" means using the granted rights to provide a product or service to
+third parties, for a fee or other consideration, whose value derives entirely or
+substantially from the Software's functionality. Commercial sale and substantially
+equivalent hosted services therefore require a separate commercial licence.
+
+For commercial licensing enquiries, open an issue at
+[github.com/Espaye/moneybird-mcp-server](https://github.com/Espaye/moneybird-mcp-server/issues)
+or contact the repository owner.
+
+Package metadata declares the SPDX expression `LicenseRef-MIT-Commons-Clause-1.0`. Because
+the combination has no standard SPDX identifier, PEP 639's custom `LicenseRef-` form is used
+deliberately; it is not a placeholder and must not be replaced with plain `MIT`.
+
+Third-party dependencies keep their own licences, which are unaffected by this condition.

@@ -2,6 +2,26 @@
 
 Thank you for helping improve Moneybird MCP.
 
+## Licensing of contributions
+
+This project is source-available, not OSI-approved open source: it is distributed under the
+MIT License with the "Commons Clause" License Condition v1.0. See [`LICENSE`](LICENSE) and the
+licensing section of [`README.md`](README.md#8-licensing).
+
+By opening a pull request you confirm that:
+
+1. your contribution is submitted under the project's current licence, and you agree it may be
+   distributed by the project under that licence and under any later licence the project adopts
+   for subsequent releases;
+2. you have the right to submit it — it is your own work, or you have the necessary permission
+   from the rights holder (for example your employer), and it does not knowingly include
+   third-party code under incompatible terms;
+3. any third-party code or dependency you add is identified with its own licence in the pull
+   request.
+
+Contributors keep the copyright in their own contributions. Enquiries about a separate
+commercial licence go to the repository owner via an issue.
+
 ## Development setup
 
 Use Python 3.11 or newer in a fresh virtual environment:

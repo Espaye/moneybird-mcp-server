@@ -4,11 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moneybird-mcp"
-version = "0.4.0"
+version = "0.5.0"
 description = "Read-first MCP server for Moneybird bookkeeping, with experimental supervised writes behind an explicit capability policy."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
+# Source-available, not OSI open source: MIT plus the "Commons Clause" License
+# Condition v1.0, which removes the right to Sell the Software. There is no
+# standard SPDX identifier for that combination, so PEP 639's custom
+# `LicenseRef-` form is used rather than an inaccurate plain `MIT`. Do not
+# replace this with a well-known SPDX id to satisfy a tool; see LICENSE and the
+# licensing section of README.md. tests/test_licensing.py pins this value.
+license = "LicenseRef-MIT-Commons-Clause-1.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Espaye" }]
 keywords = ["moneybird", "mcp", "model-context-protocol", "bookkeeping", "accounting", "invoicing"]
