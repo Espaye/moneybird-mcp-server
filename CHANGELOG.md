@@ -5,6 +5,31 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+### Changed
+
+- **Relicensed from MIT to MIT with the "Commons Clause" License Condition v1.0.**
+  The project is now **source-available, not OSI-approved open source**. Inspecting,
+  downloading, modifying, personal use, and internal use within your own organisation
+  remain permitted free of charge. Selling the Software — including offering it as a paid
+  or commercial hosted service, providing a managed service whose value derives entirely or
+  substantially from its functionality, or repackaging it commercially as a competing
+  product — now requires a separate commercial licence from the Licensor (`Espaye`).
+  Enquiries go to the repository owner via a GitHub issue.
+- Package metadata now declares the PEP 639 custom expression
+  `LicenseRef-MIT-Commons-Clause-1.0` in `pyproject.toml` and `mcpb/manifest.json` instead
+  of plain `MIT`. The combination has no standard SPDX identifier; the `LicenseRef-` form is
+  deliberate and must not be replaced with a well-known id to satisfy tooling.
+  `tests/test_licensing.py` pins the licence text and both metadata declarations so the
+  project cannot silently revert to plain MIT.
+- Added a licensing section to `README.md` and a contribution-licensing statement to
+  `CONTRIBUTING.md`.
+
+This change applies to this and all future versions. It does not retroactively withdraw the
+MIT terms from copies already obtained under earlier releases. Version `0.4.0` and earlier
+were published under plain MIT; those artifacts are being withdrawn from normal public
+distribution, which is a distribution decision and not a revocation of rights already granted.
+Third-party dependencies keep their own licences.
+
 ## 0.4.0 — 2026-07-31
 
 ### Security

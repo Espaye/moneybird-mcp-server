@@ -8,6 +8,11 @@
 
 **Constraint:** review and planning only; this document does not implement any fix
 
+**Amended 2026-07-31:** the project was relicensed from MIT to MIT with the "Commons
+Clause" License Condition v1.0 and is now source-available, not OSI-approved open
+source. Release-profile labels and the licence observation below were updated to match;
+no finding, verdict, or severity was changed. See `LICENSE` and `CHANGELOG.md`.
+
 ## Executive decision
 
 The supplied audit is directionally strong, but it understates two boundary failures and overstates a few architectural/release gaps.
@@ -21,7 +26,7 @@ Current decisions:
 
 | Release profile | Decision now | Principal blockers |
 |---|---|---|
-| Public open-source beta / next tagged release | **NO-GO under the current claims and defaults** | selected-administration escape, cache authorization, approval race, false-success records, ambiguous duplicate handling, network credential fail-open, and missing minimum security/release controls |
+| Public source-available beta / next tagged release | **NO-GO under the current claims and defaults** | selected-administration escape, cache authorization, approval race, false-success records, ambiguous duplicate handling, network credential fail-open, and missing minimum security/release controls |
 | Hosted read-only alpha | **NO-GO** | cache/tenant authorization, fail-closed identity, hard read-only policy, public MCP authorization, encrypted grants, session-bound OAuth, explicit administration selection, bounded attachments, privacy/lifecycle controls |
 | Hosted write-enabled beta | **NO-GO** | every read-only blocker plus independently trusted confirmation, atomic execution state, typed outcomes, per-action reconciliation, and zero-tolerance safety/evaluation gates |
 
@@ -49,8 +54,8 @@ Severity is release-contextual: **P0/Critical** means the named profile cannot l
 | ID | Finding | Verdict | Severity / release effect |
 |---|---|---|---|
 | F-01 | “Explicit yes” is not independently enforced | **Confirmed** | Critical; hosted-write blocker |
-| F-02 | One approval can be consumed twice | **Confirmed and reproduced** | Critical; open-source write and hosted-write blocker |
-| F-03 | Verification failure is often recorded as success | **Confirmed and reproduced** | Critical; open-source write and hosted-write blocker |
+| F-02 | One approval can be consumed twice | **Confirmed and reproduced** | Critical; source-available write and hosted-write blocker |
+| F-03 | Verification failure is often recorded as success | **Confirmed and reproduced** | Critical; source-available write and hosted-write blocker |
 | F-04 | Ambiguous writes can be repeated or raced | **Confirmed; broader than a lost response** | Critical; write blocker |
 | F-05 | Hosted credentials fail open to operator credentials | **Confirmed and reproduced** | Critical; any hosted profile blocker |
 | F-06 | Cache access is not authorized against the current grant | **Newly confirmed and reproduced** | Critical; any hosted profile blocker |
@@ -771,7 +776,7 @@ Hosted limits:
 
 **Impact and severity**
 
-Head-of-line blocking, unbounded aggregate tenant work, lost in-flight request work on restart, and stale caches. **P1 before meaningful hosted load**, not a local/open-source blocker. Webhooks can follow a small read-only alpha if polling staleness is explicit and bounded.
+Head-of-line blocking, unbounded aggregate tenant work, lost in-flight request work on restart, and stale caches. **P1 before meaningful hosted load**, not a local/source-available blocker. Webhooks can follow a small read-only alpha if polling staleness is explicit and bounded.
 
 **Minimal reproduction / failing load tests**
 
@@ -813,7 +818,7 @@ An import/AST boundary check over `moneybird/tools/sales_batches.py` or `moneybi
 
 **Impact and severity**
 
-Safety contracts are hard to enforce uniformly and a future web agent may duplicate workflows. **Strategic/P1**, not itself an open-source blocker.
+Safety contracts are hard to enforce uniformly and a future web agent may duplicate workflows. **Strategic/P1**, not itself a source-available release blocker.
 
 **Smallest durable correction and migration**
 
@@ -837,7 +842,9 @@ Positive:
 - Build/Twine/distribution-hygiene checks are in CI: `.github/workflows/ci.yml:56-82`.
 - Release uses PyPI Trusted Publishing and a scoped environment: `.github/workflows/release.yml:109-127`.
 - Deny-list packaging checks are substantive: `scripts/check_dist_hygiene.py:23-72`, `tests/test_dist_hygiene.py:52-115`.
-- MIT license and Beta classifier exist: `pyproject.toml:11-24`.
+- A declared licence and Beta classifier exist: `pyproject.toml:11-30`. The project was
+  MIT at review time; since 2026-07-31 it is source-available under MIT with the
+  "Commons Clause" License Condition v1.0 (`LicenseRef-MIT-Commons-Clause-1.0`).
 
 Gaps:
 
@@ -1034,7 +1041,7 @@ These are proposed ADRs, not accepted implementation decisions.
 
 ## C. Dependency-ordered issue / PR plan
 
-Each row is intended to be independently reviewable. “Blocks” names the release profile that cannot pass without it: **O** open-source beta, **R** hosted read-only, **W** hosted writes.
+Each row is intended to be independently reviewable. “Blocks” names the release profile that cannot pass without it: **O** source-available beta, **R** hosted read-only, **W** hosted writes.
 
 | Order | Issue / PR | Deliverable and acceptance focus | Depends on | Blocks |
 |---|---|---|---|---|
@@ -1153,7 +1160,7 @@ Every enabled action supplies a non-empty, versioned semantic idempotency key. U
 
 ## E. Test matrix
 
-Legend: **O** required for public open-source beta, **R** required for hosted read-only alpha, **W** required for hosted write beta. A profile inherits every gate to its left unless explicitly noted.
+Legend: **O** required for public source-available beta, **R** required for hosted read-only alpha, **W** required for hosted write beta. A profile inherits every gate to its left unless explicitly noted.
 
 | ID | Layer / scenario | Required oracle | Profiles |
 |---|---|---|---|
@@ -1192,7 +1199,7 @@ No mocked audit appender is sufficient evidence for T8–T13. The test must exer
 
 ## F. Explicit go/no-go gates
 
-### 1. Public open-source beta / next tagged release
+### 1. Public source-available beta / next tagged release
 
 **Current status: NO-GO under current README claims, advertised network modes, and write defaults.**
 
@@ -1201,7 +1208,7 @@ Required for GO:
 1. F-02, F-03, F-04, F-07, F-13, and F-17 are closed with T2–T4, T8, and T10–T15. F-23 is fixed or the gateway is removed from the shipped/recommended supported surface. T9 is required only if this profile claims server-enforced trusted confirmation.
 2. Network/multi-tenant documentation is removed or F-05/F-06 are closed. Any retained network mode is fail-closed and explicit.
 3. The tagged supported profile is hard read-only until F-01 and T9 are satisfied. Experimental model-mediated write code may remain behind an explicitly unsafe, supervised, local-only opt-in, but it is outside the GO assurance and cannot carry an “explicit yes” claim. Documentation says exactly what is and is not enforced; the two absolute README promises are removed.
-4. Attachment support is disabled or passes an open-source baseline for streamed byte limits, HTTPS redirect policy, MIME/magic validation, bounded pages/work, and retention/cleanup. Telemetry uses static labels.
+4. Attachment support is disabled or passes a public-release baseline for streamed byte limits, HTTPS redirect policy, MIME/magic validation, bounded pages/work, and retention/cleanup. Telemetry uses static labels.
 5. `SECURITY.md`, threat model, data-handling/retention, support and contribution/release policy exist.
 6. Full history secret scan is recorded and any discovered credential is rotated.
 7. Full supported matrix gates the exact published artifact; clean wheel/sdist smoke and two-build reproducibility checks pass; post-PyPI failure can repair later release stages; third-party Actions are SHA-pinned; direct dependencies and constrained/minimum lanes exist; dependency/secret scans and SBOM/provenance are present.
@@ -1217,7 +1224,7 @@ If source is made public **only for review before these gates**, label it “not
 
 Required for GO:
 
-1. Every applicable open-source gate passes.
+1. Every applicable source-available gate passes.
 2. F-05/F-06/F-07/F-08/F-09/F-10/F-11/F-14/F-15/F-18/F-23 are closed.
 3. `hosted_request_only + read_only` is an immutable deployment policy: write denial at edge/tool exposure and shared application service; no local/environment fallback.
 4. Stable `/mcp` OAuth resource server passes T16; no secret appears in URLs/logs.
@@ -1255,7 +1262,7 @@ Corrections:
 - Narrow “legacy audit/cache” to legacy audit; current legacy cache import already checks administration.
 - Do not call full OAuth scopes excessive for the complete 77-tool surface; the defect is absent server-enforced read-only capability.
 - Do not describe the current gateway as networking back to itself; it dispatches the mounted ASGI app in-process.
-- Treat async/webhooks and a broad package split as hosted-scale architecture, not immediate local open-source blockers.
+- Treat async/webhooks and a broad package split as hosted-scale architecture, not immediate local source-available release blockers.
 - Credit the existing full CI matrix, distribution hygiene, Trusted Publishing, atomic sync saves, bounded per-sync workers, OAuth state entropy/replay defense, attachment filename sanitization, and bearer removal on redirects.
 - Treat all model-price/routing recommendations as hypotheses until the provider-neutral suite runs against current models and current official prices.
 
