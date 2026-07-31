@@ -35,7 +35,7 @@ dependencies = [
 [project.optional-dependencies]
 # PDF text-layer extraction for read_document_attachment. Without it the local tool
 # reports the missing extra; attachment parsing is disabled in hosted request mode.
-pdf = ["pypdf>=5"]
+pdf = ["pypdf>=6.14.2"]
 
 [project.urls]
 Homepage = "https://github.com/Espaye/moneybird-mcp-server"
