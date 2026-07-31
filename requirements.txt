@@ -8,7 +8,7 @@ httpx>=0.28.1,<1
 # Used directly by the __main__ entrypoint to serve the SSE app with middleware.
 uvicorn>=0.35
 # FastMCP imports requests; keep the optional detector within requests' supported range.
-chardet>=5,<6
+chardet>=5,<8
 # PDF text-layer extraction for read_document_attachment (optional in the wheel
 # as the [pdf] extra; installed by default in the git-clone workflow).
 pypdf>=6.14.2
