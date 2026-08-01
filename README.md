@@ -1,5 +1,7 @@
 # Moneybird MCP
 
+**Language:** **English** · [Nederlands](https://github.com/Espaye/moneybird-mcp-server/blob/main/README.nl.md)
+
 [![PyPI](https://img.shields.io/pypi/v/moneybird-mcp.svg)](https://pypi.org/project/moneybird-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/moneybird-mcp.svg)](https://pypi.org/project/moneybird-mcp/)
 [![CI](https://github.com/Espaye/moneybird-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/Espaye/moneybird-mcp-server/actions/workflows/ci.yml)

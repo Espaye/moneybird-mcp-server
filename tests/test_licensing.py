@@ -159,5 +159,32 @@ class ReadmeLicensingStatementTests(unittest.TestCase):
         self.assertIn("Espaye/moneybird-mcp-server", self.readme)
 
 
+class DutchReadmeLicensingStatementTests(unittest.TestCase):
+    """The translated README is a second user-facing licence statement.
+
+    It ships in the sdist, so a translation that softened the terms would be
+    distributed as fact. The English assertions cannot be reused: Dutch denies
+    the OSI claim with "geen"/"niet", which the English negation regex misses.
+    """
+
+    def setUp(self) -> None:
+        self.readme = _normalise(_read("README.nl.md"))
+
+    def test_states_the_licence_and_that_it_is_source_available(self) -> None:
+        self.assertIn("Commons Clause", self.readme)
+        self.assertIn("source-available", self.readme)
+
+    def test_does_not_claim_osi_open_source(self) -> None:
+        """The only permitted use of "open source" is the explicit denial."""
+        for match in re.finditer(r"open.{0,2}source", self.readme, re.IGNORECASE):
+            window = self.readme[max(0, match.start() - 40) : match.end() + 10]
+            with self.subTest(context=window):
+                self.assertRegex(window, r"(?i)\b(geen|niet)\b[^.]*open.{0,2}source")
+
+    def test_points_commercial_enquiries_at_the_repository_owner(self) -> None:
+        self.assertIn("commerciële licenties", self.readme.lower())
+        self.assertIn("Espaye/moneybird-mcp-server", self.readme)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,15 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+### Added
+
+- Dutch translations of the onboarding documentation: `README.nl.md`,
+  `docs/getting-started.nl.md`, and `docs/data-lifecycle.nl.md`. The English and Dutch
+  pages cross-link through a language selector, and `README.nl.md` ships in the source
+  distribution. Technical reference, security, and maintainer documentation stay in
+  English. `tests/test_licensing.py` now also pins the Dutch licence statement, so a
+  translation cannot soften the source-available terms.
+
 ### Changed
 
 - Reworked the public documentation around a short onboarding-first `README.md`, with
