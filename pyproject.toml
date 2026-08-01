@@ -66,6 +66,7 @@ include = [
     "docs",
     "mcpb",
     "README.md",
+    "README.nl.md",
     "CLAUDE.md",
     "SECURITY.md",
     "CONTRIBUTING.md",

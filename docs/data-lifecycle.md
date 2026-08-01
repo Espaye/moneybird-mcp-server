@@ -1,5 +1,7 @@
 # Local data lifecycle
 
+**Language:** **English** · [Nederlands](data-lifecycle.nl.md)
+
 Moneybird MCP stores local operational state. This page describes the current behaviour; dedicated `moneybird-mcp data ...` subcommands are not implemented yet.
 
 ## Default location
