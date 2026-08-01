@@ -198,6 +198,71 @@ class WriteContractRegressionTests(unittest.TestCase):
         self.assertFalse(result["verification"]["fully_verified"])
         self.assertTrue(result["verification"]["line_mismatches"])
 
+    def test_journal_description_rides_on_lines_because_moneybird_drops_it(self) -> None:
+        # Moneybird stores no header description on a general journal document; the
+        # field is absent from the returned record. Sending one made every journal
+        # created with a description fail its own post-write verifier.
+        sent: dict = {}
+
+        class Client:
+            administration_id = "contract-admin"
+
+            def list_ledger_accounts(self):
+                return [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}]
+
+            def create_general_journal_document(self, payload):
+                sent.update(payload)
+                return {"id": "journal-1"}
+
+            def get_document(self, _kind, _document_id):
+                return {
+                    "id": "journal-1",
+                    "reference": "R",
+                    "date": "2026-07-01",
+                    "general_journal_document_entries": [
+                        {
+                            "ledger_account_id": "a",
+                            "debit": "10.0",
+                            "credit": "0.0",
+                            "description": "D",
+                        },
+                        {
+                            "ledger_account_id": "b",
+                            "debit": "0.0",
+                            "credit": "10.0",
+                            "description": "own text",
+                        },
+                    ],
+                }
+
+        client = Client()
+        with self._patch_client(ledger, client):
+            prepared = ledger.prepare_create_general_journal_document(
+                "R",
+                "2026-07-01",
+                [
+                    {"ledger_account_id": "a", "debit": "10", "credit": "0"},
+                    {
+                        "ledger_account_id": "b",
+                        "debit": "0",
+                        "credit": "10",
+                        "description": "own text",
+                    },
+                ],
+                "D",
+            )
+            result = ledger.create_general_journal_document_from_approval(
+                prepared["approval_id"]
+            )
+
+        self.assertNotIn("description", sent)
+        lines = sent["general_journal_document_entries_attributes"]
+        # The shared text fills only the line that had none of its own.
+        self.assertEqual(lines["0"]["description"], "D")
+        self.assertEqual(lines["1"]["description"], "own text")
+        self.assertEqual(result["verification"]["field_mismatches"], {})
+        self.assertTrue(result["verification"]["fully_verified"])
+
     def test_wrong_invoice_line_with_same_count_is_not_verified(self) -> None:
         class Client:
             administration_id = "contract-admin"

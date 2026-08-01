@@ -113,6 +113,15 @@ WRITE_SPECS: dict[str, WriteSpec] = {
         "canonical child moves plus source versions",
         "retain each child and restoration outcome",
     ),
+    "settle_vat_period": _spec(
+        "period gross movements, administration lock, and existing settlements "
+        "re-read immediately before dispatch and compared with the approved snapshot",
+        "independent GET compares the journal payload and proves the period's gross "
+        "VAT movements cleared to zero",
+        "settled period identity plus canonical journal payload",
+        "match returned id/reference/date/entries and inspect the period balance; "
+        "ambiguous matches stay manual",
+    ),
     "reclassify_document_lines": _spec(
         "complete-batch document versions or targeted-line snapshots",
         "independent GET compares every target ledger plus exact journal lines",

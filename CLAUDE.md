@@ -109,6 +109,27 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   impliciete huidige-boekjaarfilter verdwijnen. Elke reconcile
   slaat de documentversie op en breekt vóór de PATCH af als de factuur sinds de preview is gewijzigd.
   (Ontwerp: `docs/reading_pdf_attachments.md`; logica: `moneybird/purchase_reconcile.py`.)
+- **Een btw-betaling boeken is de helft; de aangifteperiode schoonboeken is de andere helft.**
+  Moneybird verplaatst bij het indienen niets: *Te betalen btw* en *Te vorderen btw* lopen door
+  tot een memoriaal ze afwikkelt. Gebruik `analyze_vat_settlement` →
+  `prepare_vat_settlement_journal`. Twee dingen die stelselmatig misgaan als je ze niet weet:
+  (1) **verlegde btw** staat als verschuldigd én als aftrekbaar geboekt, dus de bruto
+  grootboekmutaties zijn aan beide kanten hoger dan het btw-rapport terwijl het netto bedrag
+  gelijk blijft — schoonboeken gaat op **bruto**, en een gelijk verschil aan beide kanten is geen
+  afwijking maar iets om uit te leggen; (2) de aangifte wordt in **hele euro's** ingevuld en mag
+  **in je voordeel** worden afgerond (verschuldigd omlaag, voorbelasting omhoog), dus het betaalde
+  bedrag ligt legitiem onder het exacte saldo. Leid dat bedrag nooit af en hanteer geen
+  vaste tolerantiegrens — vraag de aangifte; de tool toetst het bedrag op hele euro's en tegen
+  een uit het aantal rubrieken *afgeleide* grens. Restant naar `Afrondingsverschillen`. Let op:
+  het memoriaal balanceert per definitie, dus een verkeerd bedrag verdwijnt zonder die controles
+  geruisloos in de afrondingsregel en komt daarna als geverifieerd terug. Logica:
+  `moneybird/vat_settlement.py`; playbook §3 + §3b; regressietests (met verlegde btw, refunds en
+  afrondingsvarianten) in `tests/test_vat_settlement.py`. Houd de bedragen daar synthetisch —
+  deze repo is publiek.
+- **Btw-aangiftes zelf zitten niet in de API** (net als de boekingsregels): `tax_returns`,
+  `vat_returns`, `vat_documents`, `vat_declarations` → 404. `VatDocument` is wel een geldig
+  `booking_type`, maar de id is niet op te halen; bouw daar geen flow op. `period_locked_until`
+  op de administratie is wél leesbaar en zegt of een verstreken periode nog boekbaar is.
 - **Document line prices are entered *incl btw*** in this administration. So a "40% / 60%"
   split is 40% / 60% of the **incl-tax total**, and the invoice total incl = sum of line
   `price` values. `total_price_excl_tax_with_discount` on a line is back-calculated
@@ -123,7 +144,18 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   accepteren maximaal één maand (`this_month`, `202606`); de `*_aging`-rapporten willen een
   hele maand als peildatum. Alleen `profit_loss`, `balance_sheet`, `general_ledger` en de
   `*_by_contact`/`*_by_project`-rapporten slikken `this_year`. (Live geverifieerd:
-  `{"error":"Period cannot exceed 1 month"}`.)
+  `{"error":"Period cannot exceed 1 month"}`.) Die grens is hard: `this_quarter`,
+  `prev_quarter`, `this_year`, een dagbereik over twee maanden en de maandbereik-syntax
+  `202604..202606` falen allemaal, en er is geen parameter die het opheft (`grouping=quarter`
+  wordt genegeerd). Wel is de grens *maximaal* een maand, niet *precies* een kalendermaand —
+  `20260401..20260430` werkt. Een kwartaal haal je per maand op en tel je zelf op
+  (`vat_settlement.month_periods`). Let op het verschil met de lijst-endpoints, die juist géén
+  `period:YYYYMM` accepteren maar wél een datumbereik.
+- **Een memoriaal heeft geen header-`description`.** Moneybird laat het veld weg uit het
+  teruggegeven `general_journal_document`-record (live geverifieerd 2026-08-01), dus meesturen
+  liet `verify_general_journal_payload` op elke zo aangemaakte boeking falen.
+  `prepare_create_general_journal_document` zet een meegegeven `description` daarom op elke regel
+  die er zelf geen heeft; de btw-afwikkeling zet hem sowieso per regel.
 - **Betalingen en bankkoppeling hebben eigen guarded tools**: `prepare_register_payment`
   (verkoopfactuur/inkoopfactuur/bon), `prepare_link_bank_mutation_booking` /
   `prepare_unlink_bank_mutation_booking` (bankmutatie ↔ factuur/document/grootboekcategorie)
@@ -224,6 +256,15 @@ asset bundled on developer.moneybird.com.
   local performance counters.
 - `moneybird/tool_discovery.py` — compact FastMCP BM25 Tool Search configuration and the
   always-visible core tool set.
+- `moneybird/vat_settlement.py` — btw-afwikkeling: gross-vs-reported comparison (reverse-charge
+  aware, each side judged separately), settlement-account resolution by name with id overrides,
+  period-end derivation, declared-amount validation, and the balanced memoriaal builder. The
+  tools live in `tools/ledger.py` under their own `settle_vat_period` write contract: the
+  executor re-reads gross movements, the administration lock and existing settlements
+  immediately before dispatch, aborts on any drift from the approved snapshot, and afterwards
+  proves the period's VAT accounts actually cleared to zero. Its duplicate fingerprint is the
+  settled period, not the journal wording, so a second attempt under a different reference is
+  still suppressed.
 - `moneybird/purchase_reconcile.py` — write-payload builders for reference-based and exact
   PDF-derived purchase reconciliation. It scales or validates line prices, maps them onto
   existing lines, and records pre/post-write expectations.
@@ -292,6 +333,21 @@ asset bundled on developer.moneybird.com.
 `python -m pytest -q` from the repo root. All tests should pass; when adding an MCP prompt,
 also update `test_register_guidance_registers_prompts_and_resource` (it pins the exact
 prompt-name set).
+
+`tests/conftest.py` guards the suite's own environment. If pytest's temp root
+(`<tempdir>/pytest-of-<user>`) exists but cannot be enumerated — which happens when it was
+created by a process running under a different security context — every `tmp_path` test would
+otherwise fail during fixture setup and read as a repository failure. The guard redirects the
+run to a fresh basetemp and prints a loud notice in both the header and the summary. It is
+pinned by `tests/test_pytest_environment.py`; do not silence it, because the notice is the
+only signal that the machine (not the code) needs attention.
+
+`tests/test_env_file_boundary.py` spawns subprocesses with a deliberately stripped environment.
+Two Windows-specific traps live there: the per-user site-packages directory is derived from
+`%APPDATA%`, which the allowlist drops on purpose, so the import path is resolved from the
+running interpreter instead (`_import_paths`); and every `subprocess.run` needs an explicit
+`stdin=subprocess.DEVNULL`, because inheriting an invalid stdin handle raises `WinError 6`
+before the probe runs. Keep both when adding a probe there.
 
 ## GitHub publishing credentials
 

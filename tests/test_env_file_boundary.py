@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import site
 import subprocess
 import sys
 from pathlib import Path
@@ -44,6 +45,35 @@ HOSTILE_ENV_TEXT = "\n".join(
 )
 
 
+def _import_paths() -> str:
+    """Resolve the subprocess import path from this interpreter, not the environment.
+
+    The allowlist below strips the ambient environment on purpose -- that is the
+    boundary under test -- and the home-directory tests deliberately point HOME
+    and USERPROFILE at an isolated directory. On Windows, Python derives the
+    per-user site-packages location from %APPDATA%, which the allowlist does not
+    carry, so the subprocess could not import third-party dependencies and failed
+    before reaching the assertion. Resolving the site directories here keeps the
+    environment strict while making the import path deterministic on every
+    platform.
+    """
+
+    paths = [str(ROOT)]
+    try:
+        paths.extend(site.getsitepackages())
+    except AttributeError:  # pragma: no cover - not present in some embeddings
+        pass
+    if site.ENABLE_USER_SITE:
+        user_site = site.getusersitepackages()
+        if isinstance(user_site, str):
+            paths.append(user_site)
+        else:
+            paths.extend(user_site)
+    seen: set[str] = set()
+    unique = [path for path in paths if path and not (path in seen or seen.add(path))]
+    return os.pathsep.join(unique)
+
+
 def _clean_subprocess_env(**overrides: str) -> dict[str, str]:
     env = {
         key: value
@@ -60,7 +90,7 @@ def _clean_subprocess_env(**overrides: str) -> dict[str, str]:
             "WINDIR",
         }
     }
-    env["PYTHONPATH"] = str(ROOT)
+    env["PYTHONPATH"] = _import_paths()
     env.update(overrides)
     return env
 
@@ -92,10 +122,35 @@ print(json.dumps({
         env=_clean_subprocess_env(**env),
         check=True,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
         text=True,
         timeout=20,
     )
     return json.loads(completed.stdout)
+
+
+def test_stripped_environment_still_resolves_third_party_imports() -> None:
+    """The allowlist must cost the subprocess nothing but the ambient configuration.
+
+    Two Windows-specific ways this broke before: the per-user site-packages
+    directory is derived from %APPDATA%, which the allowlist deliberately drops,
+    and an inherited invalid stdin handle makes subprocess.run raise WinError 6
+    before the probe runs at all. Both turned a boundary assertion into an
+    unrelated infrastructure error.
+    """
+
+    completed = subprocess.run(
+        [sys.executable, "-c", "import httpx, moneybird; print('ok')"],
+        env=_clean_subprocess_env(),
+        check=False,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "ok"
 
 
 def test_hostile_working_directory_env_is_never_discovered(tmp_path: Path) -> None:
@@ -283,6 +338,7 @@ print(json.dumps({"data_dir": os.environ["MONEYBIRD_MCP_DATA_DIR"]}))
         ),
         check=True,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
         text=True,
         timeout=20,
     )
@@ -328,6 +384,7 @@ print(json.dumps({
         ),
         check=False,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
         text=True,
         timeout=20,
     )
