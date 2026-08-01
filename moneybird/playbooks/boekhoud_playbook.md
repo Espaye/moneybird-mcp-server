@@ -131,6 +131,115 @@ Vuistregels:
   maakt incl/excl rekenkundig niets uit, maar zet het gelijk voor uniformiteit. Reken bij een
   omzetting van excl→incl de btw-belaste regels om (× (1 + tarief)) zodat het totaal gelijk blijft.
 
+### Afronding: het aangegeven bedrag is nooit gelijk aan het exacte saldo
+
+De aangifte wordt in **hele euro's** ingevuld en mag **in het voordeel van de ondernemer**
+worden afgerond: verschuldigde btw naar beneden, voorbelasting naar boven. Het betaalde bedrag
+ligt daardoor structureel **onder** het exacte saldo uit de administratie. Dat is correct.
+
+Rekenvoorbeeld: verschuldigd 5.225,75 → 5.225; voorbelasting 801,70 → 802; te betalen
+5.225 − 802 = **4.423**, tegen een exact saldo van 4.424,05. Het voordeel is hier €1,05 en
+groeit met elke extra ingevulde rubriek.
+
+- **Meld een verschil niet als fout** voordat je het tegen deze regel hebt nagerekend.
+- **Hardcodeer geen tolerantie** (zoals "hooguit €1,99"). Hoe meer rubrieken zijn ingevuld,
+  hoe groter het afrondingsvoordeel kan zijn. Er bestaat geen veilige bovengrens.
+- **Leid het aangegeven bedrag nooit af.** Vraag het aan de gebruiker of lees het uit
+  Moneybirds btw-overzicht of de ingediende aangifte. `prepare_vat_settlement_journal`
+  eist het daarom als expliciete parameter.
+- Het verschil is een resultaatpost en hoort naar **Afrondingsverschillen**, niet naar het
+  btw-saldo.
+
+---
+
+## 3b. Btw-afwikkeling: de aangifteperiode schoonboeken
+
+Een betaling aan de Belastingdienst boeken is **de helft** van de verwerking. Moneybird boekt
+verkoop-btw op *Te betalen btw* en voorbelasting op *Te vorderen btw*, maar het indienen van de
+aangifte verplaatst geen van beide saldi. Zonder afwikkelboeking lopen die rekeningen kwartaal
+na kwartaal door en wordt de btw-positie op de balans betekenisloos — ook als elke losse
+betaling correct geboekt is.
+
+**Diagnose.** Lopen *Te betalen btw* en *Te vorderen btw* over meerdere kwartalen op zonder ooit
+leeg te lopen, dan wordt de aangifte buiten Moneybird om gedaan. Signaleer dat; saldeer niet
+eigenhandig en niet met één grote verzamelboeking — herstel per aangifteperiode, op basis van de
+werkelijk ingediende aangiftes.
+
+**Bruto versus netto — de valkuil.** Verlegde btw (`btw verlegd`, intracommunautair) wordt
+geboekt als verschuldigd **én** als aftrekbaar voor hetzelfde bedrag. Daardoor staan beide
+grootboekrekeningen bruto hoger, terwijl het netto te betalen bedrag ongewijzigd blijft. Twee
+gevolgen:
+
+1. De afwikkelboeking moet de **bruto** mutaties schoonboeken. Boek je alleen wat in het
+   btw-rapport zichtbaar is, dan blijft het verlegde bedrag aan beide kanten staan.
+2. Een gelijk verschil aan beide kanten dat elkaar netto opheft is **geen afwijking**. Leg uit
+   waar het vandaan komt in plaats van het te melden. Alleen het deel dat *niet* wegvalt is een
+   echte discrepantie.
+
+Zo herken je het: de bruto grootboekstand ligt aan *beide* kanten exact hetzelfde bedrag hoger
+dan het btw-rapport, terwijl het netto saldo tot op de cent gelijk blijft. Dat gelijke bedrag is
+de verlegde btw over de periode.
+
+> **Let op wat dit wél en niet aantoont.** Een gelijk verschil aan beide kanten bewijst alleen
+> dat de verlegde btw netto wegvalt. Het zegt **niets** over de vraag of die mutaties bij deze
+> periode horen. Dat volgt uit het opgegeven datumbereik en uit de datums van de onderliggende
+> records — controleer dat apart en leun er niet op dat de twee bedragen toevallig gelijk zijn.
+
+**Werkwijze.**
+
+1. `analyze_vat_settlement(period)` — toont de bruto grootboekmutaties, de gerapporteerde
+   rubrieken en of een gat tussen beide door verlegde btw wordt verklaard. Controleert bruto en
+   netto **apart**.
+2. Vraag het werkelijk aangegeven en betaalde bedrag (zie de afrondingsregel in §3).
+3. `prepare_vat_settlement_journal(period, reference, declared_amount, ...)` — bouwt het
+   memoriaal: bruto *Te betalen btw* debet, bruto *Te vorderen btw* credit, het aangegeven bedrag
+   credit op de afrekenrekening, en het restant naar Afrondingsverschillen.
+
+   Het memoriaal balanceert per definitie, dus élke fout in het bedrag verdwijnt anders geruisloos
+   naar Afrondingsverschillen en komt daarna als "geverifieerd" terug. Daarom weigert de preflight:
+
+   - een periode die al een afwikkeling met dezelfde referentie heeft, of geen bruto mutatie kent;
+   - een journaaldatum óf periode-einde op/vóór `period_locked_until` (beide, zodat een latere
+     datum geen vergrendeld kwartaal alsnog afwikkelt);
+   - een journaaldatum die niet gelijk is aan het periode-einde — laat `date` leeg, dan wordt die
+     automatisch gekozen;
+   - een aangegeven bedrag dat niet in hele euro's is, of dat verder van de grootboekpositie ligt
+     dan het afronden van het aantal rubrieken kan verklaren (afgeleide grens, geen vaste marge);
+   - een onverklaarde bruto-versus-gerapporteerde afwijking.
+
+   `allow_date_outside_period` en `allow_unexplained_difference` zetten de laatste twee opzettelijk
+   opzij; ze worden in de approval vastgelegd. Gebruik ze pas als de oorzaak vaststaat.
+
+   Een periode met netto nul maar wél bruto mutatie (alleen verlegde btw) is juist wél afwikkelbaar
+   — anders blijft die staan.
+4. Na akkoord: `execute_approved_action` (de actie is `settle_vat_period`). De executor leest
+   grootboekstanden, slotdatum en bestaande afwikkelingen **opnieuw** vlak vóór de write en breekt
+   af bij elk verschil met de goedgekeurde momentopname; achteraf controleert hij niet alleen het
+   document maar ook dat de btw-rekeningen van de periode werkelijk op nul staan.
+5. Boek de bankbetaling apart op de afrekenrekening. Die debiteert wat het memoriaal
+   crediteerde, waarna de rekening voor die periode op nul staat.
+
+De vier rekeningen worden op naam gevonden (*Te betalen btw*, *Te vorderen btw*, *Betaalde en/of
+ontvangen btw*, *Afrondingsverschillen*) en zijn elk per id te overschrijven. Vindt de tool ze
+niet eenduidig, dan noemt de foutmelding de kandidaten — vraag het dan aan de gebruiker in plaats
+van te gokken.
+
+Twee technische randvoorwaarden:
+
+- **Het `tax`-rapport is hard begrensd op één maand.** Alles wat langer is geeft
+  `{"error":"Period cannot exceed 1 month"}` — `this_quarter`, `prev_quarter`, `this_year`, een
+  dagbereik over twee maanden én de maandbereik-syntax `202604..202606`. Er is geen parameter die
+  dat opheft (`grouping=quarter` wordt genegeerd). Let op de exacte grens: hij is *maximaal* één
+  maand, niet *precies* een kalendermaand — `20260401..20260430` werkt gewoon. Een kwartaal haal
+  je dus per maand op en tel je zelf op. (Live geverifieerd 2026-08-01.)
+- De afwikkeltool eist daarbovenop een **bereik van hele maanden** (`20260401..20260630`):
+  symbolische perioden en halve maanden worden geweigerd in plaats van stilzwijgend verkeerd
+  opgeteld. Die eis is van de tool, niet van de API.
+- Een memoriaal heeft in Moneybird **geen header-omschrijving**: het veld ontbreekt in het
+  teruggegeven record (live geverifieerd 2026-08-01). Stuur je hem toch op documentniveau mee,
+  dan faalt de nacontrole op elke boeking. `prepare_create_general_journal_document` schuift een
+  meegegeven `description` daarom door naar elke regel die er zelf geen heeft.
+
 ---
 
 ## 4. Privé vs. zakelijk en onttrekkingen
@@ -308,6 +417,14 @@ mutatie weer `processed` is.
   eerlijk en leid regelgedrag af uit de mutatie-velden en tijdstempels (zie §7-recept E).
   Voor de letterlijke instelling: verwijs naar Moneybird → Instellingen → Boekhouding →
   Boekingsregels.
+- **Btw-aangiftes zitten evenmin in de API.** `tax_returns`, `vat_returns`, `vat_documents`,
+  `vat_declarations`, `tax_declarations` en `financial_years` geven allemaal 404; de OpenAPI-spec
+  kent alleen `reports/tax` en `tax_rates`. `VatDocument` is wél een geldig `booking_type` bij
+  `link_booking`, maar zonder endpoint is die id niet te achterhalen — bouw geen flow op een id
+  uit een browser-URL. Praktisch gevolg: is de aangifte in Moneybird opgesteld, laat de gebruiker
+  de mutatie daar aan koppelen; is hij extern ingediend, gebruik dan de afwikkelboeking uit §3b.
+  Wat je wél kunt lezen is `period_locked_until` op de administratie — dat vertelt of een
+  verstreken periode nog openstaat voor boeken.
 - Iets dat groot/onomkeerbaar is (verwijderen, versturen, archiveren)? → extra expliciet
   bevestigen.
 - Altijd afsluiten met een eerlijke status: wat is gedaan, wat is overgeslagen, wat verdient nog

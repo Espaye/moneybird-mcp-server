@@ -25,6 +25,7 @@ from .ledger import (
     create_general_journal_document_from_approval,
     create_ledger_account_from_approval,
     reclassify_document_lines_from_approval,
+    vat_settlement_journal_from_approval,
 )
 from .payments import register_payment_from_approval
 from .purchases import reconcile_purchase_invoice_from_approval
@@ -72,6 +73,7 @@ APPROVAL_EXECUTORS: dict[str, ApprovalExecutor] = {
     "set_contacts_delivery_method_email": (
         set_contacts_delivery_method_email_from_approval
     ),
+    "settle_vat_period": vat_settlement_journal_from_approval,
     "unlink_bank_mutation_booking": unlink_bank_mutation_booking_from_approval,
     "update_contact": update_contact_from_approval,
 }
