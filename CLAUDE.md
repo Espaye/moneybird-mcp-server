@@ -28,7 +28,9 @@ scripts that import the package directly (see below).
 - **OAuth**: `moneybird/oauth.py` implements the authorization-code flow (app credentials in
   the parent environment or an explicit file as
   `MONEYBIRD_OAUTH_CLIENT_ID`/`MONEYBIRD_OAUTH_CLIENT_SECRET`; interactive login via
-  `python scripts/oauth_login.py --env-file PATH`, out-of-band redirect). Tokens persist in
+  `python -m moneybird.oauth_login --env-file PATH`, out-of-band redirect; the CLI lives in
+  `moneybird/oauth_login.py` so a pip install has it, and `scripts/oauth_login.py` is a
+  checkout wrapper — error messages must never point at a path the wheel lacks). Tokens persist in
   `moneybird_oauth_tokens.json` in the data dir and are used automatically in local or
   network-single-user mode when `MONEYBIRD_ACCESS_TOKEN` is absent. Hosted request mode never
   reads that store.
@@ -90,7 +92,9 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   fetch a period and filter client-side on the contact. When the user gives an exact supplier
   invoice number, use `get_purchase_invoice_by_reference` (or
   `MoneybirdClient.get_document_by_reference`) instead of broad `search`; it uses Moneybird's
-  server-side `reference:` filter and then requires an exact match.
+  server-side `reference:` filter and then requires an exact match. Since 2026-08-02 a
+  contact-filtered `list_sales_invoices` that comes back empty says this in a `note` on the
+  result, because a bare `count: 0` otherwise reads as "this contact has no invoices".
 - **Moneybird's boekingsregels vullen ook inkoopfacturen automatisch in — inconsistent.**
   Dezelfde regels die bankmutaties boeken, vullen inkomende inkoopfacturen in, maar niet
   betrouwbaar: dezelfde leverancier komt de ene maand met de vaste meerregelige splitsing binnen
@@ -130,6 +134,8 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   `vat_returns`, `vat_documents`, `vat_declarations` → 404. `VatDocument` is wel een geldig
   `booking_type`, maar de id is niet op te halen; bouw daar geen flow op. `period_locked_until`
   op de administratie is wél leesbaar en zegt of een verstreken periode nog boekbaar is.
+  `moneybird_request` weigert al die routes sinds 2026-08-02 met een uitleg die naar
+  `analyze_vat_settlement` verwijst, zodat niemand nog de spellingen langsloopt.
 - **Document line prices are entered *incl btw*** in this administration. So a "40% / 60%"
   split is 40% / 60% of the **incl-tax total**, and the invoice total incl = sum of line
   `price` values. `total_price_excl_tax_with_discount` on a line is back-calculated
@@ -137,9 +143,15 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   payment match; the excl/btw breakdown may legitimately shift.
 - **The `amount` field is messy in older data**: values like `"1 x"` or `""` occur and
   Moneybird treats them as `1`. Normalize to `"1"` when asked to make lines consistent;
-  it doesn't change any total.
+  it doesn't change any total. Reading is handled for you: `formatting.document_line_quantity`
+  reads a blank or `"1 x"` as 1 and a `"3 stuks"` as 3, and *refuses* an ambiguous value like
+  `"1,5"` instead of guessing — the quantity scales a line total, so a silent wrong reading
+  becomes a wrong amount. (Before 2026-08-02 this raised a raw `decimal.InvalidOperation`
+  from the reclassify preview.)
 - **Boekingsregels (bank/transaction rules) are not in the API** — see
-  `moneybird/playbooks/boekhoud_playbook.md` and the memory note. Don't try to read them.
+  `moneybird/playbooks/boekhoud_playbook.md` and the memory note. Don't try to read them;
+  `moneybird_request` answers every spelling (`transaction_rules`, `boekingsregels`, ...)
+  with a message saying so and pointing at `created_at` vs `processed_at` instead.
 - **Sommige rapporten zijn maand-gebonden**: `cash_flow`, `tax`, `debtors` en `creditors`
   accepteren maximaal één maand (`this_month`, `202606`); de `*_aging`-rapporten willen een
   hele maand als peildatum. Alleen `profit_loss`, `balance_sheet`, `general_ledger` en de
@@ -151,6 +163,10 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   `20260401..20260430` werkt. Een kwartaal haal je per maand op en tel je zelf op
   (`vat_settlement.month_periods`). Let op het verschil met de lijst-endpoints, die juist géén
   `period:YYYYMM` accepteren maar wél een datumbereik.
+  `client.get_report` bewaakt deze grens sinds 2026-08-02 zelf: een te lange periode wordt
+  geweigerd mét de exacte maanden om los op te halen, in plaats van Moneybirds kale
+  `Period cannot exceed 1 month`. De maanden worden bewust *niet* automatisch opgeteld —
+  de rapportvormen verschillen en een stil verkeerd totaal is erger dan een extra call.
 - **Een memoriaal heeft geen header-`description`.** Moneybird laat het veld weg uit het
   teruggegeven `general_journal_document`-record (live geverifieerd 2026-08-01), dus meesturen
   liet `verify_general_journal_payload` op elke zo aangemaakte boeking falen.

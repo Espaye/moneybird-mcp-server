@@ -1,9 +1,18 @@
 """The FastMCP instance and the always-on server instructions."""
 from __future__ import annotations
 
-from fastmcp import FastMCP
+import functools
+import inspect
+import logging
+from typing import Any, Callable
 
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+
+from ..config import MoneybirdError
 from ..performance_middleware import ToolTelemetryMiddleware
+
+logger = logging.getLogger("moneybird_mcp")
 
 SERVER_INSTRUCTIONS = """
 This Moneybird MCP server helps a user process, categorize, and understand their
@@ -96,3 +105,71 @@ mcp = FastMCP(
     instructions=SERVER_INSTRUCTIONS,
     middleware=[ToolTelemetryMiddleware()],
 )
+
+
+def _as_expected_tool_error(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Report a MoneybirdError as the handled condition it is, not as a crash.
+
+    MoneybirdError carries every refusal this server makes on purpose: missing
+    credentials, a rejected period, a failed precondition, an invalid argument.
+    FastMCP logs an unknown exception type with ``logger.exception``, which its
+    RichHandler renders as a boxed multi-frame traceback with source lines — in
+    an MCP client log that reads like the server fell over. FastMCP already
+    distinguishes expected failures: it logs ``FastMCPError`` with
+    ``exc_info=False``. Raising ToolError puts these errors in that category and
+    still delivers the message to the caller unmasked.
+
+    The reason itself is logged here, because FastMCP's own line for an expected
+    error names only the tool. Its duplicate is silenced via ``log_level``.
+    """
+
+    def _translate(exc: MoneybirdError, name: str) -> ToolError:
+        logger.error("Tool %s could not run: %s", name, exc)
+        return ToolError(str(exc), log_level=logging.DEBUG)
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return await fn(*args, **kwargs)
+            except MoneybirdError as exc:
+                raise _translate(exc, fn.__name__) from exc
+
+        return async_wrapper
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except MoneybirdError as exc:
+            raise _translate(exc, fn.__name__) from exc
+
+    return wrapper
+
+
+_register_tool = mcp.tool
+
+
+def _tool(*args: Any, **kwargs: Any) -> Any:
+    """``mcp.tool`` that registers the error-translating wrapper.
+
+    The decorator returns the *undecorated* function, so direct Python callers
+    (tests, scripts, one-off flows) keep seeing MoneybirdError exactly as before;
+    only the MCP-facing callable is wrapped.
+    """
+    if args and callable(args[0]) and not kwargs:  # bare @mcp.tool
+        fn = args[0]
+        _register_tool(_as_expected_tool_error(fn), *args[1:])
+        return fn
+
+    decorate = _register_tool(*args, **kwargs)
+
+    def register(fn: Callable[..., Any]) -> Callable[..., Any]:
+        decorate(_as_expected_tool_error(fn))
+        return fn
+
+    return register
+
+
+mcp.tool = _tool  # type: ignore[method-assign]

@@ -218,6 +218,41 @@ def build_config(
     )
 
 
+def _warn_when_no_credentials_resolve(credential_mode: str) -> None:
+    """Say at startup that no Moneybird identity is configured yet.
+
+    Hosted request mode legitimately starts without one (every request brings
+    its own), so it is skipped. The other modes have exactly one identity, and
+    an MCP client reports a server that starts as connected: without this line
+    the first sign of a forgotten token is a failed answer to a real question.
+
+    Startup is deliberately not aborted — credentials may still arrive through
+    an OAuth login while the process runs, and a dead server tells the user less
+    than a running one that explains itself. For the same reason the check must
+    stay local: it reads configuration only, never contacting Moneybird, so a
+    slow upstream cannot delay the server's first connection.
+    """
+    if credential_mode == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
+        return
+
+    from .credentials import credentials_are_configured, missing_credentials_message
+
+    try:
+        configured = credentials_are_configured(credential_mode)
+    except Exception:  # noqa: BLE001 - a startup notice must never block startup
+        logger.warning(
+            "Could not check for Moneybird credentials at startup.", exc_info=True
+        )
+        return
+
+    if not configured:
+        logger.warning(
+            "Starting without Moneybird credentials; every tool call will fail "
+            "until this is resolved. %s",
+            missing_credentials_message(credential_mode),
+        )
+
+
 def main(argv: list[str] | None = None, *, default_transport: str = "stdio") -> None:
     logging.basicConfig(level=logging.INFO)  # stderr; stdout stays protocol-clean
     config = build_config(argv, default_transport=default_transport)
@@ -231,6 +266,8 @@ def main(argv: list[str] | None = None, *, default_transport: str = "stdio") -> 
         # Local MCP clients may spawn this process with an arbitrary cwd. Set a
         # stable state root before importing the registered tool surface.
         os.environ["MONEYBIRD_MCP_DATA_DIR"] = str(Path.home() / ".moneybird-mcp")
+
+    _warn_when_no_credentials_resolve(config.credential_mode)
 
     # Importing the tools package registers all tools + prompts on the mcp
     # instance; deferred past arg parsing so --help stays instant.

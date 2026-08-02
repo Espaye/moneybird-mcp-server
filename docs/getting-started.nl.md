@@ -129,8 +129,11 @@ Lokale en geauthenticeerde modi voor één gebruiker kunnen de OAuth-autorisatie
 3. Voer het volgende uit:
 
 ```bash
-python scripts/oauth_login.py --env-file /absolute/path/operator.env
+python -m moneybird.oauth_login --env-file /absolute/path/operator.env
 ```
+
+Dit werkt zowel voor een geïnstalleerd pakket als voor een clone; in een clone is
+`python scripts/oauth_login.py` een gelijkwaardige wrapper.
 
 De helper bewaart OAuth-tokens in de gegevensmap van Moneybird MCP. De huidige lokale helper vraagt de scopes aan die in de repository zijn gedocumenteerd; controleer deze voordat je toestemming geeft. Een gehoste productiedienst vereist een afzonderlijke HTTPS-callback, gebruikersidentiteit, opslag voor toestemmingen, een intrekkingsontwerp en een scheiding tussen administraties.
 

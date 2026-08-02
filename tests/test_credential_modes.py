@@ -1,6 +1,7 @@
 """Credential-mode containment tests."""
 from __future__ import annotations
 
+import importlib
 import os
 import unittest
 from unittest import mock
@@ -13,8 +14,10 @@ from moneybird.auth import SharedSecretAuthMiddleware
 from moneybird.config import MoneybirdError
 from moneybird.credentials import (
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+    CREDENTIAL_MODE_LOCAL,
     CREDENTIAL_MODE_NETWORK_SINGLE_USER,
     CredentialModeMiddleware,
+    credentials_are_configured,
     resolve_credentials,
 )
 
@@ -212,6 +215,93 @@ class CredentialModeMiddlewareTests(unittest.TestCase):
         self.assertEqual(unauthenticated.status_code, 401)
         self.assertEqual(authenticated_switch.status_code, 400)
         self.assertEqual(authenticated_local.status_code, 200)
+
+
+class MissingCredentialGuidanceTests(unittest.TestCase):
+    """The advice has to match the mode the user is actually running.
+
+    Request headers only exist in hosted mode, and ``scripts/`` is not part of
+    the wheel, so a pip install cannot run anything under it.
+    """
+
+    def _message(self, mode: str) -> str:
+        with (
+            mock.patch.object(dependencies, "get_http_headers", return_value={}),
+            mock.patch.dict(os.environ, {}, clear=False),
+            mock.patch.object(oauth, "get_access_token", return_value=None),
+        ):
+            os.environ.pop("MONEYBIRD_ACCESS_TOKEN", None)
+            with self.assertRaises(MoneybirdError) as caught:
+                resolve_credentials(mode)
+        return str(caught.exception)
+
+    def test_local_advice_names_only_options_local_mode_has(self) -> None:
+        message = self._message(CREDENTIAL_MODE_LOCAL)
+        self.assertIn("MONEYBIRD_ACCESS_TOKEN", message)
+        self.assertIn("python -m moneybird.oauth_login", message)
+        self.assertNotIn("X-Moneybird-Token", message)
+        self.assertNotIn("scripts/", message)
+
+    def test_single_user_advice_rules_out_tenant_headers(self) -> None:
+        message = self._message(CREDENTIAL_MODE_NETWORK_SINGLE_USER)
+        self.assertIn("MONEYBIRD_ACCESS_TOKEN", message)
+        self.assertIn("python -m moneybird.oauth_login", message)
+        self.assertNotIn("scripts/", message)
+        self.assertIn("rejected", message)
+
+    def test_startup_probe_never_contacts_moneybird_or_writes_the_store(self) -> None:
+        """The advisory check must not refresh an expired token.
+
+        resolve_credentials() would: get_access_token refreshes against
+        Moneybird on a 20s timeout and persists the rotated token. Doing that
+        before the server accepts its first connection lets a slow upstream
+        stall startup until a client or health check declares the server dead.
+        """
+        expired = {"access_token": "stored", "expires_in": 1, "obtained_at": 0}
+        with (
+            mock.patch.dict(os.environ, {}, clear=False),
+            mock.patch.object(oauth, "load_tokens", return_value=expired) as load,
+            mock.patch.object(oauth, "get_access_token") as resolve_token,
+            mock.patch.object(oauth, "refresh_access_token") as refresh,
+            mock.patch.object(oauth, "store_tokens") as write,
+        ):
+            os.environ.pop("MONEYBIRD_ACCESS_TOKEN", None)
+            configured = credentials_are_configured(CREDENTIAL_MODE_LOCAL)
+
+        self.assertTrue(configured)  # an expired token is still a configured one
+        load.assert_called_once()
+        resolve_token.assert_not_called()
+        refresh.assert_not_called()
+        write.assert_not_called()
+
+    def test_startup_probe_reports_environment_and_empty_store(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"MONEYBIRD_ACCESS_TOKEN": "token"}),
+            mock.patch.object(oauth, "load_tokens") as load,
+        ):
+            self.assertTrue(credentials_are_configured(CREDENTIAL_MODE_LOCAL))
+        load.assert_not_called()  # the environment already answered
+
+        with (
+            mock.patch.dict(os.environ, {}, clear=False),
+            mock.patch.object(oauth, "load_tokens", return_value=None),
+        ):
+            os.environ.pop("MONEYBIRD_ACCESS_TOKEN", None)
+            self.assertFalse(credentials_are_configured(CREDENTIAL_MODE_LOCAL))
+
+    def test_startup_probe_treats_an_unreadable_store_as_unconfigured(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {}, clear=False),
+            mock.patch.object(oauth, "load_tokens", side_effect=OSError("locked")),
+        ):
+            os.environ.pop("MONEYBIRD_ACCESS_TOKEN", None)
+            self.assertFalse(credentials_are_configured(CREDENTIAL_MODE_LOCAL))
+
+    def test_oauth_login_cli_ships_inside_the_installed_package(self) -> None:
+        # The message above is only actionable if the command it names exists
+        # wherever the package is installed from.
+        module = importlib.import_module("moneybird.oauth_login")
+        self.assertTrue(callable(module.main))
 
 
 if __name__ == "__main__":

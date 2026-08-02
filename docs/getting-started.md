@@ -129,8 +129,11 @@ Local and authenticated single-user modes can use Moneybird's OAuth authorizatio
 3. Run:
 
 ```bash
-python scripts/oauth_login.py --env-file /absolute/path/operator.env
+python -m moneybird.oauth_login --env-file /absolute/path/operator.env
 ```
+
+This works for an installed package as well as a source checkout; in a checkout
+`python scripts/oauth_login.py` is an equivalent wrapper.
 
 The helper stores OAuth tokens in the Moneybird MCP data directory. The current local helper requests the scopes documented in the repository; review them before authorising. A production hosted service needs a separate HTTPS callback, user identity, grant store, revocation design, and tenant boundary.
 

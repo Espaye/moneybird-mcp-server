@@ -19,6 +19,7 @@ from .formatting import (
     contact_delivery_record,
     contact_invoice_email,
     contact_title,
+    document_line_quantity,
     duplicate_fingerprint,
     matches_query,
     money_decimal,
@@ -146,13 +147,17 @@ def document_detail_amount_excl_tax(detail: dict[str, Any]) -> Decimal:
     for candidate in candidates:
         if candidate not in (None, ""):
             amount = money_decimal(candidate)
-            quantity = detail.get("amount")
-            if candidate == detail.get("price") and quantity not in (None, "", 1, "1"):
-                return (amount * Decimal(str(quantity))).quantize(
-                    Decimal("0.01"),
-                    rounding=ROUND_HALF_UP,
-                )
-            return amount
+            if candidate != detail.get("price"):
+                return amount
+            # Only a unit price has to be scaled by the line quantity, and that
+            # field is messy in older data ("1 x", ""); see document_line_quantity.
+            quantity = document_line_quantity(detail.get("amount"))
+            if quantity == Decimal("1"):
+                return amount
+            return (amount * quantity).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
     return Decimal("0.00")
 
 

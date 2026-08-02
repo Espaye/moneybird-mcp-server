@@ -11,7 +11,7 @@ The app is registered at https://moneybird.com/user/applications/new; its
 through an operator-selected ``--env-file``. The registered redirect URI must match
 ``redirect_uri`` exactly;
 ``urn:ietf:wg:oauth:2.0:oob`` makes Moneybird display the code in the browser
-instead of redirecting, which is how ``scripts/oauth_login.py`` works.
+instead of redirecting, which is how ``python -m moneybird.oauth_login`` works.
 
 Obtained tokens are persisted per profile in ``moneybird_oauth_tokens.json``
 inside :func:`moneybird.config.data_dir`, and :func:`get_access_token`
@@ -278,7 +278,8 @@ def get_access_token(profile: str = DEFAULT_PROFILE) -> str | None:
             if not refresh_token:
                 raise MoneybirdError(
                     f"The stored OAuth access token for profile {profile!r} has expired and "
-                    "no refresh token is stored. Run scripts/oauth_login.py again."
+                    "no refresh token is stored. Run 'python -m moneybird.oauth_login' "
+                    "again."
                 )
             record = refresh_access_token(refresh_token)
             store_tokens(record, profile=profile)

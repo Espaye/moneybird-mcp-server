@@ -154,19 +154,71 @@ def resolve_credentials(mode: str | None = None) -> Credentials:
         )
 
     if credentials is None:
-        if active_mode == CREDENTIAL_MODE_NETWORK_SINGLE_USER:
-            raise MoneybirdError(
-                "No Moneybird operator credentials found for network_single_user "
-                "mode. Set MONEYBIRD_ACCESS_TOKEN or log in via OAuth with "
-                "scripts/oauth_login.py."
-            )
-        raise MoneybirdError(
-            "No Moneybird credentials found. Send an 'X-Moneybird-Token' header "
-            "(multi-tenant), optionally with 'X-Moneybird-Administration-Id', set "
-            "MONEYBIRD_ACCESS_TOKEN in the environment, or log in via OAuth with "
-            "scripts/oauth_login.py."
-        )
+        raise MoneybirdError(missing_credentials_message(active_mode))
     return credentials
+
+
+# Only the modes that can actually fall back this far need a message; hosted
+# request mode fails earlier, on the missing header.
+_OAUTH_LOGIN_HINT = (
+    "log in via OAuth with 'python -m moneybird.oauth_login' (add "
+    "--env-file PATH to point at a configuration file)"
+)
+
+
+def credentials_are_configured(mode: str) -> bool:
+    """Report whether a credential source exists, without network I/O or writes.
+
+    Startup diagnostics must use this instead of :func:`resolve_credentials`.
+    Resolving reaches :func:`oauth.get_access_token`, which refreshes an expired
+    token against Moneybird on a 20-second timeout and rewrites the token store
+    — before the server has accepted its first connection. A slow or unreachable
+    Moneybird would then stall startup long enough for an MCP client or health
+    check to give up on a server that is otherwise fine.
+
+    An expired stored token counts as configured here: this answers "did anyone
+    set credentials up?", and only the real resolution path can tell whether
+    they still work.
+    """
+    if mode == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
+        return True  # every request carries its own; nothing to check at startup
+    if _credentials_from_environment() is not None:
+        return True
+
+    from . import oauth
+
+    try:
+        record = oauth.load_tokens()
+    except (MoneybirdError, OSError, ValueError):
+        # An unreadable or malformed store is not proof of a configured
+        # identity, and diagnosing it is the resolution path's job.
+        return False
+    return bool(record and record.get("access_token"))
+
+
+def missing_credentials_message(mode: str) -> str:
+    """Explain how to supply credentials in the mode that is actually running.
+
+    Naming request headers or a repository script to someone running a local
+    stdio server sends them after options that mode cannot use: headers are
+    only read in hosted request mode, and ``scripts/`` is not part of the
+    installed wheel.
+    """
+    if mode == CREDENTIAL_MODE_NETWORK_SINGLE_USER:
+        return (
+            "No Moneybird credentials found for network_single_user mode. Set "
+            "MONEYBIRD_ACCESS_TOKEN (and optionally MONEYBIRD_ADMINISTRATION_ID) "
+            "in the server's environment, start it with --env-file PATH, or "
+            f"{_OAUTH_LOGIN_HINT}. Per-request Moneybird tenant headers are "
+            "rejected in this mode."
+        )
+    return (
+        "No Moneybird credentials found. Set MONEYBIRD_ACCESS_TOKEN (and "
+        "optionally MONEYBIRD_ADMINISTRATION_ID) in the environment your MCP "
+        "client starts this server with, start it with --env-file PATH, or "
+        f"{_OAUTH_LOGIN_HINT}. Get a personal token at "
+        "https://moneybird.com/user/applications."
+    )
 
 
 class CredentialModeMiddleware:
