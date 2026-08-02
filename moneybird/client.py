@@ -26,6 +26,8 @@ from .config import (
     DEFAULT_RETRY_BACKOFF_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
     MAX_RETRY_DELAY_SECONDS,
+    MONTH_CAPPED_REPORTS,
+    MULTI_MONTH_PERIOD_SYMBOLS,
     PAGINATED_REPORTS,
     REPORT_ENDPOINTS,
     REPORT_PERIOD_PARAM_OVERRIDES,
@@ -36,6 +38,7 @@ from .credentials import resolve_credentials, set_active_administration_id
 from .formatting import (
     build_filter_string,
     document_kind_config,
+    report_period_months,
 )
 from .http_transport import get_shared_http_client
 from .telemetry import (
@@ -48,6 +51,33 @@ from .telemetry import (
 )
 
 logger = logging.getLogger("moneybird_mcp")
+
+
+def _reject_over_month_period(report_name: str, period: str) -> None:
+    """Refuse a period Moneybird will reject, naming the calls that do work.
+
+    Moneybird answers anything longer than a month on these reports with a bare
+    "Period cannot exceed 1 month", which does not say what to do instead. The
+    months are not summed here on purpose: these report bodies differ in shape,
+    and a quietly wrong total is worse than an extra round of calls.
+    """
+    text = str(period or "").strip()
+    if text.casefold() in MULTI_MONTH_PERIOD_SYMBOLS:
+        raise MoneybirdError(
+            f"The '{report_name}' report accepts at most one month per call, so "
+            f"'{text}' is refused by Moneybird. Use a single month "
+            "('this_month', 'prev_month', '202606') or call it once per month "
+            "over the range you want and sum the results."
+        )
+    months = report_period_months(text)
+    if months is not None and len(months) > 1:
+        listed = ", ".join(months)
+        raise MoneybirdError(
+            f"The '{report_name}' report accepts at most one month per call, but "
+            f"'{text}' spans {len(months)} months. Call it once per month "
+            f"({listed}) and sum the results."
+        )
+
 
 def retry_delay_seconds(
     *,
@@ -324,6 +354,58 @@ def _generic_template_matches(candidate: str, template: str) -> bool:
     )
 
 
+# Concepts that exist in the Moneybird product but not in its REST API. Without
+# a specific message a model works through every plausible spelling in turn and
+# reads each rejection as a typo rather than as an absent capability.
+_VAT_RETURN_ROUTES = (
+    "tax_returns",
+    "vat_returns",
+    "vat_declarations",
+    "vat_documents",
+    "btw_aangiftes",
+    "btw_aangifte",
+)
+_BOOKING_RULE_ROUTES = (
+    "transaction_rules",
+    "booking_rules",
+    "bookkeeping_rules",
+    "financial_mutation_rules",
+    "boekingsregels",
+    "rules",
+)
+
+_ABSENT_CONCEPT_HINTS = {
+    **{
+        route: (
+            "Moneybird's API does not expose VAT returns (btw-aangiftes); every "
+            "spelling of this route 404s, and although 'VatDocument' is a valid "
+            "booking_type its id cannot be retrieved. Do not build on it. To clear "
+            "a filed period use analyze_vat_settlement then "
+            "prepare_vat_settlement_journal, and ask the user for the declared "
+            "amounts -- they are filed in whole euros and cannot be derived from "
+            "the reports."
+        )
+        for route in _VAT_RETURN_ROUTES
+    },
+    **{
+        route: (
+            "Moneybird's API does not expose boekingsregels (transaction/booking "
+            "rules); you can only observe their effect, never read or repair the "
+            "rule itself. To work out why a mutation was or was not booked "
+            "automatically, compare created_at with processed_at (see the "
+            "diagnose_bankmutatie prompt), and use review_purchase_invoices to "
+            "find purchase invoices a rule filled in inconsistently."
+        )
+        for route in _BOOKING_RULE_ROUTES
+    },
+}
+
+
+def _absent_concept_hint(first_segment: str) -> str | None:
+    """Return guidance when a route names a product concept the API omits."""
+    return _ABSENT_CONCEPT_HINTS.get(first_segment.casefold())
+
+
 def normalize_generic_get_path(path: str) -> str:
     """Validate and canonicalize a relative, JSON-returning generic GET route."""
     if not isinstance(path, str):
@@ -369,9 +451,12 @@ def normalize_generic_get_path(path: str) -> str:
         for template in _SAFE_GENERIC_GET_TEMPLATES
     ):
         raise MoneybirdError(
-            "Unsupported generic GET path. Use a JSON-returning route from the "
-            "server allowlist, such as 'estimates', 'time_entries/123', "
-            "'documents/purchase_invoices', or 'administrations'."
+            _absent_concept_hint(segments[0])
+            or (
+                "Unsupported generic GET path. Use a JSON-returning route from the "
+                "server allowlist, such as 'estimates', 'time_entries/123', "
+                "'documents/purchase_invoices', or 'administrations'."
+            )
         )
     return candidate
 
@@ -1362,6 +1447,8 @@ class MoneybirdClient:
             raise MoneybirdError(
                 f"Unsupported report '{report_name}'. Use one of: {supported}."
             )
+        if name in MONTH_CAPPED_REPORTS:
+            _reject_over_month_period(name, period)
         period_param = REPORT_PERIOD_PARAM_OVERRIDES.get(name, "period")
         query: dict[str, Any] = {period_param: period}
         if page is not None:

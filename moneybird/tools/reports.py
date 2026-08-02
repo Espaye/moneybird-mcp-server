@@ -59,8 +59,9 @@ def get_financial_report(report_name: ReportName, period: Period, page: ReportPa
     debtors_aging / creditors_aging, revenue_by_contact, revenue_by_project,
     expenses_by_contact, expenses_by_project, journal_entries, subscriptions, or assets.
     period accepts e.g. this_year, prev_month, 202601..202603 — BUT cash_flow, tax, debtors,
-    and creditors accept at most one month (use this_month or 202606), and the aging reports
-    take a whole month as reference (202606). Set page only for the paginated
+    and creditors accept at most one month (use this_month or 202606); asking those for a
+    longer period is refused with the exact per-month calls to make instead. The aging
+    reports take a whole month as reference (202606). Set page only for the paginated
     per-contact/per-project, debtor/creditor, and journal_entries reports."""
     name = str(report_name).strip()
     if name not in REPORT_ENDPOINTS:

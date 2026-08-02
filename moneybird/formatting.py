@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -412,6 +413,91 @@ def money_decimal(value: Any) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+
+
+# A line quantity written as a number followed by unit noise ("1 x", "3 stuks").
+# The trailing part must not contain digits, so an ambiguous decimal separator
+# ("1,5") falls through to an explicit refusal instead of being truncated.
+_LINE_QUANTITY = re.compile(r"^(-?[0-9]+(?:\.[0-9]+)?)\s*([^0-9]*)$")
+
+
+def document_line_quantity(value: Any) -> Decimal:
+    """Return the effective quantity for a Moneybird document line ``amount``.
+
+    Older lines carry values like ``"1 x"`` or ``""`` where a bare number is
+    expected, and Moneybird itself treats both as a quantity of one. Values that
+    are neither blank nor an unambiguous number are refused rather than guessed:
+    this quantity scales a line total, so a silent wrong reading would turn into
+    a wrong amount further down.
+    """
+    if value is None:
+        return Decimal("1")
+    if isinstance(value, bool):
+        raise MoneybirdError(f"Document line amount {value!r} is not a quantity.")
+    if isinstance(value, int):
+        return Decimal(value)
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, float):
+        return Decimal(str(value))
+
+    text = str(value).strip()
+    if not text:
+        return Decimal("1")
+    match = _LINE_QUANTITY.match(text)
+    if not match:
+        raise MoneybirdError(
+            f"Document line amount {value!r} is not an unambiguous quantity. "
+            "Moneybird reads a blank amount or a value like '1 x' as 1, but this "
+            "one cannot be read that way -- correct the line in Moneybird (a "
+            "decimal comma has to be written as '1.5') and try again."
+        )
+    return Decimal(match.group(1))
+
+
+
+
+_YEAR_MONTH = re.compile(r"^([0-9]{4})(0[1-9]|1[0-2])$")
+_YEAR_MONTH_DAY = re.compile(r"^([0-9]{4})(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])$")
+
+
+def _period_endpoint_month(text: str) -> tuple[int, int] | None:
+    """Return the (year, month) an explicit period endpoint falls in."""
+    match = _YEAR_MONTH_DAY.match(text) or _YEAR_MONTH.match(text)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def report_period_months(period: str) -> list[str] | None:
+    """Return the ``YYYYMM`` months an explicit report period covers.
+
+    Returns ``None`` when the period is blank or symbolic ('this_month'), since
+    those resolve server-side. This is deliberately separate from
+    ``vat_settlement.month_periods``, which enforces the much stricter
+    whole-month range a settlement needs; here the job is only to count how many
+    months a caller asked for.
+    """
+    text = str(period or "").strip()
+    if not text:
+        return None
+
+    if ".." not in text:
+        start = _period_endpoint_month(text)
+        return [f"{start[0]}{start[1]:02d}"] if start else None
+
+    start_text, end_text = text.split("..", 1)
+    start = _period_endpoint_month(start_text.strip())
+    end = _period_endpoint_month(end_text.strip())
+    if not start or not end or start > end:
+        return None
+
+    months: list[str] = []
+    year, month = start
+    while (year, month) <= end:
+        months.append(f"{year}{month:02d}")
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return months
 
 
 def normalized_text(value: str) -> str:

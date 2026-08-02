@@ -134,6 +134,30 @@ REPORT_PERIOD_PARAM_OVERRIDES = {
 }
 
 
+# Reports Moneybird refuses for any period longer than a month
+# ("Period cannot exceed 1 month"). The limit is a maximum, not a calendar
+# month: 20260401..20260430 is accepted, 202604..202606 is not, and no
+# parameter lifts it. A quarter has to be fetched month by month and summed.
+MONTH_CAPPED_REPORTS = {
+    "cash_flow",
+    "tax",
+    "debtors",
+    "creditors",
+}
+
+
+# Symbolic periods that always span more than one month, so they can be
+# rejected for the capped reports without resolving them against today.
+MULTI_MONTH_PERIOD_SYMBOLS = {
+    "this_quarter",
+    "prev_quarter",
+    "last_quarter",
+    "this_year",
+    "prev_year",
+    "last_year",
+}
+
+
 # Reports that support page/per_page pagination.
 PAGINATED_REPORTS = {
     "debtors",

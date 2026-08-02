@@ -93,7 +93,7 @@ def list_sales_invoices(
         contact_id=contact_id,
         period=period,
     )
-    return {
+    result = {
         "sales_invoices": [
             {
                 "id": str(item.get("id")),
@@ -111,6 +111,40 @@ def list_sales_invoices(
         "page": page,
         "count": len(invoices),
     }
+    if contact_id and not invoices:
+        # A supplier invoices us, so it legitimately has zero sales invoices.
+        # Without this the empty list reads as "this contact has no invoices".
+        # Only an unnarrowed first page proves that, though: state, reference,
+        # period or a page past the last one can each empty the result on their
+        # own, so say which of those was in play rather than overstate it.
+        narrowing = [
+            label
+            for label, active in (
+                (f"state={state}", bool(state) and state != "all"),
+                (f"reference={reference}", bool(reference)),
+                (f"period={period}", bool(period)),
+                (f"page={page}", page > 1),
+            )
+            if active
+        ]
+        if narrowing:
+            opening = (
+                f"No sales invoices for contact {contact_id} matching "
+                f"{', '.join(narrowing)}. This does not establish that the contact "
+                "has none at all -- widen the query before concluding that."
+            )
+        else:
+            opening = f"Contact {contact_id} has no sales invoices."
+        result["note"] = (
+            f"{opening} If this contact is a supplier, zero sales invoices is "
+            "expected: a supplier invoices you, so their documents are purchase "
+            "invoices or receipts. Sales-invoice filters take contact_id but the "
+            "document list endpoints do not, so use "
+            "review_purchase_invoices(contact_id=...) for a supplier's history, "
+            "or get_purchase_invoice_by_reference when you have the exact "
+            "supplier invoice number."
+        )
+    return result
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
