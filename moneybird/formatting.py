@@ -12,8 +12,64 @@ from .config import (
     BASE_URL,
     DOCUMENT_KIND_ALIASES,
     DOCUMENT_KIND_CONFIG,
+    MAX_ERROR_DETAIL_CHARS,
     MoneybirdError,
 )
+
+
+def parse_reported_error(body: str | None) -> Any:
+    """Return the useful part of a Moneybird error body, or None.
+
+    A rejected write answers with the field-level reason, e.g.::
+
+        {"error": {"send_invoices_to_email": ["includes a domain which cannot
+         receive emails"]}, "details": {...}}
+
+    Without it, "HTTP 422" tells nobody which field to correct. Anything that is
+    not JSON, or is JSON of an unexpected shape, is returned as-is so the caller
+    can still quote it; an empty body returns None.
+    """
+    text = (body or "").strip()
+    if not text:
+        return None
+    try:
+        decoded = json.loads(text)
+    except (ValueError, TypeError):
+        return text
+    if isinstance(decoded, dict):
+        # Prefer the named error over the whole envelope; "details" repeats it
+        # as machine codes, which add length without adding meaning for a reader.
+        for key in ("error", "errors", "message"):
+            if key in decoded and decoded[key]:
+                return decoded[key]
+    return decoded
+
+
+def format_reported_error(reported: Any) -> str:
+    """Render a parsed Moneybird error as a bounded sentence to append.
+
+    Returns "" when there is nothing to say, so callers can concatenate it
+    unconditionally.
+    """
+    if reported is None or reported == "" or reported == {} or reported == []:
+        return ""
+    if isinstance(reported, dict):
+        parts = []
+        for field, problem in reported.items():
+            if isinstance(problem, (list, tuple)):
+                problem = "; ".join(str(item) for item in problem)
+            parts.append(f"{field}: {problem}")
+        rendered = " | ".join(parts)
+    elif isinstance(reported, (list, tuple)):
+        rendered = "; ".join(str(item) for item in reported)
+    else:
+        rendered = str(reported)
+    rendered = " ".join(rendered.split())
+    if not rendered:
+        return ""
+    if len(rendered) > MAX_ERROR_DETAIL_CHARS:
+        rendered = rendered[:MAX_ERROR_DETAIL_CHARS] + " [truncated]"
+    return f" Moneybird reported: {rendered}"
 
 
 def api_url(resource: str, item_id: str, administration_id: str | None) -> str | None:

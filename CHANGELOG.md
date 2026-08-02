@@ -71,6 +71,34 @@ their own licences.
 
 ### Fixed
 
+- **Moneybird's own explanation of a rejected write is no longer thrown away.** A failed
+  create reported only `Moneybird returned HTTP 422 for operation /:id/contacts.json`,
+  while the response body naming the field and the reason
+  (`send_invoices_to_email: includes a domain which cannot receive emails`) was read into
+  a local variable and discarded. Neither a user nor an agent could correct the input from
+  that message. Errors now carry the reported reason, bounded so an unexpected body cannot
+  flood a tool result or the audit log, and are raised as `MoneybirdHTTPError` (a
+  `MoneybirdError` subclass, so existing handlers are unaffected).
+- **A rejected write is closed as failed instead of left unresolved.** Every error after
+  the dispatch boundary was recorded as `ambiguous`, so a typo in an email address
+  permanently wrote an unresolved entry into the bookkeeping audit trail and burned the
+  approval. `ambiguous` is now reserved for what it is for — timeouts, 5xx, network
+  failures, where the write genuinely may have landed. A status Moneybird answered with a
+  refusal proves the refused request changed nothing. The proof is required, not assumed:
+  the HTTP client counts accepted mutations for the write being executed, so a refusal
+  that follows an already-accepted write still stays unresolved, and 409 Conflict is
+  deliberately excluded because it can mean the record already exists. Moneybird's batch
+  readers are POSTs to `.../synchronization.json`, so a mutation is identified by
+  `retry_safe` rather than by HTTP method — counting a bulk read as a write would have
+  dragged the next rejection straight back to unresolved.
+- **Tool search returns the tool a plain request describes.** `search_tools` ranked
+  `prepare_create_credit_invoice` first for "create a new contact", and did not return
+  `prepare_create_contact` at all for "add contact". BM25 weights rare words heavily:
+  "new" is rare across the catalogue while "contact" appears in a dozen tool names.
+  Descriptions now carry the words users actually type. Across a set of plain-language
+  requests, top-1 accuracy went from 2/10 to 9/10. This costs nothing in protocol bytes —
+  the affected tools are hidden in compact discovery mode, so the catalogue is
+  byte-identical.
 - A deliberate refusal no longer renders as a crash. Every `MoneybirdError` raised by a
   tool — missing credentials, a rejected period, a failed precondition — was an exception
   type FastMCP did not recognise, so it was logged with `logger.exception` and rendered as

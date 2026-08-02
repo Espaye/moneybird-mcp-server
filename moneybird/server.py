@@ -272,6 +272,13 @@ def _announce_missing_credentials(credential_mode: str, mcp: Any) -> None:
         return
 
     message = missing_credentials_message(credential_mode)
+    # `message` is a constant: missing_credentials_message returns one of two
+    # string literals naming the *environment variables* to set, never a value
+    # read from one. CodeQL's py/clear-text-logging-sensitive-data flags this on
+    # a name heuristic (a call matching *credential*) and labels it "(password)";
+    # there is no password anywhere in this path. Dismissed as a false positive
+    # — don't silence it by deleting the line, it is the only signal an operator
+    # gets that the server started with no identity.
     logger.warning(
         "Starting without Moneybird credentials; every tool call will fail "
         "until this is resolved. %s",

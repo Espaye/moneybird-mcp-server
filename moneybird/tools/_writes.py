@@ -26,7 +26,7 @@ from ..config import MoneybirdError
 from ..formatting import duplicate_fingerprint, iso_now
 from ..safety import (
     approval_execution_state,
-    classify_write_exception,
+    classify_failed_write,
     make_approval,
     pop_approval,
     record_approval_outcome,
@@ -138,14 +138,7 @@ def run_approved_write(
             approval_id,
             administration_id=client.administration_id,
         )
-        audit_result = (
-            "failed_pre_write"
-            if (
-                execution["phase"] == "preflight"
-                and classify_write_exception(exc) != "ambiguous"
-            )
-            else "ambiguous"
-        )
+        audit_result = classify_failed_write(exc, phase=execution["phase"])
         record_approval_outcome(
             approval_id,
             audit_result,

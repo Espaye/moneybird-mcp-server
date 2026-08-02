@@ -33,14 +33,18 @@ from .config import (
     REPORT_PERIOD_PARAM_OVERRIDES,
     RETRYABLE_HTTP_STATUS_CODES,
     MoneybirdError,
+    MoneybirdHTTPError,
 )
 from .credentials import resolve_credentials, set_active_administration_id
 from .formatting import (
     build_filter_string,
     document_kind_config,
+    format_reported_error,
+    parse_reported_error,
     report_period_months,
 )
 from .http_transport import get_shared_http_client
+from .safety import record_applied_write
 from .telemetry import (
     current_tool_name,
     current_trace_id,
@@ -51,6 +55,9 @@ from .telemetry import (
 )
 
 logger = logging.getLogger("moneybird_mcp")
+
+# Methods that cannot change anything, so they never count as an applied write.
+_READ_ONLY_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 def _reject_over_month_period(report_name: str, period: str) -> None:
@@ -685,7 +692,13 @@ class MoneybirdClient:
     ) -> Any:
         method = method.upper()
         if retry_safe is None:
-            retry_safe = method in {"GET", "HEAD", "OPTIONS"}
+            retry_safe = method in _READ_ONLY_HTTP_METHODS
+        # Moneybird's batch readers are POSTs to .../synchronization.json that
+        # send a list of ids in the body. The method alone therefore does not
+        # identify a mutation. retry_safe does: a request is only safe to repeat
+        # automatically if repeating it cannot change anything, so an endpoint
+        # marked retry_safe is by construction a read.
+        mutates = method not in _READ_ONLY_HTTP_METHODS and not retry_safe
         path = self._confine_api_path(path)
         # Runtime paths contain administration and record ids. Keep those out of
         # metrics, retry logs, and user-visible transport errors unless the
@@ -727,6 +740,11 @@ class MoneybirdClient:
                     tenant_scope=self.telemetry_tenant_scope,
                 )
                 if response_status < 300:
+                    if mutates:
+                        # Evidence for write classification: once a mutation has
+                        # been accepted, a later refusal no longer proves the
+                        # execution as a whole applied nothing.
+                        record_applied_write()
                     return json.loads(payload) if payload else None
                 if (
                     retry_safe
@@ -754,9 +772,12 @@ class MoneybirdClient:
                     if not retry_safe and is_retryable_http_status(response_status)
                     else ""
                 )
-                raise MoneybirdError(
+                reported = parse_reported_error(payload)
+                raise MoneybirdHTTPError(
                     f"Moneybird returned HTTP {response_status} for operation "
-                    f"{operation}.{retry_note}"
+                    f"{operation}.{format_reported_error(reported)}{retry_note}",
+                    status_code=response_status,
+                    reported=reported,
                 )
             except httpx.TransportError:
                 record_api_call(

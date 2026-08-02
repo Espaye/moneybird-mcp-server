@@ -263,7 +263,7 @@ def prepare_create_sales_invoice_draft(
     due_date: OptionalDateString = "",
     currency: Annotated[str, Field(description="ISO currency code.")] = "EUR",
 ) -> dict[str, Any]:
-    """Use this before creating a draft Moneybird sales invoice. Do not execute the write until the user explicitly confirms."""
+    """Use this to make a new draft sales invoice for a customer: write, bill, or charge for goods or services. Do not execute the write until the user explicitly confirms."""
     if not details:
         raise MoneybirdError("At least one invoice line is required.")
 
@@ -372,7 +372,7 @@ def prepare_send_sales_invoice(
     email_address: Annotated[str, Field(description="Override recipient email; empty = the contact's invoice email.")] = "",
     email_message: Annotated[str, Field(description="Custom message for the invoice email body.")] = "",
 ) -> dict[str, Any]:
-    """Use this before sending or scheduling a Moneybird sales invoice. Do not execute the send until the user explicitly confirms. Scheduled sends automatically include a merge-compatibility check against other invoices already planned for that contact/date."""
+    """Use this to send an invoice to a customer by email or post, now or scheduled for later. Do not execute the send until the user explicitly confirms. Scheduled sends automatically include a merge-compatibility check against other invoices already planned for that contact/date."""
     if sending_scheduled and not invoice_date:
         raise MoneybirdError(
             "invoice_date is required when sending_scheduled is true."
@@ -672,10 +672,10 @@ def resume_sales_invoice_workflow_from_approval(approval_id: ApprovalId) -> dict
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_create_credit_invoice(sales_invoice_id: SalesInvoiceId) -> dict[str, Any]:
-    """Use this before crediting a sales invoice: Moneybird duplicates it into a new DRAFT
-    credit invoice with negated amounts. Nothing is sent automatically; sending the credit
-    invoice afterwards needs its own prepare_send_sales_invoice approval. Do not execute the
-    write until the user explicitly confirms."""
+    """Use this to credit, refund, cancel, or reverse a sales invoice: Moneybird duplicates it
+    into a new DRAFT credit invoice with negated amounts. Nothing is sent automatically; sending
+    the credit invoice afterwards needs its own prepare_send_sales_invoice approval. Do not
+    execute the write until the user explicitly confirms."""
     client = ctx.get_client()
     record = client.get_sales_invoice(sales_invoice_id)
     original_details = [
