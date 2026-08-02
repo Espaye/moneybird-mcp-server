@@ -16,6 +16,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .config import MoneybirdError, load_env_file
 from .credentials import (
@@ -218,13 +219,36 @@ def build_config(
     )
 
 
-def _warn_when_no_credentials_resolve(credential_mode: str) -> None:
+# Prepended to the server instructions, which every MCP client hands the model
+# at connect time. The server log is the wrong channel for this: an MCP client
+# shows any server that starts as connected, and nobody opens the log. Reaching
+# the model means the user is told in the conversation, on their first question,
+# instead of receiving a tool error.
+MISSING_CREDENTIALS_BANNER = """
+SETUP INCOMPLETE — READ THIS BEFORE ANYTHING ELSE:
+This server started without Moneybird credentials, so every Moneybird tool call
+will fail until they are configured. Do not call a Moneybird tool to "check"; the
+check has already been done. Instead tell the user, in the language they are
+writing in, that the Moneybird server is connected but has no credentials yet,
+and pass on this exactly:
+
+  {message}
+
+If the user replies that they have just configured credentials, believe them and
+try the call: this notice is written once when the server starts and cannot see a
+change made afterwards.
+
+--- normal instructions follow ---
+"""
+
+
+def _announce_missing_credentials(credential_mode: str, mcp: Any) -> None:
     """Say at startup that no Moneybird identity is configured yet.
 
     Hosted request mode legitimately starts without one (every request brings
     its own), so it is skipped. The other modes have exactly one identity, and
-    an MCP client reports a server that starts as connected: without this line
-    the first sign of a forgotten token is a failed answer to a real question.
+    an MCP client reports a server that starts as connected: without this the
+    first sign of a forgotten token is a failed answer to a real question.
 
     Startup is deliberately not aborted — credentials may still arrive through
     an OAuth login while the process runs, and a dead server tells the user less
@@ -244,13 +268,21 @@ def _warn_when_no_credentials_resolve(credential_mode: str) -> None:
             "Could not check for Moneybird credentials at startup.", exc_info=True
         )
         return
+    if configured:
+        return
 
-    if not configured:
-        logger.warning(
-            "Starting without Moneybird credentials; every tool call will fail "
-            "until this is resolved. %s",
-            missing_credentials_message(credential_mode),
+    message = missing_credentials_message(credential_mode)
+    logger.warning(
+        "Starting without Moneybird credentials; every tool call will fail "
+        "until this is resolved. %s",
+        message,
+    )
+    try:
+        mcp.instructions = MISSING_CREDENTIALS_BANNER.format(message=message) + (
+            mcp.instructions or ""
         )
+    except Exception:  # noqa: BLE001 - the log warning already stands on its own
+        logger.warning("Could not add the setup notice to the server instructions.")
 
 
 def main(argv: list[str] | None = None, *, default_transport: str = "stdio") -> None:
@@ -267,11 +299,12 @@ def main(argv: list[str] | None = None, *, default_transport: str = "stdio") -> 
         # stable state root before importing the registered tool surface.
         os.environ["MONEYBIRD_MCP_DATA_DIR"] = str(Path.home() / ".moneybird-mcp")
 
-    _warn_when_no_credentials_resolve(config.credential_mode)
-
     # Importing the tools package registers all tools + prompts on the mcp
     # instance; deferred past arg parsing so --help stays instant.
     from .tools import mcp
+
+    # After the import, because the notice is prepended to mcp.instructions.
+    _announce_missing_credentials(config.credential_mode, mcp)
 
     if config.transport == "stdio":
         mcp.run(transport="stdio")
