@@ -357,7 +357,7 @@ import os
 import sys
 from unittest import mock
 
-from scripts import oauth_login
+from moneybird import oauth_login
 
 with (
     mock.patch.object(

@@ -28,7 +28,9 @@ scripts that import the package directly (see below).
 - **OAuth**: `moneybird/oauth.py` implements the authorization-code flow (app credentials in
   the parent environment or an explicit file as
   `MONEYBIRD_OAUTH_CLIENT_ID`/`MONEYBIRD_OAUTH_CLIENT_SECRET`; interactive login via
-  `python scripts/oauth_login.py --env-file PATH`, out-of-band redirect). Tokens persist in
+  `python -m moneybird.oauth_login --env-file PATH`, out-of-band redirect; the CLI lives in
+  `moneybird/oauth_login.py` so a pip install has it, and `scripts/oauth_login.py` is a
+  checkout wrapper — error messages must never point at a path the wheel lacks). Tokens persist in
   `moneybird_oauth_tokens.json` in the data dir and are used automatically in local or
   network-single-user mode when `MONEYBIRD_ACCESS_TOKEN` is absent. Hosted request mode never
   reads that store.

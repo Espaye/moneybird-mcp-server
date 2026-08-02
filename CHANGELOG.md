@@ -7,6 +7,18 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Added
 
+- `moneybird/oauth_login.py`, so the interactive OAuth login runs from an installed
+  package as `python -m moneybird.oauth_login`. `scripts/oauth_login.py` is now a thin
+  wrapper for source checkouts; the wheel ships only the `moneybird` package, so error
+  messages could not usefully point at a path under `scripts/`.
+- A startup warning when a local or single-user server starts without configured
+  Moneybird credentials. An MCP client reports any server that starts as connected, so
+  a forgotten token previously first surfaced as a failed answer to a real question.
+  Startup is not aborted: credentials can still arrive through an OAuth login later.
+  The check reads local configuration only — it never contacts Moneybird and never
+  refreshes or rewrites the OAuth token store, so a slow upstream cannot delay the
+  server's first connection.
+
 - Dutch translations of the onboarding documentation: `README.nl.md`,
   `docs/getting-started.nl.md`, and `docs/data-lifecycle.nl.md`. The English and Dutch
   pages cross-link through a language selector, and `README.nl.md` ships in the source
@@ -49,6 +61,19 @@ and `v0.4.0` tags and the project's Git history were deliberately left intact. T
 is a distribution decision, not a revocation of rights already granted; copies may persist in
 third-party mirrors and caches outside this project's control. Third-party dependencies keep
 their own licences.
+
+### Fixed
+
+- A deliberate refusal no longer renders as a crash. Every `MoneybirdError` raised by a
+  tool — missing credentials, a rejected period, a failed precondition — was an exception
+  type FastMCP did not recognise, so it was logged with `logger.exception` and rendered as
+  a boxed multi-frame traceback with source lines in the MCP client log. The tool surface
+  now translates these into FastMCP's `ToolError`, which it logs without a traceback, and
+  writes the reason itself as a single line. Direct Python callers still see
+  `MoneybirdError` unchanged.
+- The missing-credentials message now matches the credential mode that is actually
+  running. In local mode it no longer suggests `X-Moneybird-Token` (read only in hosted
+  request mode) or `scripts/oauth_login.py` (absent from the wheel).
 
 ## 0.4.0 — 2026-07-31
 
