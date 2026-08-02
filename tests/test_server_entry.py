@@ -203,6 +203,77 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class MissingCredentialAnnouncementTests(unittest.TestCase):
+    """An unconfigured server has to say so where the user will actually see it.
+
+    The MCP client shows any server that starts as connected and nobody opens
+    the server log, so the notice is also prepended to the instructions every
+    client hands the model at connect time.
+    """
+
+    class _Server:
+        def __init__(self) -> None:
+            self.instructions = "ORIGINAL INSTRUCTIONS"
+
+    def _announce(self, mode: str, *, configured: bool) -> _Server:
+        from moneybird import server as server_module
+
+        server = self._Server()
+        with mock.patch(
+            "moneybird.credentials.credentials_are_configured", return_value=configured
+        ):
+            server_module._announce_missing_credentials(mode, server)
+        return server
+
+    def test_unconfigured_server_tells_the_model_before_the_first_question(self) -> None:
+        server = self._announce("local", configured=False)
+        self.assertTrue(server.instructions.startswith("\nSETUP INCOMPLETE"))
+        self.assertIn("MONEYBIRD_ACCESS_TOKEN", server.instructions)
+        self.assertIn("python -m moneybird.oauth_login", server.instructions)
+        # The real instructions must survive: the banner is a prefix, not a
+        # replacement, or a configured-later session loses every rule.
+        self.assertIn("ORIGINAL INSTRUCTIONS", server.instructions)
+
+    def test_banner_admits_it_cannot_see_a_later_fix(self) -> None:
+        # Instructions are sent once at connect, so a user who configures
+        # credentials mid-session must not be told to keep waiting.
+        server = self._announce("local", configured=False)
+        self.assertIn("just configured", server.instructions)
+
+    def test_configured_server_instructions_are_untouched(self) -> None:
+        server = self._announce("local", configured=True)
+        self.assertEqual(server.instructions, "ORIGINAL INSTRUCTIONS")
+
+    def test_hosted_mode_is_never_annotated(self) -> None:
+        # Every hosted request carries its own credentials; there is nothing
+        # missing to announce, and the check is skipped before it runs.
+        from moneybird import server as server_module
+
+        server = self._Server()
+        with mock.patch(
+            "moneybird.credentials.credentials_are_configured"
+        ) as probe:
+            server_module._announce_missing_credentials(
+                "hosted_request_only", server
+            )
+        probe.assert_not_called()
+        self.assertEqual(server.instructions, "ORIGINAL INSTRUCTIONS")
+
+    def test_a_failure_to_annotate_never_stops_startup(self) -> None:
+        from moneybird import server as server_module
+
+        class _Locked:
+            instructions = "X"
+
+            def __setattr__(self, name: str, value: object) -> None:
+                raise RuntimeError("read-only")
+
+        with mock.patch(
+            "moneybird.credentials.credentials_are_configured", return_value=False
+        ):
+            server_module._announce_missing_credentials("local", _Locked())
+
+
 class PackagingVersionSyncTests(unittest.TestCase):
     """The wheel (pyproject) and the Claude Desktop bundle (mcpb manifest) must
     always release the same version number."""

@@ -18,6 +18,13 @@ versioning while allowing pre-1.0 breaking changes.
   The check reads local configuration only — it never contacts Moneybird and never
   refreshes or rewrites the OAuth token store, so a slow upstream cannot delay the
   server's first connection.
+- The same condition is also prepended to the server instructions, which every MCP
+  client hands the model at connect time, so the user is told in the conversation on
+  their first question instead of receiving a tool error. The server log is the wrong
+  channel on its own: an MCP client shows any server that starts as connected, and
+  nobody opens the log. The notice states that it is written at startup and cannot see
+  a later fix, so a user who configures credentials mid-session is not told to keep
+  waiting.
 
 - Dutch translations of the onboarding documentation: `README.nl.md`,
   `docs/getting-started.nl.md`, and `docs/data-lifecycle.nl.md`. The English and Dutch
