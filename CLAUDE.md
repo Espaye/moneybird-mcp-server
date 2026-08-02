@@ -74,8 +74,46 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
 5. Writes go through `update_document` / `update_sales_invoice` with
    `details_attributes`. To edit an existing line, include its detail `id` plus only the
    fields you change — Moneybird keeps the rest (description, ledger, tax).
+6. **`ambiguous` costs a human a reconciliation, so spend it only on real unknowns.**
+   `safety.classify_failed_write` decides: a status Moneybird answered with a refusal
+   (`DEFINITIVE_REJECTION_HTTP_STATUS_CODES`, 422 being the usual write rejection) proves
+   the refused request applied nothing, and closes as `failed`. Timeouts, 5xx and network
+   failures stay `ambiguous`, and so does a refusal that arrives *after* an accepted
+   mutation — the HTTP client counts those per execution (`safety.record_applied_write`,
+   reset in `pop_approval`), so the proof is evidence and not an assumption. 409 is
+   deliberately not definitive: it can mean the record already exists. Never widen this by
+   guessing from the message text; add the status to the set with a reason.
+   **What counts as a mutation is `retry_safe`, not the HTTP method.** Moneybird's batch
+   readers (`fetch_*_by_ids`) are POSTs to `.../synchronization.json`, and a method-only
+   test would score a bulk *read* as an applied write — which silently drags the next
+   rejection back to `ambiguous`. A request marked `retry_safe` is by construction a read,
+   because nothing that could change data may be retried automatically; keep that
+   invariant when adding endpoints.
 
 ## Domain gotchas learned the hard way
+
+- **Moneybird explains its refusals; pass that on.** A rejected write answers with the
+  field and the reason (`{"error": {"send_invoices_to_email": ["includes a domain which
+  cannot receive emails"]}}`), which is the only actionable part — `HTTP 422` alone is not
+  something a user or an agent can correct. `client._request` raises `MoneybirdHTTPError`
+  carrying `status_code` and the parsed `reported` body, rendered into the message by
+  `formatting.format_reported_error` and capped at `MAX_ERROR_DETAIL_CHARS`. Keep that cap
+  when touching it: the same text lands in the durable audit log.
+- **`search_tools` ranks on description text, so descriptions must use the words users
+  type.** BM25 (`fastmcp` `BM25SearchTransform`) indexes name + description + parameter
+  descriptions, with no tags or boost knobs, and weights *rare* words heavily. That made
+  "create a new contact" return `prepare_create_credit_invoice` first — "new" is rare in
+  the catalogue, "contact" appears in a dozen tool names — while `prepare_create_contact`
+  said only "Use this before creating a Moneybird contact". Lead a tool description with
+  the plain phrasings ("add a customer, client, supplier, or vendor"), and note that BM25
+  normalises for length, so a terse `*_from_approval` description can still outrank its
+  own `prepare_*`. Pinned by `tests/test_tool_discovery.py::ToolSearchRankingTests`, which
+  ranks in a **subprocess** with `MONEYBIRD_TOOL_DISCOVERY=search` and an explicit
+  `cwd`/`PYTHONPATH` on the repo root — the discovery mode is fixed per process at import,
+  and a `pip install`ed copy of this package in site-packages otherwise shadows the working
+  tree from any other cwd and silently ranks the released descriptions instead.
+  Enriching a *hidden* tool costs zero protocol bytes; only the seven always-visible
+  tools in `tool_discovery.ALWAYS_VISIBLE_TOOLS` affect the compact catalogue size.
 
 - **Meterverbruikfacturen hebben een first-class flow.** Gebruik
   `prepare_meter_usage_sales_invoices` met begin/eindstanden of `usage_kwh`; de tool rekent

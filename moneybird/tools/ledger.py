@@ -28,6 +28,7 @@ from ..invoicing import (
 )
 from ..safety import (
     approval_execution_state,
+    classify_failed_write,
     make_approval,
     pop_approval,
     record_approval_outcome,
@@ -412,7 +413,7 @@ def reclassify_document_lines_from_approval(approval_id: ApprovalId) -> dict[str
         audit_result = (
             "partial_failure"
             if writes_applied
-            else ("failed_pre_write" if phase == "preflight" else "ambiguous")
+            else classify_failed_write(exc, phase=phase)
         )
         record_approval_outcome(
             approval_id,

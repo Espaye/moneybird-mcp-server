@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("moneybird_mcp")
@@ -32,6 +33,32 @@ MAX_RETRY_DELAY_SECONDS = 60.0
 
 
 RETRYABLE_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
+
+
+# Statuses where Moneybird answered that it refused the request outright, so the
+# request it refused cannot have changed anything. A write that fails this way is
+# closed as failed rather than left unresolved.
+#
+# 409 Conflict is deliberately absent: it can mean the record already exists,
+# which is exactly the case where something may have been created already.
+# Retryable statuses are absent because they mean "no answer yet", not "no".
+DEFINITIVE_REJECTION_HTTP_STATUS_CODES = {
+    400,  # malformed request
+    401,  # unauthenticated
+    403,  # forbidden
+    404,  # target does not exist
+    405,  # method not allowed
+    406,  # not acceptable
+    410,  # gone
+    415,  # unsupported media type
+    422,  # validation rejected (Moneybird's usual write refusal)
+}
+
+
+# Cap on how much of a Moneybird error body is quoted back. Enough for the field
+# list of a validation failure, short enough that an unexpected body cannot flood
+# a tool result or the audit log.
+MAX_ERROR_DETAIL_CHARS = 800
 
 
 READ_ONLY_ANNOTATIONS = {
@@ -217,6 +244,37 @@ DOCUMENT_POSTABLE_ACCOUNT_TYPES = {"expenses", "direct_costs", "other_income_exp
 
 class MoneybirdError(RuntimeError):
     """Raised when Moneybird rejects a request or configuration is incomplete."""
+
+
+class MoneybirdHTTPError(MoneybirdError):
+    """A Moneybird response that carries a status code and its reported reason.
+
+    Two callers need more than the message text. A user (or an agent acting for
+    one) needs the field-level reason Moneybird gave, because ``HTTP 422`` alone
+    is not something anyone can correct. And write classification needs the
+    status code, because a refusal Moneybird answered with is proof that the
+    refused request changed nothing — which is the difference between a closed
+    failure and an unresolved entry in the audit trail.
+
+    Subclasses MoneybirdError so every existing ``except MoneybirdError`` keeps
+    working unchanged.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        reported: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.reported = reported
+
+    @property
+    def is_definitive_rejection(self) -> bool:
+        """True when Moneybird answered "no", so nothing can have been applied."""
+        return self.status_code in DEFINITIVE_REJECTION_HTTP_STATUS_CODES
 
 
 

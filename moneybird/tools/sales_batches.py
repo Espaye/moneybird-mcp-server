@@ -30,6 +30,7 @@ from ..invoicing import (
 )
 from ..safety import (
     approval_execution_state,
+    classify_failed_write,
     make_approval,
     pop_approval,
     record_approval_outcome,
@@ -187,7 +188,7 @@ def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
         audit_result = (
             "partial_failure"
             if writes_applied
-            else ("failed_pre_write" if phase == "preflight" else "ambiguous")
+            else classify_failed_write(exc, phase=phase)
         )
         record_approval_outcome(
             approval_id,
@@ -477,7 +478,7 @@ def batch_update_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
         audit_result = (
             "partial_failure"
             if writes_applied
-            else ("failed_pre_write" if phase == "preflight" else "ambiguous")
+            else classify_failed_write(exc, phase=phase)
         )
         record_approval_outcome(
             approval_id,
@@ -749,7 +750,7 @@ def batch_schedule_sales_invoices_from_approval(approval_id: ApprovalId) -> dict
         audit_result = (
             "partial_failure"
             if writes_applied
-            else ("failed_pre_write" if phase == "preflight" else "ambiguous")
+            else classify_failed_write(exc, phase=phase)
         )
         record_approval_outcome(
             approval_id,

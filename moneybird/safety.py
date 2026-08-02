@@ -14,6 +14,7 @@ import re
 import secrets
 import socket
 import sqlite3
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from typing import Any
 from .config import (
     APPROVAL_TTL_MINUTES,
     MoneybirdError,
+    MoneybirdHTTPError,
     data_dir,
     harden_private_file,
 )
@@ -399,6 +401,9 @@ def pop_approval(
                 "approval_id was claimed concurrently and cannot be executed again."
             )
         connection.commit()
+        # Every guarded write claims its approval here, so this is the one place
+        # that can start the applied-write ledger for all of them.
+        reset_applied_writes()
         return {
             "approval_id": approval_id,
             "claim_id": claim_id,
@@ -758,6 +763,55 @@ def classify_write_exception(exc: BaseException) -> str:
         if any(marker in message for marker in ambiguous_markers)
         else "failed"
     )
+
+
+# How many mutating Moneybird requests have succeeded during the write currently
+# being executed. Reset when an approval is claimed, incremented by the HTTP
+# client. It answers the only question that separates a closed failure from an
+# unresolved one: could anything have been applied before this error?
+_APPLIED_WRITES: ContextVar[int] = ContextVar("moneybird_applied_writes", default=0)
+
+
+def reset_applied_writes() -> None:
+    _APPLIED_WRITES.set(0)
+
+
+def record_applied_write() -> None:
+    """Count one mutating request that Moneybird accepted."""
+    _APPLIED_WRITES.set(_APPLIED_WRITES.get() + 1)
+
+
+def applied_write_count() -> int:
+    return _APPLIED_WRITES.get()
+
+
+def classify_failed_write(exc: BaseException, *, phase: str) -> str:
+    """Decide what a failed execution actually proved.
+
+    ``ambiguous`` exists for the cases where the write may or may not have
+    landed — a timeout, a 5xx, a dropped connection. It is expensive: it leaves
+    an unresolved entry in the durable audit trail that a human has to close.
+
+    Treating every post-dispatch error as ambiguous spends that cost on errors
+    that prove the opposite. When Moneybird answers 422 because an email domain
+    is unreachable, the request it rejected changed nothing, and nothing has been
+    applied yet in this execution — that is a closed failure. Recording it as
+    unresolved teaches people to ignore the state, which is what makes it useless
+    for the timeouts where it is real.
+    """
+    definitive = (
+        isinstance(exc, MoneybirdHTTPError)
+        and exc.is_definitive_rejection
+        # A rejection only proves *this* request applied nothing. If an earlier
+        # request in the same execution already succeeded, the action as a whole
+        # is not clean and stays for reconciliation.
+        and applied_write_count() == 0
+    )
+    if phase == "preflight" and classify_write_exception(exc) != "ambiguous":
+        return "failed_pre_write"
+    if definitive:
+        return "failed"
+    return "ambiguous"
 
 
 def append_audit_log(entry: dict[str, Any], administration_id: str | None = None) -> None:

@@ -27,6 +27,7 @@ from ..invoicing import (
 )
 from ..safety import (
     approval_execution_state,
+    classify_failed_write,
     make_approval,
     pop_approval,
     record_approval_outcome,
@@ -112,7 +113,7 @@ def prepare_create_contact(
     city: str = "",
     country: Annotated[str, Field(description="ISO 3166-1 alpha-2 country code.")] = "NL",
 ) -> dict[str, Any]:
-    """Use this before creating a Moneybird contact. Do not execute the write until the user explicitly confirms."""
+    """Use this to create a new contact: add a customer, client, supplier, or vendor to Moneybird. Use this before creating a Moneybird contact. Do not execute the write until the user explicitly confirms."""
     ctx.get_client()  # Resolve and bind the active administration to the approval.
     payload = clean_dict(
         {
@@ -373,7 +374,7 @@ def set_contacts_delivery_method_email_from_approval(approval_id: ApprovalId) ->
         audit_result = (
             "partial_failure"
             if writes_applied
-            else ("failed_pre_write" if phase == "preflight" else "ambiguous")
+            else classify_failed_write(exc, phase=phase)
         )
         record_approval_outcome(
             approval_id,
@@ -454,7 +455,7 @@ def prepare_update_contact(
     delivery_method: Annotated[str, Field(description="Invoice delivery method: 'Email', 'Simplerinvoicing', 'Post', or 'Manual'.")] = "",
     clear_fields: Annotated[list[str] | None, Field(description="Field names to blank on the contact, e.g. ['send_invoices_to_email']. Empty fields elsewhere mean 'keep current value'.")] = None,
 ) -> dict[str, Any]:
-    """Use this before updating a Moneybird contact. Do not execute the write until the user explicitly confirms."""
+    """Use this to change or edit an existing contact: update a company's or person's name, address, email, phone, or delivery method. Do not execute the write until the user explicitly confirms."""
     allowed_clear_fields = {
         "company_name",
         "firstname",
