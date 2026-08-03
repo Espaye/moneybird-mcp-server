@@ -22,6 +22,7 @@ from ..formatting import (
     money_decimal,
 )
 from ..invoicing import (
+    build_batch_invoice_payload,
     build_merge_snapshot_from_invoice,
     build_recent_sales_invoice_send_method_audit,
     evaluate_merge_compatibility,
@@ -256,54 +257,65 @@ def prepare_create_sales_invoice_draft(
     contact_id: ContactId,
     details: Annotated[
         list[dict[str, Any]],
-        Field(description="Invoice lines. Each dict: description, price (decimal string, incl/excl VAT follows the administration setting), and optional amount, tax_rate_id, ledger_account_id, product_id, period."),
+        Field(
+            description=(
+                "Invoice lines. Each dict needs description and price (decimal string); "
+                "amount, ledger_account_id, product_id, and period are optional. "
+                "tax_rate_id is optional only when product_id supplies a tax rate or "
+                "the contact has a previous invoice whose tax rate can be previewed."
+            )
+        ),
     ],
     reference: Annotated[str, Field(description="Reference text shown on the invoice.")] = "",
     invoice_date: OptionalDateString = "",
     due_date: OptionalDateString = "",
     currency: Annotated[str, Field(description="ISO currency code.")] = "EUR",
+    prices_are_incl_tax: Annotated[
+        bool | None,
+        Field(
+            description=(
+                "Whether line prices include VAT. Empty uses the contact's latest "
+                "invoice setting."
+            )
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Use this to make a new draft sales invoice for a customer: write, bill, or charge for goods or services. Do not execute the write until the user explicitly confirms."""
     if not details:
         raise MoneybirdError("At least one invoice line is required.")
 
     client = ctx.get_client()
-    client.get_contact(contact_id)  # Validate scope and bind the approval to this tenant.
-
-    normalized_details = []
-    for detail in details:
-        normalized_details.append(
-            clean_dict(
-                {
-                    "description": detail.get("description"),
-                    "price": detail.get("price"),
-                    "amount": detail.get("amount", "1"),
-                    "tax_rate_id": detail.get("tax_rate_id"),
-                    "ledger_account_id": detail.get("ledger_account_id"),
-                    "product_id": detail.get("product_id"),
-                    "period": detail.get("period"),
-                }
-            )
-        )
-
-    payload = clean_dict(
-        {
-            "contact_id": contact_id,
-            "reference": reference,
-            "invoice_date": invoice_date,
-            "due_date": due_date,
-            "currency": currency,
-            "details_attributes": normalized_details,
-        }
-    )
+    entry: dict[str, Any] = {
+        "contact_id": contact_id,
+        "details": details,
+        "reference": reference,
+        "invoice_date": invoice_date,
+        "due_date": due_date,
+        "currency": currency,
+    }
+    if prices_are_incl_tax is not None:
+        entry["prices_are_incl_tax"] = prices_are_incl_tax
+    prepared = build_batch_invoice_payload(client, entry)
+    payload = prepared["sales_invoice"]
+    totals = prepared["totals"]
+    total_incl_tax = totals["total_price_incl_tax"]
     return stage_write(
         "create_sales_invoice_draft",
         summary=(
             f"Create draft sales invoice for contact {contact_id} "
-            f"with {len(normalized_details)} line(s)"
+            f"with {len(payload['details_attributes'])} line(s), total "
+            f"{currency} {total_incl_tax} incl. VAT"
         ),
         payload=payload,
-        preview=payload,
+        preview={
+            "contact": prepared["contact"],
+            "reference": payload.get("reference", ""),
+            "currency": payload.get("currency") or currency,
+            "prices_are_incl_tax": payload.get("prices_are_incl_tax", False),
+            "line_items": prepared["preview_rows"],
+            **totals,
+            "potential_duplicates": prepared["duplicates"],
+        },
     )
 
 

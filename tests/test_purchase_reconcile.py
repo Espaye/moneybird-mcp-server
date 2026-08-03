@@ -26,7 +26,7 @@ from purchase_test_support import (
     target_july as _target_july,
 )
 
-from moneybird.purchase_reconcile import (
+from moneybird_mcp.purchase_reconcile import (
     _map_lines,
     build_explicit_purchase_invoice_reconcile,
     build_reconcile_purchase_invoice,
@@ -36,7 +36,7 @@ from moneybird.purchase_reconcile import (
 
 class PurchaseInvoiceReferenceLookupTests(unittest.TestCase):
     def test_uses_server_side_reference_filter_and_exact_match(self):
-        from moneybird.client import MoneybirdClient
+        from moneybird_mcp.client import MoneybirdClient
 
         client = MoneybirdClient("token", "123")
         document = {
@@ -64,7 +64,7 @@ class PurchaseInvoiceReferenceLookupTests(unittest.TestCase):
         )
 
     def test_rejects_ambiguous_exact_reference(self):
-        from moneybird.client import MoneybirdClient
+        from moneybird_mcp.client import MoneybirdClient
 
         client = MoneybirdClient("token", "123")
         matches = [
@@ -293,7 +293,7 @@ class BuildExplicitReconcileTests(unittest.TestCase):
 
 class ReconcileExecutionSafetyTests(unittest.TestCase):
     def test_executes_and_verifies_total_lines_tax_mode_and_version(self):
-        from moneybird.tools.purchases import _execute_reconcile
+        from moneybird_mcp.tools.purchases import _execute_reconcile
 
         client = FakeClient([_reference_june(), _target_july()])
         payload = build_reconcile_purchase_invoice(
@@ -304,9 +304,9 @@ class ReconcileExecutionSafetyTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "moneybird.tools.purchases.mark_write_dispatch_started"
+                "moneybird_mcp.tools.purchases.mark_write_dispatch_started"
             ),
-            mock.patch("moneybird.tools.purchases.mark_write_verifying"),
+            mock.patch("moneybird_mcp.tools.purchases.mark_write_verifying"),
         ):
             result = _execute_reconcile(client, payload)
 
@@ -318,7 +318,7 @@ class ReconcileExecutionSafetyTests(unittest.TestCase):
         self.assertEqual(result["version_after"], 21)
 
     def test_aborts_before_write_when_document_version_changed(self):
-        from moneybird.tools.purchases import _execute_reconcile
+        from moneybird_mcp.tools.purchases import _execute_reconcile
 
         client = FakeClient([_reference_june(), _target_july()])
         payload = build_reconcile_purchase_invoice(
@@ -334,7 +334,7 @@ class ReconcileExecutionSafetyTests(unittest.TestCase):
         self.assertEqual(client.update_calls, 0)
 
     def test_target_total_change_uses_prewrite_total_for_concurrency_check(self):
-        from moneybird.tools.purchases import _execute_reconcile
+        from moneybird_mcp.tools.purchases import _execute_reconcile
 
         client = FakeClient([_reference_june(), _target_july()])
         payload = build_reconcile_purchase_invoice(
@@ -346,9 +346,9 @@ class ReconcileExecutionSafetyTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "moneybird.tools.purchases.mark_write_dispatch_started"
+                "moneybird_mcp.tools.purchases.mark_write_dispatch_started"
             ),
-            mock.patch("moneybird.tools.purchases.mark_write_verifying"),
+            mock.patch("moneybird_mcp.tools.purchases.mark_write_verifying"),
         ):
             result = _execute_reconcile(client, payload)
 
@@ -357,9 +357,9 @@ class ReconcileExecutionSafetyTests(unittest.TestCase):
         self.assertTrue(result["verified_total_unchanged"])
 
     def test_full_explicit_prepare_approve_verify_flow(self):
-        from moneybird import safety, tools
-        from moneybird.credentials import set_active_administration_id
-        from moneybird.tools import _context as tool_context
+        from moneybird_mcp import safety, tools
+        from moneybird_mcp.credentials import set_active_administration_id
+        from moneybird_mcp.tools import _context as tool_context
 
         target = {
             "id": "wetterskip-2026",

@@ -1,4 +1,4 @@
-"""Tests for the console entry point configuration (moneybird.server)."""
+"""Tests for the console entry point configuration (moneybird_mcp.server)."""
 from __future__ import annotations
 
 import os
@@ -15,7 +15,7 @@ os.environ.setdefault(
     tempfile.mkdtemp(prefix="moneybird_mcp_test_state_"),
 )
 
-from moneybird.server import TRANSPORTS, build_config
+from moneybird_mcp.server import TRANSPORTS, build_config
 
 
 def _clean_environ() -> dict[str, str]:
@@ -153,18 +153,18 @@ class BuildConfigTests(unittest.TestCase):
         self.assertEqual(set(TRANSPORTS), {"stdio", "http", "sse"})
 
     def test_network_main_installs_edge_auth_before_credential_policy(self) -> None:
-        import moneybird.server as server_module
-        from moneybird.auth import SharedSecretAuthMiddleware
-        from moneybird.credentials import CredentialModeMiddleware
+        import moneybird_mcp.server as server_module
+        from moneybird_mcp.auth import SharedSecretAuthMiddleware
+        from moneybird_mcp.credentials import CredentialModeMiddleware
 
         os.environ["MCP_AUTH_TOKEN"] = "sekrit"
         fake_mcp = mock.Mock()
         fake_mcp.http_app.return_value = object()
-        fake_tools = types.ModuleType("moneybird.tools")
+        fake_tools = types.ModuleType("moneybird_mcp.tools")
         fake_tools.mcp = fake_mcp
 
         with (
-            mock.patch.dict(sys.modules, {"moneybird.tools": fake_tools}),
+            mock.patch.dict(sys.modules, {"moneybird_mcp.tools": fake_tools}),
             mock.patch("uvicorn.run") as run,
         ):
             server_module.main(["--transport", "http"])
@@ -182,7 +182,7 @@ class BuildConfigTests(unittest.TestCase):
         run.assert_called_once()
 
     def test_legacy_entrypoint_defers_tool_import_to_shared_main(self) -> None:
-        import moneybird.server as server_module
+        import moneybird_mcp.server as server_module
 
         entrypoint = Path(__file__).resolve().parent.parent / "moneybird_mcp_server.py"
         with (
@@ -216,11 +216,11 @@ class MissingCredentialAnnouncementTests(unittest.TestCase):
             self.instructions = "ORIGINAL INSTRUCTIONS"
 
     def _announce(self, mode: str, *, configured: bool) -> _Server:
-        from moneybird import server as server_module
+        from moneybird_mcp import server as server_module
 
         server = self._Server()
         with mock.patch(
-            "moneybird.credentials.credentials_are_configured", return_value=configured
+            "moneybird_mcp.credentials.credentials_are_configured", return_value=configured
         ):
             server_module._announce_missing_credentials(mode, server)
         return server
@@ -229,7 +229,7 @@ class MissingCredentialAnnouncementTests(unittest.TestCase):
         server = self._announce("local", configured=False)
         self.assertTrue(server.instructions.startswith("\nSETUP INCOMPLETE"))
         self.assertIn("MONEYBIRD_ACCESS_TOKEN", server.instructions)
-        self.assertIn("python -m moneybird.oauth_login", server.instructions)
+        self.assertIn("python -m moneybird_mcp.oauth_login", server.instructions)
         # The real instructions must survive: the banner is a prefix, not a
         # replacement, or a configured-later session loses every rule.
         self.assertIn("ORIGINAL INSTRUCTIONS", server.instructions)
@@ -247,11 +247,11 @@ class MissingCredentialAnnouncementTests(unittest.TestCase):
     def test_hosted_mode_is_never_annotated(self) -> None:
         # Every hosted request carries its own credentials; there is nothing
         # missing to announce, and the check is skipped before it runs.
-        from moneybird import server as server_module
+        from moneybird_mcp import server as server_module
 
         server = self._Server()
         with mock.patch(
-            "moneybird.credentials.credentials_are_configured"
+            "moneybird_mcp.credentials.credentials_are_configured"
         ) as probe:
             server_module._announce_missing_credentials(
                 "hosted_request_only", server
@@ -260,7 +260,7 @@ class MissingCredentialAnnouncementTests(unittest.TestCase):
         self.assertEqual(server.instructions, "ORIGINAL INSTRUCTIONS")
 
     def test_a_failure_to_annotate_never_stops_startup(self) -> None:
-        from moneybird import server as server_module
+        from moneybird_mcp import server as server_module
 
         class _Locked:
             instructions = "X"
@@ -269,9 +269,40 @@ class MissingCredentialAnnouncementTests(unittest.TestCase):
                 raise RuntimeError("read-only")
 
         with mock.patch(
-            "moneybird.credentials.credentials_are_configured", return_value=False
+            "moneybird_mcp.credentials.credentials_are_configured", return_value=False
         ):
             server_module._announce_missing_credentials("local", _Locked())
+
+
+class ServerStatusCredentialTests(unittest.TestCase):
+    def test_status_reports_missing_credentials_without_resolving_a_client(self) -> None:
+        from moneybird_mcp.tools import core
+
+        with (
+            mock.patch.object(
+                core,
+                "credentials_are_configured",
+                return_value=False,
+            ),
+            mock.patch.object(core.ctx, "get_client") as get_client,
+            mock.patch.dict(
+                os.environ,
+                {"MONEYBIRD_CREDENTIAL_MODE": "local"},
+            ),
+        ):
+            status = core.get_server_status()
+
+        get_client.assert_not_called()
+        self.assertEqual(status["version"], "0.6.0")
+        self.assertEqual(
+            status["credential_state"],
+            {
+                "mode": "local",
+                "configured": False,
+                "message": mock.ANY,
+            },
+        )
+        self.assertIn("MONEYBIRD_ACCESS_TOKEN", status["credential_state"]["message"])
 
 
 class PackagingVersionSyncTests(unittest.TestCase):
@@ -283,7 +314,10 @@ class PackagingVersionSyncTests(unittest.TestCase):
         import tomllib
         from pathlib import Path
 
+        import moneybird_mcp
+
         root = Path(__file__).resolve().parent.parent
         pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         manifest = json.loads((root / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(pyproject["project"]["version"], manifest["version"])
+        self.assertEqual(pyproject["project"]["version"], moneybird_mcp.__version__)

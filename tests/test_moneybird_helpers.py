@@ -10,7 +10,7 @@ from unittest import mock
 os.environ["MONEYBIRD_MCP_DATA_DIR"] = tempfile.mkdtemp(prefix="moneybird_mcp_test_state_")
 
 import moneybird_mcp_server as server
-from moneybird import safety
+from moneybird_mcp import safety
 
 
 class MoneybirdHelperTests(unittest.TestCase):
@@ -231,7 +231,7 @@ class MoneybirdHelperTests(unittest.TestCase):
         self.assertIn("Elektra B4 - 37,02 kWh", table)
 
     def test_invoice_line_preview_respects_prices_including_tax(self) -> None:
-        from moneybird.invoicing import build_invoice_line_preview
+        from moneybird_mcp.invoicing import build_invoice_line_preview
 
         row = build_invoice_line_preview(
             customer_id="B4",
@@ -399,7 +399,7 @@ class MoneybirdHelperTests(unittest.TestCase):
 
 class GuidanceTests(unittest.TestCase):
     def test_playbook_file_exists_and_has_key_sections(self) -> None:
-        from moneybird import guidance
+        from moneybird_mcp import guidance
 
         self.assertTrue(guidance.PLAYBOOK_PATH.exists())
         text = guidance.load_playbook()
@@ -409,7 +409,7 @@ class GuidanceTests(unittest.TestCase):
         self.assertIn("Scenario-recepten", text)
 
     def test_every_prompt_carries_hard_rails_inline(self) -> None:
-        from moneybird import guidance
+        from moneybird_mcp import guidance
 
         renderers = [
             guidance.prompt_verwerk_achterstand(period="2025"),
@@ -437,7 +437,7 @@ class GuidanceTests(unittest.TestCase):
 
         from fastmcp import FastMCP
 
-        from moneybird import guidance
+        from moneybird_mcp import guidance
 
         scratch = FastMCP(name="guidance-test")
         guidance.register_guidance(scratch)
@@ -467,7 +467,7 @@ class CredentialsTests(unittest.TestCase):
     def setUp(self) -> None:
         import fastmcp.server.dependencies as dep
 
-        from moneybird import credentials as cr
+        from moneybird_mcp import credentials as cr
 
         self.cr = cr
         self.dep = dep
@@ -515,7 +515,7 @@ class CredentialsTests(unittest.TestCase):
 
 class SyncIndexPathTests(unittest.TestCase):
     def test_path_is_per_administration_and_sanitized(self) -> None:
-        from moneybird import sync
+        from moneybird_mcp import sync
 
         # No administration: same basename as the legacy single file, inside data_dir().
         self.assertEqual(sync.sync_index_path(None).name, sync.LEGACY_SYNC_INDEX_PATH.name)
@@ -524,7 +524,7 @@ class SyncIndexPathTests(unittest.TestCase):
         self.assertNotEqual(per_admin.name, sync.LEGACY_SYNC_INDEX_PATH.name)
 
     def test_round_trip_and_legacy_migration(self) -> None:
-        from moneybird import sync
+        from moneybird_mcp import sync
 
         orig_base = sync.SYNC_INDEX_BASENAME
         orig_legacy = sync.LEGACY_SYNC_INDEX_PATH
@@ -561,7 +561,7 @@ class ApprovalSafetyTests(unittest.TestCase):
         safety.clear_pending_approvals()
 
     def test_approval_is_bound_to_administration(self) -> None:
-        from moneybird.credentials import set_active_administration_id
+        from moneybird_mcp.credentials import set_active_administration_id
 
         set_active_administration_id("admin-a")
         approval = safety.make_approval("demo", {"value": 1}, "Demo")
@@ -579,7 +579,7 @@ class ApprovalSafetyTests(unittest.TestCase):
         self.assertEqual(pending["administration_id"], "admin-a")
 
     def test_approval_survives_restart_and_pops_once(self) -> None:
-        from moneybird.credentials import set_active_administration_id
+        from moneybird_mcp.credentials import set_active_administration_id
 
         set_active_administration_id("admin-a")
         approval = safety.make_approval("demo", {"value": 2}, "Demo")
@@ -597,7 +597,7 @@ class ApprovalSafetyTests(unittest.TestCase):
             )
 
     def test_expired_approval_is_rejected(self) -> None:
-        from moneybird.credentials import set_active_administration_id
+        from moneybird_mcp.credentials import set_active_administration_id
 
         set_active_administration_id("admin-a")
         approval = safety.make_approval("demo", {"value": 3}, "Demo")
@@ -615,7 +615,7 @@ class ApprovalSafetyTests(unittest.TestCase):
 
 class ClientRetrySafetyTests(unittest.TestCase):
     def test_write_network_error_is_not_retried(self) -> None:
-        import moneybird.client as client_module
+        import moneybird_mcp.client as client_module
 
         client = client_module.MoneybirdClient("token", "123")
         pooled_client = mock.Mock()
@@ -633,7 +633,7 @@ class ClientRetrySafetyTests(unittest.TestCase):
         self.assertIn("ambiguous", str(raised.exception))
 
     def test_bank_booking_link_translates_price_to_price_base(self) -> None:
-        import moneybird.client as client_module
+        import moneybird_mcp.client as client_module
 
         client = client_module.MoneybirdClient("token", "123")
         with mock.patch.object(
@@ -661,7 +661,7 @@ class ClientRetrySafetyTests(unittest.TestCase):
         )
 
     def test_bank_invoice_link_keeps_price_in_invoice_currency(self) -> None:
-        import moneybird.client as client_module
+        import moneybird_mcp.client as client_module
 
         client = client_module.MoneybirdClient("token", "123")
         with mock.patch.object(
@@ -737,7 +737,7 @@ class MeterUsageTests(unittest.TestCase):
             return [{"id": "tax-21", "percentage": "21.0"}]
 
     def test_meter_usage_builds_entries_and_skips_low_usage(self) -> None:
-        from moneybird.invoicing import build_meter_usage_entries
+        from moneybird_mcp.invoicing import build_meter_usage_entries
 
         result = build_meter_usage_entries(
             self.FakeClient(),
@@ -758,9 +758,9 @@ class MeterUsageTests(unittest.TestCase):
         self.assertEqual(result["decisions"][1]["action"], "skip")
 
     def test_meter_usage_prepare_tool_returns_single_approval_preview(self) -> None:
-        from moneybird import tools
-        from moneybird.credentials import set_active_administration_id
-        from moneybird.tools import _context as tool_context
+        from moneybird_mcp import tools
+        from moneybird_mcp.credentials import set_active_administration_id
+        from moneybird_mcp.tools import _context as tool_context
 
         fake = self.FakeClient()
 
@@ -789,9 +789,18 @@ class MeterUsageTests(unittest.TestCase):
             "invoice-B5",
         )
         self.assertIn("53.43", prepared["preview"]["preview_table"])
+        self.assertIn("EUR 53.43 incl. VAT", prepared["summary"])
+        self.assertEqual(
+            prepared["preview"]["totals_by_currency"]["EUR"],
+            {
+                "total_price_excl_tax": "44.16",
+                "total_tax": "9.27",
+                "total_price_incl_tax": "53.43",
+            },
+        )
 
     def test_batch_preview_rejects_tax_percentage_mismatch(self) -> None:
-        from moneybird.invoicing import build_batch_invoice_payload
+        from moneybird_mcp.invoicing import build_batch_invoice_payload
 
         with self.assertRaises(server.MoneybirdError):
             build_batch_invoice_payload(
@@ -851,9 +860,9 @@ class BatchScheduleTests(unittest.TestCase):
             return dict(self.invoice)
 
     def test_batch_schedule_executes_and_verifies(self) -> None:
-        from moneybird import tools
-        from moneybird.credentials import set_active_administration_id
-        from moneybird.tools import _context as tool_context
+        from moneybird_mcp import tools
+        from moneybird_mcp.credentials import set_active_administration_id
+        from moneybird_mcp.tools import _context as tool_context
 
         fake = self.FakeClient()
 
@@ -885,8 +894,8 @@ class _ToolPatches:
         self.fake = fake
 
     def __enter__(self):
-        from moneybird.credentials import set_active_administration_id
-        from moneybird.tools import _context as tool_context
+        from moneybird_mcp.credentials import set_active_administration_id
+        from moneybird_mcp.tools import _context as tool_context
 
         def get_fake_client(*args, **kwargs):
             set_active_administration_id(self.fake.administration_id)
@@ -935,7 +944,7 @@ class RegisterPaymentTests(unittest.TestCase):
             return dict(self.invoice)
 
     def test_full_payment_prepares_and_verifies(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient()
         with _ToolPatches(fake):
@@ -953,7 +962,7 @@ class RegisterPaymentTests(unittest.TestCase):
         self.assertEqual(verification["open_amount_after"], "0.00")
 
     def test_generic_executor_dispatches_pending_action(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient()
         with _ToolPatches(fake):
@@ -975,7 +984,7 @@ class RegisterPaymentTests(unittest.TestCase):
             )
 
     def test_overpayment_warns_in_preview(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient()
         with _ToolPatches(fake):
@@ -990,7 +999,7 @@ class RegisterPaymentTests(unittest.TestCase):
         )
 
     def test_rejects_unknown_document_type(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         with self.assertRaises(server.MoneybirdError):
             tools.prepare_register_payment(
@@ -1043,7 +1052,7 @@ class LinkBankMutationTests(unittest.TestCase):
             self.mutation["amount_open"] = "0.00"
 
     def test_link_executes_and_verifies(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient()
         with _ToolPatches(fake):
@@ -1064,7 +1073,7 @@ class LinkBankMutationTests(unittest.TestCase):
         self.assertEqual(result["verification"]["after"]["state"], "processed")
 
     def test_rejects_invalid_booking_type(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         with self.assertRaises(server.MoneybirdError):
             tools.prepare_link_bank_mutation_booking(
@@ -1183,7 +1192,7 @@ class ReclassifyBankMutationBookingsTests(unittest.TestCase):
         }
 
     def test_batch_reclassifies_and_verifies(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient()
         with _ToolPatches(fake):
@@ -1225,7 +1234,7 @@ class ReclassifyBankMutationBookingsTests(unittest.TestCase):
         )
 
     def test_combined_workflow_uses_single_parent_approval(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient()
         with _ToolPatches(fake):
@@ -1244,7 +1253,7 @@ class ReclassifyBankMutationBookingsTests(unittest.TestCase):
         self.assertEqual(safety.pending_approval_count(), 0)
 
     def test_target_link_failure_restores_source_booking(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient(fail_target_link=True)
         with _ToolPatches(fake):
@@ -1264,7 +1273,7 @@ class ReclassifyBankMutationBookingsTests(unittest.TestCase):
         )
 
     def test_restore_does_not_confuse_existing_sibling_with_source(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient(fail_target_link=True)
         fake.mutation["ledger_account_bookings"].append(
@@ -1294,7 +1303,7 @@ class ReclassifyBankMutationBookingsTests(unittest.TestCase):
         )
 
     def test_batch_aborts_before_writes_when_version_changed(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient()
         with _ToolPatches(fake):
@@ -1339,7 +1348,7 @@ class UnlinkBankMutationTests(unittest.TestCase):
             self.mutation["version"] += 1
 
     def test_unlink_requires_existing_booking(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient()
         with _ToolPatches(fake):
@@ -1351,7 +1360,7 @@ class UnlinkBankMutationTests(unittest.TestCase):
                 )
 
     def test_unlink_executes_and_verifies(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient()
         with _ToolPatches(fake):
@@ -1407,7 +1416,7 @@ class CreditInvoiceTests(unittest.TestCase):
             return dict(self.credit_invoice)
 
     def test_credit_invoice_verifies_negated_total(self) -> None:
-        from moneybird import tools
+        from moneybird_mcp import tools
 
         fake = self.FakeClient()
         with _ToolPatches(fake):
@@ -1419,7 +1428,7 @@ class CreditInvoiceTests(unittest.TestCase):
 
 class ReportEndpointTests(unittest.TestCase):
     def test_aging_reports_use_period_until(self) -> None:
-        import moneybird.client as client_module
+        import moneybird_mcp.client as client_module
 
         client = client_module.MoneybirdClient("token", "123")
         with mock.patch.object(client, "_request", return_value={}) as request:
@@ -1431,7 +1440,7 @@ class ReportEndpointTests(unittest.TestCase):
         )
 
     def test_pagination_rejected_for_unpaginated_report(self) -> None:
-        import moneybird.client as client_module
+        import moneybird_mcp.client as client_module
 
         client = client_module.MoneybirdClient("token", "123")
         with self.assertRaises(server.MoneybirdError):

@@ -1,6 +1,6 @@
 """Write-safety machinery: durable approval state and the JSONL audit export.
 
-Approvals are persisted in a small SQLite database inside :func:`~moneybird.config.data_dir`
+Approvals are persisted in a small SQLite database inside :func:`~moneybird_mcp.config.data_dir`
 so a prepared write survives a server restart and works when the server runs with more
 than one worker process (prepare and execute may land on different processes). Approval
 claims and outcomes remain in SQLite instead of deleting the row before an upstream write.

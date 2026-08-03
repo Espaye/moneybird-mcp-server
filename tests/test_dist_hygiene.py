@@ -9,8 +9,10 @@ from __future__ import annotations
 import importlib.util
 import io
 import pathlib
+import shutil
 import tarfile
 import tempfile
+import tomllib
 import unittest
 import zipfile
 
@@ -28,10 +30,10 @@ def _load_script():
 check_dist_hygiene = _load_script()
 
 VERSION = "9.9.9"
-CLEAN_WHEEL = ["moneybird/__init__.py", f"moneybird_mcp-{VERSION}.dist-info/METADATA"]
+CLEAN_WHEEL = ["moneybird_mcp/__init__.py", f"moneybird_mcp-{VERSION}.dist-info/METADATA"]
 CLEAN_SDIST = [
     f"moneybird_mcp-{VERSION}/pyproject.toml",
-    f"moneybird_mcp-{VERSION}/moneybird/__init__.py",
+    f"moneybird_mcp-{VERSION}/moneybird_mcp/__init__.py",
     f"moneybird_mcp-{VERSION}/tests/test_x.py",
 ]
 
@@ -72,13 +74,13 @@ class DistHygieneTests(unittest.TestCase):
 
     def test_packaged_secrets_are_flagged(self) -> None:
         for leaked in (
-            "moneybird/.env",
-            "moneybird/moneybird_oauth_tokens.json",
-            "moneybird/moneybird_approvals.sqlite3",
-            "moneybird/.moneybird_sync_index_123.json",
-            "moneybird/.moneybird_search_fts_123.sqlite3",
-            "moneybird/.moneybird_audit_log_123.jsonl",
-            "moneybird/gateway_demo_users.json",
+            "moneybird_mcp/.env",
+            "moneybird_mcp/moneybird_oauth_tokens.json",
+            "moneybird_mcp/moneybird_approvals.sqlite3",
+            "moneybird_mcp/.moneybird_sync_index_123.json",
+            "moneybird_mcp/.moneybird_search_fts_123.sqlite3",
+            "moneybird_mcp/.moneybird_audit_log_123.jsonl",
+            "moneybird_mcp/gateway_demo_users.json",
         ):
             with self.subTest(leaked=leaked):
                 problems = self._check([*CLEAN_WHEEL, leaked], CLEAN_SDIST)
@@ -110,9 +112,19 @@ class DistHygieneTests(unittest.TestCase):
     def test_real_artifacts_pass_when_present(self) -> None:
         """If dist/ holds a real build, it must be clean too."""
         dist = _SCRIPT.parent.parent / "dist"
-        if not dist.is_dir() or len(list(dist.glob("*.whl"))) != 1:
-            self.skipTest("no single freshly built wheel in dist/")
-        self.assertEqual(check_dist_hygiene.check(dist), [])
+        project = tomllib.loads(
+            (_SCRIPT.parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        version = project["project"]["version"]
+        current_wheels = list(dist.glob(f"moneybird_mcp-{version}-*.whl"))
+        current_sdists = list(dist.glob(f"moneybird_mcp-{version}.tar.gz"))
+        if len(current_wheels) != 1 or len(current_sdists) != 1:
+            self.skipTest(f"no single freshly built {version} wheel/sdist in dist/")
+        with tempfile.TemporaryDirectory() as raw:
+            current = pathlib.Path(raw)
+            shutil.copy2(current_wheels[0], current / current_wheels[0].name)
+            shutil.copy2(current_sdists[0], current / current_sdists[0].name)
+            self.assertEqual(check_dist_hygiene.check(current), [])
 
 
 if __name__ == "__main__":

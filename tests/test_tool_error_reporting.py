@@ -18,10 +18,10 @@ from unittest import mock
 
 from fastmcp.exceptions import ToolError
 
-from moneybird.config import MoneybirdError
-from moneybird.tools import _context
-from moneybird.tools import contacts as contact_tools
-from moneybird.tools._registry import mcp
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.tools import _context
+from moneybird_mcp.tools import contacts as contact_tools
+from moneybird_mcp.tools._registry import mcp
 
 MESSAGE = "No Moneybird credentials found. Set MONEYBIRD_ACCESS_TOKEN ..."
 

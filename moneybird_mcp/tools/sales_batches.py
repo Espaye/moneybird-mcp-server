@@ -79,10 +79,14 @@ def _prepare_batch_create_sales_invoices(
         "fail_on_duplicate": fail_on_duplicate,
     }
     fingerprint = duplicate_fingerprint("batch_create_sales_invoices", payload)
+    total_text = ", ".join(
+        f"{currency} {totals['total_price_incl_tax']} incl. VAT"
+        for currency, totals in sorted(preview["totals_by_currency"].items())
+    )
     approval = make_approval(
         "batch_create_sales_invoices",
         {**payload, "fingerprint": fingerprint},
-        f"Create {len(batch_items)} sales invoice(s) in batch",
+        f"Create {len(batch_items)} sales invoice(s) in batch, totaling {total_text}",
     )
     approval["preview"] = preview
     approval["payload"] = {**payload, "fingerprint": fingerprint}

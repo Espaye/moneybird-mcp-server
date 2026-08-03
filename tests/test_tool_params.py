@@ -5,13 +5,13 @@ import asyncio
 import unittest
 from typing import get_args
 
-from moneybird.config import (
+from moneybird_mcp.config import (
     FINANCIAL_MUTATION_UNLINK_BOOKING_TYPES,
     PAYABLE_DOCUMENT_KINDS,
     REPORT_ENDPOINTS,
     VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
 )
-from moneybird.tools import _params
+from moneybird_mcp.tools import _params
 
 
 class LiteralSyncTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class ToolSchemaTests(unittest.TestCase):
     """The annotations must actually surface in the generated MCP schemas."""
 
     def _tool_schema(self, name: str) -> dict:
-        from moneybird.tools import mcp
+        from moneybird_mcp.tools import mcp
 
         return asyncio.run(mcp.get_tool(name)).parameters
 
@@ -95,7 +95,7 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertIn("purchase_reconciliations", schema)
 
     def test_all_tools_still_register(self) -> None:
-        from moneybird.tools import mcp
+        from moneybird_mcp.tools import mcp
 
         tools = asyncio.run(mcp.list_tools())
         self.assertGreater(len(tools), 60)

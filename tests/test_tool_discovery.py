@@ -9,9 +9,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fastmcp import FastMCP
+from fastmcp import Client, FastMCP
+from fastmcp.exceptions import ToolError
 
-from moneybird.tool_discovery import (
+from moneybird_mcp.config import (
+    PREPARE_ANNOTATIONS,
+    READ_ONLY_ANNOTATIONS,
+    WRITE_ANNOTATIONS,
+)
+from moneybird_mcp.tool_discovery import (
     ALWAYS_VISIBLE_TOOLS,
     configure_tool_discovery,
 )
@@ -24,11 +30,23 @@ def _scratch_server() -> FastMCP:
         return "ok"
 
     for name in ALWAYS_VISIBLE_TOOLS:
-        server.tool(stub, name=name)
+        annotations = (
+            WRITE_ANNOTATIONS
+            if name == "execute_approved_action"
+            else READ_ONLY_ANNOTATIONS
+        )
+        server.tool(stub, name=name, annotations=annotations)
     server.tool(
         stub,
         name="prepare_hidden_bank_workflow",
         description="Prepare a bank mutation reclassification workflow.",
+        annotations=PREPARE_ANNOTATIONS,
+    )
+    server.tool(
+        stub,
+        name="hidden_write_from_approval",
+        description="Execute a prepared mutation.",
+        annotations=WRITE_ANNOTATIONS,
     )
     return server
 
@@ -43,12 +61,91 @@ class ToolDiscoveryTests(unittest.TestCase):
     def test_search_mode_exposes_compact_catalogue(self) -> None:
         server = _scratch_server()
         self.assertEqual(configure_tool_discovery(server, "search"), "search")
-        names = {tool.name for tool in asyncio.run(server.list_tools())}
+        tools = asyncio.run(server.list_tools())
+        names = {tool.name for tool in tools}
         self.assertEqual(
             names,
             {*ALWAYS_VISIBLE_TOOLS, "search_tools", "call_tool"},
         )
         self.assertNotIn("prepare_hidden_bank_workflow", names)
+        proxy = next(tool for tool in tools if tool.name == "call_tool")
+        self.assertTrue(proxy.annotations.readOnlyHint)
+        self.assertFalse(proxy.annotations.destructiveHint)
+
+    def test_call_tool_runs_read_only_and_prepare_tools(self) -> None:
+        server = _scratch_server()
+        configure_tool_discovery(server, "search")
+
+        async def call() -> str:
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "call_tool",
+                    {
+                        "name": "prepare_hidden_bank_workflow",
+                        "arguments": {},
+                    },
+                )
+                return str(result.content[0].text)
+
+        self.assertEqual(asyncio.run(call()), "ok")
+
+    def test_call_tool_refuses_mutating_executor(self) -> None:
+        server = _scratch_server()
+        configure_tool_discovery(server, "search")
+
+        async def call() -> None:
+            async with Client(server) as client:
+                await client.call_tool(
+                    "call_tool",
+                    {
+                        "name": "hidden_write_from_approval",
+                        "arguments": {},
+                    },
+                )
+
+        with self.assertRaisesRegex(
+            ToolError,
+            "directly exposed execute_approved_action",
+        ):
+            asyncio.run(call())
+
+    def test_direct_call_refuses_hidden_mutating_executor(self) -> None:
+        server = _scratch_server()
+        configure_tool_discovery(server, "search")
+
+        async def call() -> None:
+            async with Client(server) as client:
+                await client.call_tool("hidden_write_from_approval", {})
+
+        with self.assertRaisesRegex(ToolError, "Unknown tool"):
+            asyncio.run(call())
+
+    def test_direct_call_keeps_annotated_generic_executor_available(self) -> None:
+        server = _scratch_server()
+        configure_tool_discovery(server, "search")
+
+        async def call() -> str:
+            async with Client(server) as client:
+                result = await client.call_tool("execute_approved_action", {})
+                return str(result.content[0].text)
+
+        self.assertEqual(asyncio.run(call()), "ok")
+
+    def test_search_results_hide_action_specific_executors(self) -> None:
+        server = _scratch_server()
+        configure_tool_discovery(server, "search")
+
+        async def search() -> list[str]:
+            async with Client(server) as client:
+                result = await client.call_tool(
+                    "search_tools",
+                    {"query": "prepared mutation execute"},
+                )
+                data = result.structured_content or {}
+                entries = data.get("tools") or data.get("result") or []
+                return [entry["name"] for entry in entries]
+
+        self.assertNotIn("hidden_write_from_approval", asyncio.run(search()))
 
 
 class ToolSearchRankingTests(unittest.TestCase):
@@ -82,7 +179,7 @@ class ToolSearchRankingTests(unittest.TestCase):
         """Rank every query against a real server started in compact mode.
 
         Deliberately a subprocess. The discovery mode is decided once per
-        process, when ``moneybird.tools`` is imported, and direct package
+        process, when ``moneybird_mcp.tools`` is imported, and direct package
         imports default to ``full`` — so an in-process test would either skip or
         have to rebuild the catalogue on a scratch server. Rebuilding measured
         identically here, but this is what actually ships: the same transform,
@@ -96,7 +193,7 @@ class ToolSearchRankingTests(unittest.TestCase):
         probe = """
 import asyncio, json, os, sys
 from fastmcp import Client
-from moneybird.tools import mcp
+from moneybird_mcp.tools import mcp
 
 QUERIES = json.loads(sys.argv[1])
 
@@ -153,14 +250,12 @@ asyncio.run(main())
                     f"{query!r} ranked {names[:3]}",
                 )
 
-    def test_crediting_an_invoice_at_least_surfaces_the_prepare_tool(self) -> None:
-        # Known weaker case. BM25 normalises for document length, so the very
-        # short create_credit_invoice_from_approval description outranks the
-        # prepare tool's longer one. It is not dangerous — that executor refuses
-        # to run without an approval_id, so the cost is a wasted call rather than
-        # a wrong write — but the prepare tool must stay visible next to it.
+    def test_crediting_an_invoice_ranks_the_prepare_tool_first(self) -> None:
+        # Action-specific executors are omitted from compact search results;
+        # execution must use the directly exposed annotated generic executor.
         names = self._ranked("credit an invoice")
-        self.assertIn("prepare_create_credit_invoice", names[:2], names[:4])
+        self.assertEqual(names[:1], ["prepare_create_credit_invoice"], names[:4])
+        self.assertNotIn("create_credit_invoice_from_approval", names)
 
 
 if __name__ == "__main__":

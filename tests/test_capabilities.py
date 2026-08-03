@@ -4,16 +4,16 @@ import os
 import unittest
 from unittest import mock
 
-from moneybird.capabilities import (
+from moneybird_mcp.capabilities import (
     CAPABILITY_MODE_ENV,
     CapabilityMode,
     capability_mode,
     require_write_capability,
     writes_enabled,
 )
-from moneybird.config import MoneybirdError
-from moneybird.credentials import CREDENTIAL_MODE_ENV, set_active_administration_id
-from moneybird.safety import make_approval
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.credentials import CREDENTIAL_MODE_ENV, set_active_administration_id
+from moneybird_mcp.safety import make_approval
 
 
 class CapabilityPolicyTests(unittest.TestCase):
@@ -68,7 +68,7 @@ class CapabilityPolicyTests(unittest.TestCase):
                 make_approval("create_contact", {"company_name": "Example"}, "demo")
 
     def test_hosted_generic_executor_rejects_before_approval_state_access(self) -> None:
-        from moneybird.tools import approvals
+        from moneybird_mcp.tools import approvals
 
         with (
             mock.patch.dict(

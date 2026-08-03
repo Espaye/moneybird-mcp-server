@@ -16,13 +16,13 @@ os.environ.setdefault(
     tempfile.mkdtemp(prefix="moneybird_mcp_test_state_"),
 )
 
-from moneybird import client as client_module
-from moneybird.client import normalize_generic_get_path
-from moneybird.config import MoneybirdError
-from moneybird.formatting import document_line_quantity, report_period_months
-from moneybird.invoicing import document_detail_amount_excl_tax
-from moneybird.tools import _context as tool_context
-from moneybird.tools import sales as sales_tools
+from moneybird_mcp import client as client_module
+from moneybird_mcp.client import normalize_generic_get_path
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.formatting import document_line_quantity, report_period_months
+from moneybird_mcp.invoicing import document_detail_amount_excl_tax
+from moneybird_mcp.tools import _context as tool_context
+from moneybird_mcp.tools import sales as sales_tools
 
 
 class DocumentLineQuantityTests(unittest.TestCase):

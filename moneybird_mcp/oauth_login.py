@@ -4,7 +4,7 @@ Prerequisites: register an application at https://moneybird.com/user/application
 with redirect URI ``urn:ietf:wg:oauth:2.0:oob`` and supply its credentials through
 the parent environment or an explicitly selected environment file. Then:
 
-    python -m moneybird.oauth_login --env-file C:\\absolute\\operator.env
+    python -m moneybird_mcp.oauth_login --env-file C:\\absolute\\operator.env
 
 This lives in the installed package (not in ``scripts/``) so that the command works
 for a ``pip install`` just as it does in a source checkout; the credential error
@@ -32,7 +32,7 @@ from .config import load_env_file
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="moneybird.oauth_login", description=__doc__)
+    parser = argparse.ArgumentParser(prog="moneybird_mcp.oauth_login", description=__doc__)
     parser.add_argument(
         "--env-file",
         type=Path,

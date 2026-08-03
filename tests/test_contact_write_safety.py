@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from moneybird import safety
-from moneybird.credentials import set_active_administration_id
-from moneybird.tools import contacts
+from moneybird_mcp import safety
+from moneybird_mcp.credentials import set_active_administration_id
+from moneybird_mcp.tools import contacts
 
 
 class ContactWriteSafetyTests(unittest.TestCase):

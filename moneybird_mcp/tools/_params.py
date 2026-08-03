@@ -3,7 +3,7 @@
 FastMCP turns these ``Annotated[..., Field(...)]`` aliases into JSON-schema
 parameter descriptions, constraints, and enums, so every MCP client shows the
 model *per-parameter* guidance instead of bare ``str``/``int``. Literal aliases
-mirror the value sets in :mod:`moneybird.config`;
+mirror the value sets in :mod:`moneybird_mcp.config`;
 ``tests/test_moneybird_helpers.py`` asserts they stay in sync.
 """
 from __future__ import annotations
@@ -138,7 +138,7 @@ PriceString = Annotated[
     Field(description="Amount as a decimal string with a dot, e.g. '121.00'."),
 ]
 
-# --- Enums (kept in sync with moneybird.config by tests) --------------------------
+# --- Enums (kept in sync with moneybird_mcp.config by tests) --------------------------
 
 ReportName = Literal[
     "profit_loss",

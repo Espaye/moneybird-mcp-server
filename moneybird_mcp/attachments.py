@@ -1,6 +1,6 @@
 """Turn downloaded attachment bytes into something a model can read.
 
-The download itself lives on :class:`moneybird.client.MoneybirdClient`
+The download itself lives on :class:`moneybird_mcp.client.MoneybirdClient`
 (``download_attachment``); this module is the pure extraction layer. PDF text
 extraction uses ``pypdf`` when it is installed (the ``moneybird-mcp[pdf]``
 extra) and degrades to a clear note when it is not — OCR for scanned documents

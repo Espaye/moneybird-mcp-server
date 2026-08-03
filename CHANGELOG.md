@@ -7,9 +7,12 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Added
 
-- `moneybird/oauth_login.py`, so the interactive OAuth login runs from an installed
-  package as `python -m moneybird.oauth_login`. `scripts/oauth_login.py` is now a thin
-  wrapper for source checkouts; the wheel ships only the `moneybird` package, so error
+- `get_server_status` now reports the package version and credential state. In
+  local or single-user mode it remains callable without credentials and returns
+  the setup problem as data instead of failing like a Moneybird API tool.
+- `moneybird_mcp/oauth_login.py`, so the interactive OAuth login runs from an installed
+  package as `python -m moneybird_mcp.oauth_login`. `scripts/oauth_login.py` is now a thin
+  wrapper for source checkouts; the wheel ships only the `moneybird_mcp` package, so error
   messages could not usefully point at a path under `scripts/`.
 - A startup warning when a local or single-user server starts without configured
   Moneybird credentials. An MCP client reports any server that starts as connected, so
@@ -35,6 +38,12 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Changed
 
+- **Breaking:** renamed the installed Python import package from `moneybird` to
+  `moneybird_mcp`, matching the distribution name and avoiding file ownership
+  collisions with the unrelated `moneybird` project on PyPI. The console command
+  remains `moneybird-mcp`; module invocations now use, for example,
+  `python -m moneybird_mcp.oauth_login`. The release version is 0.6.0 so source
+  checkouts and installed 0.5.0 builds no longer report the same identity.
 - Reworked the public documentation around a short onboarding-first `README.md`, with
   dedicated getting-started, deployment-and-safety, tool-reference, and local-data-lifecycle
   guides under `docs/`. Simplified `SUPPORT.md`. The README no longer doubles as the full
@@ -71,6 +80,26 @@ their own licences.
 
 ### Fixed
 
+- **Compact discovery can no longer hide a write behind unannotated `call_tool`.**
+  The proxy now advertises itself as read-only, accepts only targets explicitly
+  annotated read-only, and omits action-specific write executors from search
+  results. Direct calls to those hidden executors are also rejected instead of
+  falling through FastMCP's underlying catalog. Approved mutations must use the
+  directly exposed, destructively annotated `execute_approved_action` tool,
+  allowing the MCP client to enforce its destructive-tool confirmation policy.
+- **Draft-invoice approvals now show the money being approved.** Single and batch
+  invoice previews resolve the effective VAT setting/rate and return explicit
+  quantity, unit price, per-line excl./VAT/incl. subtotals, per-invoice totals,
+  and currency-grouped batch totals. The incl.-VAT total is included in the
+  approval summary. A product's tax and ledger defaults are resolved when there
+  is no previous invoice; otherwise callers must provide a tax rate when no safe
+  preview default exists. Payment previews already showed both the payment and
+  open document amount and remain unchanged.
+- Added Windows upgrade recovery guidance: quit the MCP client before a `pip`
+  upgrade, rerun after `WinError 32` to repair a partial uninstall, and prefer
+  `uvx` to avoid replacing an in-use console script. Claude Code setup now also
+  explains local/project/user scopes and the missing-tools symptom outside the
+  scope where a server was registered.
 - **Moneybird's own explanation of a rejected write is no longer thrown away.** A failed
   create reported only `Moneybird returned HTTP 422 for operation /:id/contacts.json`,
   while the response body naming the field and the reason

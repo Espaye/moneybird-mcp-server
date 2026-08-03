@@ -1,6 +1,6 @@
 """SQLite FTS5 layer over the synced search index.
 
-The JSON sync index (see :mod:`moneybird.sync`) stays the durable store — its
+The JSON sync index (see :mod:`moneybird_mcp.sync`) stays the durable store — its
 versioned incremental sync against Moneybird is the hard part and unchanged.
 This module derives a full-text index from it, so ``search`` gets token-based
 matching (multi-word, any order, prefixes, bm25 ranking) instead of a single

@@ -11,8 +11,8 @@ os.environ.setdefault(
     tempfile.mkdtemp(prefix="moneybird_mcp_test_state_"),
 )
 
-from moneybird import search_fts
-from moneybird.sync import ensure_sync_index_shape
+from moneybird_mcp import search_fts
+from moneybird_mcp.sync import ensure_sync_index_shape
 
 ADMIN = "999"
 

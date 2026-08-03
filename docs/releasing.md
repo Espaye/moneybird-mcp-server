@@ -25,11 +25,11 @@ published version can be repaired by uploading a replacement file.
 ## 2. Verify locally
 
 ```text
-ruff check moneybird gateway scripts tests moneybird_mcp_server.py
-python -m compileall moneybird gateway scripts
+ruff check moneybird_mcp gateway scripts tests moneybird_mcp_server.py
+python -m compileall moneybird_mcp gateway scripts
 python -m pytest -q
-python -m pytest --cov=moneybird --cov=gateway --cov-report=term-missing --cov-fail-under=70
-bandit --quiet --recursive moneybird gateway scripts moneybird_mcp_server.py --severity-level medium --confidence-level medium
+python -m pytest --cov=moneybird_mcp --cov=gateway --cov-report=term-missing --cov-fail-under=70
+bandit --quiet --recursive moneybird_mcp gateway scripts moneybird_mcp_server.py --severity-level medium --confidence-level medium
 python -m pip_audit -r requirements.txt
 python -m pip install -c requirements-minimum.txt -r requirements.txt pytest
 python -m pytest -q

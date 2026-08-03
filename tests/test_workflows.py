@@ -11,12 +11,12 @@ os.environ.setdefault(
     tempfile.mkdtemp(prefix="moneybird_mcp_test_state_"),
 )
 
-from moneybird import safety
-from moneybird.config import MoneybirdError
-from moneybird.credentials import set_active_administration_id
-from moneybird.tools import workflows
-from moneybird.tools.approvals import APPROVAL_EXECUTORS
-from moneybird.tools.workflows import _preflight_workflow_children
+from moneybird_mcp import safety
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.credentials import set_active_administration_id
+from moneybird_mcp.tools import workflows
+from moneybird_mcp.tools.approvals import APPROVAL_EXECUTORS
+from moneybird_mcp.tools.workflows import _preflight_workflow_children
 
 
 class WorkflowSafetyTests(unittest.TestCase):

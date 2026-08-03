@@ -9,10 +9,10 @@ from unittest import mock
 import fastmcp.server.dependencies as dependencies
 from starlette.testclient import TestClient
 
-from moneybird import oauth
-from moneybird.auth import SharedSecretAuthMiddleware
-from moneybird.config import MoneybirdError
-from moneybird.credentials import (
+from moneybird_mcp import oauth
+from moneybird_mcp.auth import SharedSecretAuthMiddleware
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.credentials import (
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
     CREDENTIAL_MODE_LOCAL,
     CREDENTIAL_MODE_NETWORK_SINGLE_USER,
@@ -238,14 +238,14 @@ class MissingCredentialGuidanceTests(unittest.TestCase):
     def test_local_advice_names_only_options_local_mode_has(self) -> None:
         message = self._message(CREDENTIAL_MODE_LOCAL)
         self.assertIn("MONEYBIRD_ACCESS_TOKEN", message)
-        self.assertIn("python -m moneybird.oauth_login", message)
+        self.assertIn("python -m moneybird_mcp.oauth_login", message)
         self.assertNotIn("X-Moneybird-Token", message)
         self.assertNotIn("scripts/", message)
 
     def test_single_user_advice_rules_out_tenant_headers(self) -> None:
         message = self._message(CREDENTIAL_MODE_NETWORK_SINGLE_USER)
         self.assertIn("MONEYBIRD_ACCESS_TOKEN", message)
-        self.assertIn("python -m moneybird.oauth_login", message)
+        self.assertIn("python -m moneybird_mcp.oauth_login", message)
         self.assertNotIn("scripts/", message)
         self.assertIn("rejected", message)
 
@@ -300,7 +300,7 @@ class MissingCredentialGuidanceTests(unittest.TestCase):
     def test_oauth_login_cli_ships_inside_the_installed_package(self) -> None:
         # The message above is only actionable if the command it names exists
         # wherever the package is installed from.
-        module = importlib.import_module("moneybird.oauth_login")
+        module = importlib.import_module("moneybird_mcp.oauth_login")
         self.assertTrue(callable(module.main))
 
 

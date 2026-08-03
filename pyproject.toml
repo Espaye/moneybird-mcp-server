@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moneybird-mcp"
-version = "0.5.0"
+version = "0.6.0"
 description = "Read-first MCP server for Moneybird bookkeeping, with experimental supervised writes behind an explicit capability policy."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -52,14 +52,14 @@ Changelog = "https://github.com/Espaye/moneybird-mcp-server/blob/main/CHANGELOG.
 Security = "https://github.com/Espaye/moneybird-mcp-server/security/policy"
 
 [project.scripts]
-moneybird-mcp = "moneybird.server:main"
+moneybird-mcp = "moneybird_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["moneybird"]
+packages = ["moneybird_mcp"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "moneybird",
+    "moneybird_mcp",
     "moneybird_mcp_server.py",
     "scripts",
     "tests",
@@ -93,4 +93,4 @@ select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]
 # Registration must finish before compact discovery transforms the tool catalog.
-"moneybird/tools/__init__.py" = ["E402"]
+"moneybird_mcp/tools/__init__.py" = ["E402"]

@@ -8,7 +8,7 @@
 
 > **Unofficial community integration.** This project is not developed, endorsed, supported, or audited by Moneybird B.V.
 >
-> **Beta 0.5.0.** The supported setup is a local MCP server over stdio. It starts mechanically read-only. Experimental writes require an explicit local opt-in and supervised approval.
+> **Beta 0.6.0.** The supported setup is a local MCP server over stdio. It starts mechanically read-only. Experimental writes require an explicit local opt-in and supervised approval.
 
 Use Claude, ChatGPT, Cursor, or another MCP client to search and work with a Moneybird administration. The server can read contacts, invoices, documents, bank mutations, reports, and locally indexed bookkeeping data.
 
@@ -39,6 +39,8 @@ Restart the client and ask it to list your Moneybird administrations.
 
 `MONEYBIRD_ADMINISTRATION_ID` is optional when the token can access only one administration. Never paste a real Moneybird token into a chat, issue, log, or committed file.
 
+Claude Code registrations are scoped. Its default `local` scope is available only in the current project; use `--scope user` when Moneybird should be available from every project. If `claude mcp list` says connected but a different project shows no tools, check `claude mcp get moneybird` and re-add the configuration at user scope. Do not use project scope for a configuration containing a personal token, because project scope writes a shared `.mcp.json` file.
+
 ### Install with `pip`
 
 ```bash
@@ -54,6 +56,8 @@ python -m pip install --upgrade "moneybird-mcp[pdf]"
 
 Package page: [moneybird-mcp on PyPI](https://pypi.org/project/moneybird-mcp/)
 
+On Windows, quit every MCP client that is running `moneybird-mcp` before installing or upgrading with `pip`; Windows cannot replace the locked console executable. If `pip` reports `WinError 32`, keep the client closed and run the install command again to repair the partial installation. The recommended `uvx` setup avoids upgrading that in-use console script.
+
 ## Upgrade
 
 With `pip`:
@@ -61,6 +65,8 @@ With `pip`:
 ```bash
 python -m pip install --upgrade moneybird-mcp
 ```
+
+On Windows, close the MCP client first. If an earlier attempt failed with `WinError 32`, rerun the same command while the client remains closed.
 
 To force `uvx` to refresh its cached package metadata:
 

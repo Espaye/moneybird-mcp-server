@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest import mock
 
-from moneybird.sync import load_sync_index, sync_search_index_data
+from moneybird_mcp.sync import load_sync_index, sync_search_index_data
 
 
 class ParallelSyncTests(unittest.TestCase):

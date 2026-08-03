@@ -19,8 +19,8 @@ os.environ.setdefault(
     tempfile.mkdtemp(prefix="moneybird_mcp_test_vat_"),
 )
 
-from moneybird.config import MoneybirdError
-from moneybird.vat_settlement import (
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.vat_settlement import (
     LedgerMovement,
     build_vat_settlement_journal,
     compare_gross_to_reported,
@@ -586,7 +586,7 @@ class SettlementPreflightTests(unittest.TestCase):
 
 class PrepareVatSettlementToolTests(unittest.TestCase):
     def setUp(self) -> None:
-        from moneybird.credentials import set_active_administration_id
+        from moneybird_mcp.credentials import set_active_administration_id
 
         self._temp_dir = tempfile.TemporaryDirectory(prefix="moneybird_vat_tool_")
         self._env = mock.patch.dict(
@@ -600,15 +600,15 @@ class PrepareVatSettlementToolTests(unittest.TestCase):
         set_active_administration_id("vat-admin")
 
     def tearDown(self) -> None:
-        from moneybird.credentials import set_active_administration_id
+        from moneybird_mcp.credentials import set_active_administration_id
 
         set_active_administration_id(None)
         self._env.stop()
         self._temp_dir.cleanup()
 
     def _prepare(self, *, client=None, **overrides):
-        from moneybird.tools import _context
-        from moneybird.tools import ledger as ledger_tools
+        from moneybird_mcp.tools import _context
+        from moneybird_mcp.tools import ledger as ledger_tools
 
         kwargs = {
             "period": "20260401..20260630",
@@ -688,8 +688,8 @@ class PrepareVatSettlementToolTests(unittest.TestCase):
             self.assertTrue(text.startswith("Btw-aangifte Q2 2026 (extern ingediend) - "))
 
     def test_stages_under_its_own_contract_covered_action(self):
-        from moneybird.tools.approvals import APPROVAL_EXECUTORS
-        from moneybird.write_contracts import WRITE_SPECS
+        from moneybird_mcp.tools.approvals import APPROVAL_EXECUTORS
+        from moneybird_mcp.write_contracts import WRITE_SPECS
 
         staged = self._prepare()
         # A dedicated action, not the generic journal one: only its own executor
@@ -807,8 +807,8 @@ class ExecuteVatSettlementTests(PrepareVatSettlementToolTests):
     """Approval and dispatch are separated in time; the executor must re-prove."""
 
     def _execute(self, client, approval_id):
-        from moneybird.tools import _context
-        from moneybird.tools import ledger as ledger_tools
+        from moneybird_mcp.tools import _context
+        from moneybird_mcp.tools import ledger as ledger_tools
 
         with mock.patch.object(_context, "get_client", return_value=client):
             return ledger_tools.vat_settlement_journal_from_approval(approval_id)

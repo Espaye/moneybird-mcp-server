@@ -53,7 +53,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check bandit==1.9.4
 
       - name: Scan production Python
-        run: bandit --quiet --recursive moneybird gateway scripts moneybird_mcp_server.py --severity-level medium --confidence-level medium
+        run: bandit --quiet --recursive moneybird_mcp gateway scripts moneybird_mcp_server.py --severity-level medium --confidence-level medium
 
   full-history-secret-scan:
     name: Gitleaks full history

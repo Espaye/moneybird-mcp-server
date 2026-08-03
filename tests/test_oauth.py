@@ -17,8 +17,8 @@ os.environ.setdefault(
     tempfile.mkdtemp(prefix="moneybird_mcp_test_state_"),
 )
 
-from moneybird import credentials, oauth
-from moneybird.config import MoneybirdError
+from moneybird_mcp import credentials, oauth
+from moneybird_mcp.config import MoneybirdError
 
 FAKE_APP = {
     "MONEYBIRD_OAUTH_CLIENT_ID": "client-id-123",

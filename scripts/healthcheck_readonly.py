@@ -15,8 +15,8 @@ from pathlib import Path
 # Allow running as `python scripts/healthcheck_readonly.py` from the project root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from moneybird import guidance as G
-from moneybird import tools as T
+from moneybird_mcp import guidance as G
+from moneybird_mcp import tools as T
 
 PASS, FAIL = "PASS", "FAIL"
 results: list[tuple[str, str, str]] = []

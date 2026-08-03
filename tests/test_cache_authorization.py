@@ -4,11 +4,11 @@ import os
 import unittest
 from unittest import mock
 
-from moneybird import sync
-from moneybird.client import MoneybirdClient
-from moneybird.config import MoneybirdError
-from moneybird.credentials import CREDENTIAL_MODE_ENV
-from moneybird.tools import core
+from moneybird_mcp import sync
+from moneybird_mcp.client import MoneybirdClient
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.credentials import CREDENTIAL_MODE_ENV
+from moneybird_mcp.tools import core
 
 
 class ClientAdministrationAccessTests(unittest.TestCase):

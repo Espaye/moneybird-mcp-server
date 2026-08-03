@@ -161,7 +161,7 @@ def resolve_credentials(mode: str | None = None) -> Credentials:
 # Only the modes that can actually fall back this far need a message; hosted
 # request mode fails earlier, on the missing header.
 _OAUTH_LOGIN_HINT = (
-    "log in via OAuth with 'python -m moneybird.oauth_login' (add "
+    "log in via OAuth with 'python -m moneybird_mcp.oauth_login' (add "
     "--env-file PATH to point at a configuration file)"
 )
 
