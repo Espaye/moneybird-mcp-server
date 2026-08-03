@@ -10,7 +10,7 @@ from purchase_test_support import (
     target_july,
 )
 
-from moneybird.purchase_review import scan_purchase_invoices_for_attention
+from moneybird_mcp.purchase_review import scan_purchase_invoices_for_attention
 
 
 class ScanAttentionTests(unittest.TestCase):

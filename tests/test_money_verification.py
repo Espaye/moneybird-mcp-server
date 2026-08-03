@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from moneybird.tools.sales_batches import _money_values_equal
+from moneybird_mcp.tools.sales_batches import _money_values_equal
 
 
 class MoneyVerificationTests(unittest.TestCase):

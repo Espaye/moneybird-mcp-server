@@ -1,7 +1,7 @@
 """Assert the built wheel/sdist ship code only -- no credentials or local state.
 
 This encodes the sanity check from docs/releasing.md step 3 so CI can enforce it:
-the wheel must contain nothing but the `moneybird` package and its dist-info, and
+the wheel must contain nothing but the `moneybird_mcp` package and its dist-info, and
 neither artifact may contain a `.env`, OAuth tokens, the approvals database, a
 sync cache, or an audit log.
 
@@ -59,7 +59,7 @@ def check(dist_dir: pathlib.Path) -> list[str]:
     # The wheel is the installed surface: package + metadata, nothing else.
     for entry in wheel_entries:
         top = entry.split("/", 1)[0]
-        if top != "moneybird" and not top.endswith(".dist-info"):
+        if top != "moneybird_mcp" and not top.endswith(".dist-info"):
             problems.append(f"{wheels[0].name}: unexpected top-level entry {entry!r}")
 
     for artifact, entries in ((wheels[0], wheel_entries), (sdists[0], sdist_entries)):

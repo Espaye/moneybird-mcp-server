@@ -6,7 +6,7 @@ setup each time**. Read this before doing live Moneybird work.
 
 ## What this is
 
-A Moneybird MCP server (FastMCP). The MCP tools in `moneybird/tools/` are the surface
+A Moneybird MCP server (FastMCP). The MCP tools in `moneybird_mcp/tools/` are the surface
 a chat model normally calls. When you work *in this repo* those tools are usually **not**
 wired up as live MCP tools, so to actually touch the administration you run small Python
 scripts that import the package directly (see below).
@@ -17,7 +17,7 @@ scripts that import the package directly (see below).
   `MONEYBIRD_ACCESS_TOKEN` and `MONEYBIRD_ADMINISTRATION_ID`.
 - Package imports never discover or load `.env`. For a runnable server, export values
   in the parent process or pass an absolute `--env-file PATH`. For a one-off script,
-  call `moneybird.config.load_env_file(PATH)` before importing modules that consume
+  call `moneybird_mcp.config.load_env_file(PATH)` before importing modules that consume
   configuration. Parent-process values always win.
 - Real env vars always win (`setdefault`). Credential resolution then follows the explicit
   deployment mode:
@@ -25,11 +25,11 @@ scripts that import the package directly (see below).
   - `network_single_user`: authenticated network edge → env → local OAuth profile; request
     Moneybird headers are rejected;
   - `hosted_request_only`: one nonblank trusted request context; no env/OAuth fallback.
-- **OAuth**: `moneybird/oauth.py` implements the authorization-code flow (app credentials in
+- **OAuth**: `moneybird_mcp/oauth.py` implements the authorization-code flow (app credentials in
   the parent environment or an explicit file as
   `MONEYBIRD_OAUTH_CLIENT_ID`/`MONEYBIRD_OAUTH_CLIENT_SECRET`; interactive login via
-  `python -m moneybird.oauth_login --env-file PATH`, out-of-band redirect; the CLI lives in
-  `moneybird/oauth_login.py` so a pip install has it, and `scripts/oauth_login.py` is a
+  `python -m moneybird_mcp.oauth_login --env-file PATH`, out-of-band redirect; the CLI lives in
+  `moneybird_mcp/oauth_login.py` so a pip install has it, and `scripts/oauth_login.py` is a
   checkout wrapper — error messages must never point at a path the wheel lacks). Tokens persist in
   `moneybird_oauth_tokens.json` in the data dir and are used automatically in local or
   network-single-user mode when `MONEYBIRD_ACCESS_TOKEN` is absent. Hosted request mode never
@@ -42,9 +42,9 @@ Put throwaway scripts in the scratchpad, not in the repo. Template:
 ```python
 import sys
 sys.path.insert(0, r"C:\path\to\moneybird-mcp-server")
-from moneybird.config import load_env_file
+from moneybird_mcp.config import load_env_file
 load_env_file(r"c:\absolute\operator.env")  # explicit; parent env still wins
-from moneybird.client import get_client
+from moneybird_mcp.client import get_client
 
 client = get_client()
 # read-only first:
@@ -52,7 +52,7 @@ ledgers = {str(l["id"]): l["name"] for l in client.list_ledger_accounts()}
 taxes   = {str(t["id"]): t["name"]  for t in client.list_tax_rates()}
 ```
 
-`moneybird/client.py::MoneybirdClient` has typed methods for the common endpoints
+`moneybird_mcp/client.py::MoneybirdClient` has typed methods for the common endpoints
 (`list_contacts`, `list_sales_invoices`, `list_documents("purchase_invoice", ...)`,
 `get_document`, `update_document`, reports, etc.) and `raw_get(path)` as a read-only
 escape hatch for anything unwrapped.
@@ -150,7 +150,7 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   versioned sync-feed (met paginering als fallback), zodat oudere boekjaren niet door Moneybirds
   impliciete huidige-boekjaarfilter verdwijnen. Elke reconcile
   slaat de documentversie op en breekt vóór de PATCH af als de factuur sinds de preview is gewijzigd.
-  (Ontwerp: `docs/reading_pdf_attachments.md`; logica: `moneybird/purchase_reconcile.py`.)
+  (Ontwerp: `docs/reading_pdf_attachments.md`; logica: `moneybird_mcp/purchase_reconcile.py`.)
 - **Een btw-betaling boeken is de helft; de aangifteperiode schoonboeken is de andere helft.**
   Moneybird verplaatst bij het indienen niets: *Te betalen btw* en *Te vorderen btw* lopen door
   tot een memoriaal ze afwikkelt. Gebruik `analyze_vat_settlement` →
@@ -165,7 +165,7 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   een uit het aantal rubrieken *afgeleide* grens. Restant naar `Afrondingsverschillen`. Let op:
   het memoriaal balanceert per definitie, dus een verkeerd bedrag verdwijnt zonder die controles
   geruisloos in de afrondingsregel en komt daarna als geverifieerd terug. Logica:
-  `moneybird/vat_settlement.py`; playbook §3 + §3b; regressietests (met verlegde btw, refunds en
+  `moneybird_mcp/vat_settlement.py`; playbook §3 + §3b; regressietests (met verlegde btw, refunds en
   afrondingsvarianten) in `tests/test_vat_settlement.py`. Houd de bedragen daar synthetisch —
   deze repo is publiek.
 - **Btw-aangiftes zelf zitten niet in de API** (net als de boekingsregels): `tax_returns`,
@@ -187,7 +187,7 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   becomes a wrong amount. (Before 2026-08-02 this raised a raw `decimal.InvalidOperation`
   from the reclassify preview.)
 - **Boekingsregels (bank/transaction rules) are not in the API** — see
-  `moneybird/playbooks/boekhoud_playbook.md` and the memory note. Don't try to read them;
+  `moneybird_mcp/playbooks/boekhoud_playbook.md` and the memory note. Don't try to read them;
   `moneybird_request` answers every spelling (`transaction_rules`, `boekingsregels`, ...)
   with a message saying so and pointing at `created_at` vs `processed_at` instead.
 - **Sommige rapporten zijn maand-gebonden**: `cash_flow`, `tax`, `debtors` en `creditors`
@@ -246,7 +246,15 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   ondersteunen. Directe package-importen blijven standaard `full` voor compatibiliteit.
   De legacy entrypoint importeert tools pas na CLI/expliciete env-file-verwerking, zodat ook
   `python moneybird_mcp_server.py --tool-discovery full` werkelijk naar `full` schakelt.
-- `moneybird/http_transport.py` beheert één luie `httpx`-connection pool. Authenticatie blijft
+  `call_tool` is in deze modus een expliciet read-only proxy: alleen tools met
+  `readOnlyHint=true` (ook `prepare_*`) mogen erdoor. Schrijfexecutors staan niet in de
+  zoekresultaten, worden door de proxy geweigerd en kunnen evenmin rechtstreeks op naam worden
+  aangeroepen via FastMCP's onderliggende catalogus. Elke uitvoering loopt via de altijd
+  zichtbare, destructief geannoteerde `execute_approved_action`, zodat de MCP-client zijn
+  bevestigingsbeleid daadwerkelijk kan toepassen. Factuurpreviews lossen btw/grootboek eerst uit
+  een expliciete regel, daarna uit een gekozen product en pas daarna uit de laatste contactfactuur;
+  zonder zo'n verifieerbare btw-bron moet de caller `tax_rate_id` expliciet aanleveren.
+- `moneybird_mcp/http_transport.py` beheert één luie `httpx`-connection pool. Authenticatie blijft
   per request/tenant en staat nooit op de gedeelde client. In een live meting kostte de eerste
   identieke GET circa 0,29 s en hergebruikte GETs circa 0,05–0,08 s.
 - `MoneybirdTaskContext` cachet referentiedata binnen één tool-invocation en haalt bekende
@@ -281,19 +289,19 @@ asset bundled on developer.moneybird.com.
 
 ## Where things live
 
-- `moneybird/tools/` — MCP tool definitions, split by domain (`sales.py`, `bank.py`,
+- `moneybird_mcp/tools/` — MCP tool definitions, split by domain (`sales.py`, `bank.py`,
   `payments.py`, `contacts.py`, `ledger.py`, `purchases.py`, `reference.py`,
   `reports.py`, `core.py`, `sales_batches.py`, `workflows.py`, `approvals.py`).
   `_registry.py` holds the FastMCP
   instance + server instructions; `_context.py` is the patchable indirection tests use
-  (`mock.patch.object(moneybird.tools._context, "get_client", ...)`); `_writes.py` is
+  (`mock.patch.object(moneybird_mcp.tools._context, "get_client", ...)`); `_writes.py` is
   the shared write machinery — new guarded writes use `stage_write` +
   `run_approved_write`, don't hand-roll the approval/audit plumbing. `_params.py` holds
   the shared `Annotated[..., Field(...)]` parameter types (Limit, Period, ApprovalId,
   ReportName, ...) that give MCP clients per-parameter descriptions and enums — use them
   in new tool signatures; its Literal enums are kept in sync with `config.py` by
   `tests/test_tool_params.py`.
-- `moneybird/server.py` — the runnable entrypoint (`build_config` + `main`). The
+- `moneybird_mcp/server.py` — the runnable entrypoint (`build_config` + `main`). The
   `moneybird-mcp` console script (see `pyproject.toml`) defaults to **stdio** for local
   MCP clients and defaults server state to `~/.moneybird-mcp`; `python
   moneybird_mcp_server.py` keeps the legacy SSE default for existing deployments. Every
@@ -301,16 +309,16 @@ asset bundled on developer.moneybird.com.
   TLS proxy plus `MCP_TRUSTED_TLS_PROXY=true`.
   `mcpb/` + `scripts/build_mcpb.py` build the Claude Desktop extension bundle
   (`dist/*.mcpb`; platform-specific because dependencies are vendored into it).
-- `moneybird/client.py` — HTTP client + endpoint methods. Every endpoint it calls is
+- `moneybird_mcp/client.py` — HTTP client + endpoint methods. Every endpoint it calls is
   checked against `docs/moneybird_api_paths.json` by
   `tests/test_client_spec_conformance.py`, so a typo'd path fails the suite.
-- `moneybird/http_transport.py` — shared keep-alive connection pool; request credentials stay
-  tenant-scoped in `client.py`. `moneybird/task_context.py` provides invocation-scoped batch
-  loading, and `moneybird/telemetry.py` + `performance_middleware.py` provide privacy-safe
+- `moneybird_mcp/http_transport.py` — shared keep-alive connection pool; request credentials stay
+  tenant-scoped in `client.py`. `moneybird_mcp/task_context.py` provides invocation-scoped batch
+  loading, and `moneybird_mcp/telemetry.py` + `performance_middleware.py` provide privacy-safe
   local performance counters.
-- `moneybird/tool_discovery.py` — compact FastMCP BM25 Tool Search configuration and the
+- `moneybird_mcp/tool_discovery.py` — compact FastMCP BM25 Tool Search configuration and the
   always-visible core tool set.
-- `moneybird/vat_settlement.py` — btw-afwikkeling: gross-vs-reported comparison (reverse-charge
+- `moneybird_mcp/vat_settlement.py` — btw-afwikkeling: gross-vs-reported comparison (reverse-charge
   aware, each side judged separately), settlement-account resolution by name with id overrides,
   period-end derivation, declared-amount validation, and the balanced memoriaal builder. The
   tools live in `tools/ledger.py` under their own `settle_vat_period` write contract: the
@@ -319,26 +327,26 @@ asset bundled on developer.moneybird.com.
   proves the period's VAT accounts actually cleared to zero. Its duplicate fingerprint is the
   settled period, not the journal wording, so a second attempt under a different reference is
   still suppressed.
-- `moneybird/purchase_reconcile.py` — write-payload builders for reference-based and exact
+- `moneybird_mcp/purchase_reconcile.py` — write-payload builders for reference-based and exact
   PDF-derived purchase reconciliation. It scales or validates line prices, maps them onto
   existing lines, and records pre/post-write expectations.
-- `moneybird/write_contracts.py` — required versioned WriteSpec registry and shared
+- `moneybird_mcp/write_contracts.py` — required versioned WriteSpec registry and shared
   controlled-field/financial-line comparison helpers. `tools/approvals.py` asserts that
   its action keys exactly match the registry, so a new executor cannot silently omit its
   precondition, verifier, occurrence identity, or reconciliation rule.
-- `moneybird/purchase_review.py` — read-only supplier-history retrieval and advisory anomaly
+- `moneybird_mcp/purchase_review.py` — read-only supplier-history retrieval and advisory anomaly
   detection behind `review_purchase_invoices`. Description-similarity checks are optional;
   deterministic state and supplier-pattern checks remain available independently. Tests live in
   `tests/test_purchase_reconcile.py` and `tests/test_purchase_review.py`. PDF-reading design note:
   `docs/reading_pdf_attachments.md`.
-- `moneybird/config.py` — constants, `MoneybirdError`, explicit env-file parsing, and `data_dir()`
+- `moneybird_mcp/config.py` — constants, `MoneybirdError`, explicit env-file parsing, and `data_dir()`
   (where approvals DB / audit logs / sync caches live; override with
   `MONEYBIRD_MCP_DATA_DIR`). Approvals are persisted in SQLite and survive restarts.
-- `moneybird/search_fts.py` — SQLite FTS5 layer derived from the JSON sync index (the
+- `moneybird_mcp/search_fts.py` — SQLite FTS5 layer derived from the JSON sync index (the
   durable store stays JSON; the FTS file is a rebuildable cache keyed on
   `content_updated_at`, not a no-change freshness refresh).
   `search` tries FTS (AND then OR prefix match, bm25-ranked), then substring, then live.
-- `moneybird/playbooks/boekhoud_playbook.md` — btw rules, categorization, consistency
+- `moneybird_mcp/playbooks/boekhoud_playbook.md` — btw rules, categorization, consistency
   checklist, bank-mutation diagnosis. Read it before a bookkeeping task.
 - `scripts/` — runnable read-only/reclassify scripts (good examples of the patterns above).
 - `docs/releasing.md` — the release checklist. A push or merge never publishes.
@@ -366,7 +374,7 @@ asset bundled on developer.moneybird.com.
   solo-maintainer beta has no independent human deployment reviewer; that residual
   limitation must remain explicit.
   Both workflows gate on `scripts/check_dist_hygiene.py`, which asserts the wheel
-  ships only the `moneybird` package and that no `.env`/tokens/approvals DB/sync
+  ships only the `moneybird_mcp` package and that no `.env`/tokens/approvals DB/sync
   cache/audit log is packaged. CI never has credentials — keep the suite fully
   mocked (verified: the whole suite passes in a checkout without `.env`).
 - `scripts/reconcile_execution.py` — local operator-only unresolved-execution inspection

@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from decimal import Decimal
 
-from moneybird.config import MoneybirdError
-from moneybird.invoicing import parse_decimal_number
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.invoicing import parse_decimal_number
 
 
 class DecimalInputValidationTests(unittest.TestCase):

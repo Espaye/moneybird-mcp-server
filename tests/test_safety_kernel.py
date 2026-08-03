@@ -10,16 +10,16 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from moneybird import safety
-from moneybird.config import MoneybirdError
-from moneybird.credentials import set_active_administration_id
-from moneybird.tools._writes import (
+from moneybird_mcp import safety
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.credentials import set_active_administration_id
+from moneybird_mcp.tools._writes import (
     mark_write_dispatch_started,
     mark_write_verifying,
     run_approved_write,
     stage_write,
 )
-from moneybird.tools.purchases import _execute_reconcile
+from moneybird_mcp.tools.purchases import _execute_reconcile
 
 
 def _verified_executor_result(
@@ -380,7 +380,7 @@ class SafetyKernelTests(unittest.TestCase):
         self.assertEqual(executor_calls, 1)
 
     def test_read_only_policy_preserves_manual_executor_approvals(self) -> None:
-        from moneybird.tools import contacts, ledger, sales_batches, workflows
+        from moneybird_mcp.tools import contacts, ledger, sales_batches, workflows
 
         class Client:
             administration_id = "safety-admin"
@@ -422,7 +422,7 @@ class SafetyKernelTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "moneybird.tools._context.get_client",
+                "moneybird_mcp.tools._context.get_client",
                 return_value=Client(),
             ),
             mock.patch.dict(

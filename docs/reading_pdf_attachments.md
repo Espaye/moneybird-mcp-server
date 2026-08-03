@@ -2,7 +2,7 @@
 
 Status: **implemented for local and authenticated single-user deployments; refused
 in `hosted_request_only` mode.** The MCP tool is
-`read_document_attachment` in `moneybird/tools/purchases.py`. Install the optional
+`read_document_attachment` in `moneybird_mcp/tools/purchases.py`. Install the optional
 parser with `moneybird-mcp[pdf]`.
 
 ## Intended use

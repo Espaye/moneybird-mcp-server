@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from moneybird import config, safety, search_fts, sync
+from moneybird_mcp import config, safety, search_fts, sync
 
 
 class StatePermissionTests(unittest.TestCase):

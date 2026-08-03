@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from moneybird.task_context import MoneybirdTaskContext
-from moneybird.telemetry import (
+from moneybird_mcp.task_context import MoneybirdTaskContext
+from moneybird_mcp.telemetry import (
     begin_tool_trace,
     clear_performance_metrics,
     end_tool_trace,
@@ -121,7 +121,7 @@ class TelemetryTests(unittest.TestCase):
         self.assertNotIn("987", endpoint)
 
     def test_client_normalizes_default_operation_before_telemetry(self) -> None:
-        import moneybird.client as client_module
+        import moneybird_mcp.client as client_module
 
         client = client_module.MoneybirdClient("token", "123")
         response = mock.Mock()

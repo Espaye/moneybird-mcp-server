@@ -2,7 +2,7 @@
 
 Importing this package registers every tool on the shared ``mcp`` instance and
 the guidance layer (playbook resource + scenario prompts). All public tool
-functions are re-exported here so ``from moneybird import tools`` keeps working.
+functions are re-exported here so ``from moneybird_mcp import tools`` keeps working.
 """
 from __future__ import annotations
 

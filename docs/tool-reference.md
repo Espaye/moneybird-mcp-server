@@ -20,7 +20,7 @@ These stay visible without a search step:
 - `prepare_bookkeeping_correction_batch`
 - `execute_approved_action`
 - FastMCP `search_tools`
-- FastMCP `call_tool`
+- `call_tool` (read-only proxy)
 
 `search` and `fetch` are the main data-source tools for clients that support deep research or structured retrieval.
 
@@ -82,15 +82,19 @@ Write tools are mechanically denied unless the server is explicitly started with
 MONEYBIRD_CAPABILITY_MODE=write_enabled
 ```
 
+In compact discovery mode, `call_tool` accepts only tools explicitly annotated read-only, including `prepare_*` previews. Mutating and unannotated targets are refused, and hidden mutating executors cannot be called directly by name. This is deliberate: MCP clients can enforce the destructive annotation only on the tool they call, not on a second tool selected inside a generic proxy.
+
 The normal flow is:
 
 1. a `prepare_*` tool validates the request and stores an exact preview;
 2. the user or client reviews the preview;
-3. `execute_approved_action(approval_id)` or the matching executor atomically claims the approval;
+3. the client calls the directly exposed, destructively annotated `execute_approved_action(approval_id)`, which atomically claims the approval;
 4. the server performs the action;
 5. action-specific checks record success, failure, partial progress, ambiguity, or verification failure.
 
-The generic executor delegates only to the exact action stored in the approval.
+The generic executor delegates only to the exact action stored in the approval. Action-specific executors remain available in full discovery mode for compatibility, but compact discovery omits them from search results and never routes them through `call_tool`.
+
+Draft-invoice previews need a verifiable VAT rate to show exact totals. Each line may provide `tax_rate_id`; otherwise the server uses the selected product's tax and ledger defaults, then a previous invoice default for that contact. When none exists, preparation asks for `tax_rate_id` instead of guessing an accounting identifier.
 
 Write families include:
 

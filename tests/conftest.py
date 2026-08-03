@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from moneybird.capabilities import CAPABILITY_MODE_ENV
+from moneybird_mcp.capabilities import CAPABILITY_MODE_ENV
 
 
 @pytest.fixture(autouse=True)

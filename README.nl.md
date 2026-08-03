@@ -8,7 +8,7 @@
 
 > **Onofficiële community-integratie.** Dit project is niet ontwikkeld, goedgekeurd, ondersteund of gecontroleerd door Moneybird B.V.
 >
-> **Bèta 0.5.0.** De ondersteunde opstelling is een lokale MCP-server via stdio. De server start technisch afgedwongen in alleen-lezenmodus. Experimentele schrijfacties vereisen een expliciete lokale inschakeling en gecontroleerde goedkeuring.
+> **Bèta 0.6.0.** De ondersteunde opstelling is een lokale MCP-server via stdio. De server start technisch afgedwongen in alleen-lezenmodus. Experimentele schrijfacties vereisen een expliciete lokale inschakeling en gecontroleerde goedkeuring.
 
 Gebruik Claude, ChatGPT, Cursor of een andere MCP-client om een Moneybird-administratie te doorzoeken en ermee te werken. De server kan contacten, facturen, documenten, bankmutaties, rapporten en lokaal geïndexeerde boekhoudgegevens lezen.
 
@@ -39,6 +39,8 @@ Herstart de client en vraag deze om de beschikbare Moneybird-administraties te t
 
 `MONEYBIRD_ADMINISTRATION_ID` is optioneel wanneer het token maar toegang heeft tot één administratie. Plak een echt Moneybird-token nooit in een chat, issue, logbestand of bestand dat je commit.
 
+Registraties in Claude Code hebben een scope. De standaardscope `local` is alleen beschikbaar in het huidige project; gebruik `--scope user` wanneer Moneybird vanuit elk project beschikbaar moet zijn. Als `claude mcp list` verbonden meldt maar een ander project geen tools toont, controleer dan `claude mcp get moneybird` en voeg de configuratie opnieuw toe met userscope. Gebruik geen projectscope voor een configuratie met een persoonlijk token, omdat projectscope een gedeeld `.mcp.json`-bestand schrijft.
+
 ### Installeren met `pip`
 
 ```bash
@@ -54,6 +56,8 @@ python -m pip install --upgrade "moneybird-mcp[pdf]"
 
 Pakketpagina: [moneybird-mcp op PyPI](https://pypi.org/project/moneybird-mcp/)
 
+Sluit op Windows iedere MCP-client die `moneybird-mcp` uitvoert voordat je met `pip` installeert of bijwerkt; Windows kan het vergrendelde consoleprogramma niet vervangen. Meldt `pip` `WinError 32`, houd de client dan gesloten en voer de installatieopdracht opnieuw uit om de gedeeltelijke installatie te herstellen. De aanbevolen `uvx`-opstelling voorkomt dat dit gebruikte consoleprogramma tijdens een upgrade wordt vervangen.
+
 ## Bijwerken
 
 Met `pip`:
@@ -61,6 +65,8 @@ Met `pip`:
 ```bash
 python -m pip install --upgrade moneybird-mcp
 ```
+
+Sluit op Windows eerst de MCP-client. Als een eerdere poging met `WinError 32` mislukte, voer dan dezelfde opdracht opnieuw uit terwijl de client gesloten blijft.
 
 Om `uvx` de pakketmetadata opnieuw te laten ophalen:
 

@@ -1229,12 +1229,19 @@ def build_batch_invoice_payload(
         if not price:
             raise MoneybirdError("Each invoice line needs a price.")
 
+        product_id = str(raw_detail.get("product_id") or "").strip()
+        product = client.get_product(product_id) if product_id else {}
         selected_tax_rate_id = str(
-            raw_detail.get("tax_rate_id") or defaults.get("tax_rate_id") or ""
+            raw_detail.get("tax_rate_id")
+            or product.get("tax_rate_id")
+            or defaults.get("tax_rate_id")
+            or ""
         )
         if not selected_tax_rate_id:
             raise MoneybirdError(
-                f"No tax rate could be resolved for invoice line '{description}'."
+                f"No tax rate could be resolved for invoice line '{description}'. "
+                "Provide tax_rate_id, provide a product_id whose product has a "
+                "default tax rate, or first establish a contact invoice default."
             )
         tax_percentage = tax_rate_percentage(client, selected_tax_rate_id)
         supplied_percentage = raw_detail.get("tax_percentage")
@@ -1251,16 +1258,31 @@ def build_batch_invoice_payload(
             parse_decimal_number(amount, label="amount")
             * parse_decimal_number(price, label="price")
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        preview_rows.append(
-            build_invoice_line_preview(
-                customer_id=str(contact.get("customer_id") or entry.get("customer_id") or contact.get("id")),
-                description=description,
-                entered_total=line_total,
-                tax_percentage=tax_percentage,
-                prices_are_incl_tax=prices_are_incl_tax,
-                duplicate_hits=[],
-            )
+        preview_row = build_invoice_line_preview(
+            customer_id=str(
+                contact.get("customer_id")
+                or entry.get("customer_id")
+                or contact.get("id")
+            ),
+            description=description,
+            entered_total=line_total,
+            tax_percentage=tax_percentage,
+            prices_are_incl_tax=prices_are_incl_tax,
+            duplicate_hits=[],
         )
+        # `amount` is Moneybird's quantity field.  Name it explicitly in the
+        # approval preview so it cannot be mistaken for a monetary amount.
+        preview_row.update(
+            {
+                "quantity": amount,
+                "unit_price": price,
+                "tax_rate_id": selected_tax_rate_id,
+                "tax_percentage": f"{tax_percentage:f}",
+                "prices_are_incl_tax": prices_are_incl_tax,
+                "currency": str(entry.get("currency") or defaults.get("currency") or "EUR"),
+            }
+        )
+        preview_rows.append(preview_row)
         descriptions.append(description)
         details_attributes.append(
             clean_dict(
@@ -1270,7 +1292,9 @@ def build_batch_invoice_payload(
                     "price": price,
                     "tax_rate_id": selected_tax_rate_id,
                     "ledger_account_id": raw_detail.get("ledger_account_id")
+                    or product.get("ledger_account_id")
                     or defaults.get("ledger_account_id"),
+                    "product_id": product_id,
                     "period": raw_detail.get("period", ""),
                 }
             )
@@ -1325,6 +1349,7 @@ def build_batch_invoice_payload(
             "invoice_id": defaults.get("merge_reference_invoice_number"),
         }
 
+    totals = invoice_preview_totals(preview_rows)
     return {
         "contact": {
             "id": str(contact["id"]),
@@ -1337,12 +1362,22 @@ def build_batch_invoice_payload(
         "schedule_send_on": schedule_send_on,
         "duplicates": duplicates,
         "preview_rows": preview_rows,
-        "expected_total_incl_tax": f"{sum(Decimal(row['amount_incl_tax']) for row in preview_rows):.2f}",
+        "totals": totals,
+        "expected_total_incl_tax": totals["total_price_incl_tax"],
         "merge_snapshot": merge_snapshot,
         "merge_check": merge_check,
     }
 
 
+
+
+def invoice_preview_totals(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """Sum exact cent-rounded approval rows under unambiguous field names."""
+    return {
+        "total_price_excl_tax": f"{sum(Decimal(row['amount_excl_tax']) for row in rows):.2f}",
+        "total_tax": f"{sum(Decimal(row['amount_tax']) for row in rows):.2f}",
+        "total_price_incl_tax": f"{sum(Decimal(row['amount_incl_tax']) for row in rows):.2f}",
+    }
 
 
 def summarize_batch_preview(batch_items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1384,9 +1419,38 @@ def summarize_batch_preview(batch_items: list[dict[str, Any]]) -> dict[str, Any]
                 ),
             }
         )
+    invoice_totals = [
+        {
+            "contact_id": item["contact"]["id"],
+            "customer_id": item["contact"].get("customer_id"),
+            "currency": item["sales_invoice"].get("currency") or "EUR",
+            **item["totals"],
+        }
+        for item in batch_items
+    ]
+    totals_by_currency: dict[str, dict[str, str]] = {}
+    for item in invoice_totals:
+        currency = str(item["currency"])
+        current = totals_by_currency.setdefault(
+            currency,
+            {
+                "total_price_excl_tax": "0.00",
+                "total_tax": "0.00",
+                "total_price_incl_tax": "0.00",
+            },
+        )
+        for field in (
+            "total_price_excl_tax",
+            "total_tax",
+            "total_price_incl_tax",
+        ):
+            current[field] = f"{Decimal(current[field]) + Decimal(item[field]):.2f}"
+
     return {
         "preview_table": render_preview_table(rows),
         "rows": rows,
+        "invoice_totals": invoice_totals,
+        "totals_by_currency": totals_by_currency,
         "duplicate_count": len(duplicates),
         "duplicates": duplicates,
         "merge_warning_count": sum(

@@ -9,10 +9,10 @@ from unittest import mock
 
 from pydantic import TypeAdapter, ValidationError
 
-import moneybird.client as client_module
-from moneybird.client import MoneybirdClient
-from moneybird.config import MoneybirdError
-from moneybird.tools import _params, core
+import moneybird_mcp.client as client_module
+from moneybird_mcp.client import MoneybirdClient
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.tools import _params, core
 
 
 class _JsonResponse:
@@ -51,7 +51,7 @@ class IdentifierSchemaTests(unittest.TestCase):
                         adapter.validate_python(value)
 
     def test_tool_schemas_expose_id_and_path_constraints(self) -> None:
-        from moneybird.tools import mcp
+        from moneybird_mcp.tools import mcp
 
         archive_schema = asyncio.run(
             mcp.get_tool("prepare_archive_contact")

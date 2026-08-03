@@ -6,6 +6,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
+from .. import __version__
 from ..client import normalize_generic_get_path, validate_moneybird_id
 from ..config import (
     READ_ONLY_ANNOTATIONS,
@@ -13,7 +14,9 @@ from ..config import (
 )
 from ..credentials import (
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+    credentials_are_configured,
     get_credential_mode,
+    missing_credentials_message,
 )
 from ..formatting import (
     api_url,
@@ -58,11 +61,41 @@ def get_server_status(
         ),
     ] = 20,
 ) -> dict[str, Any]:
-    """Return local, privacy-safe performance diagnostics for this MCP process."""
+    """Return build, credential, and privacy-safe process diagnostics."""
+    credential_mode = get_credential_mode()
+    if (
+        credential_mode != CREDENTIAL_MODE_HOSTED_REQUEST_ONLY
+        and not credentials_are_configured(credential_mode)
+    ):
+        # This is the one status tool that remains useful before setup is
+        # complete.  Do not resolve credentials: OAuth resolution can contact
+        # Moneybird and refresh the durable token store.
+        return {
+            "version": __version__,
+            "credential_state": {
+                "mode": credential_mode,
+                "configured": False,
+                "message": missing_credentials_message(credential_mode),
+            },
+            "tool_discovery": os.environ.get(
+                "MONEYBIRD_TOOL_DISCOVERY",
+                "full",
+            ),
+            "performance": performance_snapshot(
+                recent_tools=recent_tools,
+                tenant_scope=None,
+            ),
+        }
+
     # Resolve only the caller's credential scope; require_administration=False
     # avoids a Moneybird API call when no administration id was configured.
     client = ctx.get_client(require_administration=False)
     return {
+        "version": __version__,
+        "credential_state": {
+            "mode": credential_mode,
+            "configured": True,
+        },
         "tool_discovery": os.environ.get(
             "MONEYBIRD_TOOL_DISCOVERY",
             "full",

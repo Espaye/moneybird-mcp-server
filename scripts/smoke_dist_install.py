@@ -66,12 +66,12 @@ def _install_and_smoke(
                 "-c",
                 (
                     "from importlib.metadata import version; "
-                    "import moneybird; import moneybird.server; "
-                    "from moneybird.capabilities import capability_mode; "
-                    "from moneybird.tools import mcp; "
+                    "import moneybird_mcp; import moneybird_mcp.server; "
+                    "from moneybird_mcp.capabilities import capability_mode; "
+                    "from moneybird_mcp.tools import mcp; "
                     f"{pdf_check}"
                     f"assert version('moneybird-mcp') == {expected_version!r}; "
-                    "config = moneybird.server.build_config([]); "
+                    "config = moneybird_mcp.server.build_config([]); "
                     "assert config.transport == 'stdio'; "
                     "assert config.credential_mode == 'local'; "
                     "assert capability_mode().value == 'read_only'; "

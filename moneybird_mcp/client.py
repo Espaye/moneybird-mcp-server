@@ -1058,6 +1058,13 @@ class MoneybirdClient:
             {"per_page": max(1, min(limit, 100)), "page": max(1, page)},
         )
 
+    def get_product(self, product_id: str) -> dict[str, Any]:
+        product_id = validate_moneybird_id(product_id, "product_id")
+        return self._request(
+            "GET",
+            f"/{self.administration_id}/products/{product_id}.json",
+        )
+
     def list_tax_rates(self) -> list[dict[str, Any]]:
         return self._request(
             "GET",

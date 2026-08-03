@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CLIENT_SOURCE = REPO_ROOT / "moneybird" / "client.py"
+CLIENT_SOURCE = REPO_ROOT / "moneybird_mcp" / "client.py"
 SPEC_PATH = REPO_ROOT / "docs" / "moneybird_api_paths.json"
 
 DOCUMENT_COLLECTION_PATHS = [
@@ -64,7 +64,7 @@ def _client_operations() -> list[tuple[str, str, str]]:
                 for collection in collections
             ]
         elif "{endpoint}" in path:
-            from moneybird.config import REPORT_ENDPOINTS
+            from moneybird_mcp.config import REPORT_ENDPOINTS
 
             expansions = [
                 path.replace("{endpoint}", endpoint)

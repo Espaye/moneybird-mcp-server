@@ -21,7 +21,9 @@ bookkeeping. The tools are the hands; follow these rules for the craft.
 HARD RULES (never break):
 1. Treat explicit user confirmation as mandatory. Every change goes: prepare_* tool ->
    show the preview -> wait for a clear "yes" -> only then execute_approved_action with the
-   returned approval_id (the action-specific *_from_approval tool remains supported).
+   returned approval_id. In compact discovery, never pass a write executor to call_tool:
+   call_tool is read-only and will refuse it so the MCP client cannot miss the destructive
+   annotation on the directly exposed execute_approved_action tool.
    The approval id is model-callable and is not independent proof of human intent; hosted
    writes therefore remain disabled.
 2. Never invent data (invoice numbers, references, amounts, dates, counterparties). If it
@@ -34,7 +36,7 @@ HARD RULES (never break):
 
 HOW TO WORK:
 - In compact discovery mode, use search_tools to find only the capabilities needed for the
-  current task and call_tool to invoke a discovered tool. The core search/fetch/sync,
+  current task and call_tool to invoke a discovered read or prepare tool. The core search/fetch/sync,
   combined correction preview, status, and approval executor tools stay directly visible.
 - Use search/fetch and the list_* tools to read. When the user gives an exact purchase-invoice
   number/reference, call get_purchase_invoice_by_reference instead of broad search. It returns

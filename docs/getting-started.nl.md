@@ -44,6 +44,8 @@ Toon de Moneybird-administraties die beschikbaar zijn voor deze verbinding en to
 
 Laat `MONEYBIRD_ADMINISTRATION_ID` weg wanneer het token maar één administratie kan bereiken. Wanneer het token meerdere administraties kan bereiken, stel je na het opvragen daarvan het exacte administratie-ID in.
 
+Claude Code bewaart MCP-registraties met een scope. De standaardscope `local` geldt alleen voor het huidige project. Gebruik `--scope user` voor een privéconfiguratie die in elk project beschikbaar moet zijn. Projectscope schrijft een gedeeld `.mcp.json`-bestand en mag geen persoonlijk Moneybird-token bevatten. Zijn de tools in een andere map afwezig terwijl de server verbonden is, controleer de scope dan met `claude mcp get moneybird`.
+
 ## Installeren met `pip`
 
 ```bash
@@ -57,6 +59,8 @@ moneybird-mcp
 ```
 
 Het consolecommando communiceert via stdio. Normaal gesproken start de MCP-client dit proces. Het rechtstreeks uitvoeren in een gewone terminal is vooral nuttig om de configuratie te controleren of `--help` te bekijken.
+
+Sluit op Windows iedere MCP-client die dit commando uitvoert vóór een installatie of upgrade met `pip`. Anders kan het vergrendelde `moneybird-mcp.exe` ervoor zorgen dat `pip` met `WinError 32` stopt nadat een deel van de oude installatie al is verwijderd. Houd de client gesloten en voer de installatieopdracht opnieuw uit om dit te herstellen. De aanbevolen `uvx`-opstelling vervangt dit gebruikte consoleprogramma niet tijdens een upgrade.
 
 ## Optionele PDF-ondersteuning
 
@@ -98,6 +102,8 @@ Met `pip`:
 python -m pip install --upgrade moneybird-mcp
 ```
 
+Sluit op Windows eerst de MCP-client. Als een eerdere poging `WinError 32` meldde, voer de opdracht dan opnieuw uit terwijl de client gesloten blijft.
+
 Laat `uvx` indien nodig het pakket opnieuw ophalen:
 
 ```bash
@@ -129,7 +135,7 @@ Lokale en geauthenticeerde modi voor één gebruiker kunnen de OAuth-autorisatie
 3. Voer het volgende uit:
 
 ```bash
-python -m moneybird.oauth_login --env-file /absolute/path/operator.env
+python -m moneybird_mcp.oauth_login --env-file /absolute/path/operator.env
 ```
 
 Dit werkt zowel voor een geïnstalleerd pakket als voor een clone; in een clone is

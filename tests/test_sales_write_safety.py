@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from moneybird.credentials import set_active_administration_id
-from moneybird.tools import sales
+from moneybird_mcp.credentials import set_active_administration_id
+from moneybird_mcp.tools import sales
 
 
 class SalesWorkflowWriteSafetyTests(unittest.TestCase):
@@ -103,6 +103,114 @@ class SalesWorkflowWriteSafetyTests(unittest.TestCase):
         )
         self.assertEqual(fake.pause_calls, 2)
         self.assertEqual(fake.resume_calls, 1)
+
+    def test_draft_invoice_preview_shows_line_subtotals_and_total(self) -> None:
+        class InvoiceClient:
+            administration_id = "sales-admin"
+
+            def get_contact(self, contact_id: str):
+                return {
+                    "id": contact_id,
+                    "customer_id": "C-1",
+                    "company_name": "Preview customer",
+                }
+
+            def list_sales_invoices(self, **_kwargs):
+                # Latest-invoice defaults reproduce Moneybird's normal 21%
+                # excl.-VAT sales setup without contacting the live API.
+                return [
+                    {
+                        "id": "old-invoice",
+                        "invoice_date": "2026-07-01",
+                        "prices_are_incl_tax": False,
+                        "currency": "EUR",
+                        "reference": "Different reference",
+                        "details": [
+                            {
+                                "description": "Different line",
+                                "tax_rate_id": "tax-21",
+                                "ledger_account_id": "ledger-sales",
+                            }
+                        ],
+                    }
+                ]
+
+            def list_tax_rates(self):
+                return [{"id": "tax-21", "percentage": "21"}]
+
+        client = InvoiceClient()
+        set_active_administration_id(client.administration_id)
+        with mock.patch.object(sales.ctx, "get_client", return_value=client):
+            prepared = sales.prepare_create_sales_invoice_draft(
+                "contact-1",
+                [
+                    {
+                        "description": "Verification line",
+                        "price": "1000.00",
+                        "amount": "3",
+                    }
+                ],
+                reference="Verify total",
+            )
+
+        preview = prepared["preview"]
+        self.assertIn("EUR 3630.00 incl. VAT", prepared["summary"])
+        self.assertEqual(preview["total_price_excl_tax"], "3000.00")
+        self.assertEqual(preview["total_tax"], "630.00")
+        self.assertEqual(preview["total_price_incl_tax"], "3630.00")
+        self.assertEqual(preview["line_items"][0]["quantity"], "3")
+        self.assertEqual(preview["line_items"][0]["unit_price"], "1000.00")
+        self.assertEqual(preview["line_items"][0]["amount_incl_tax"], "3630.00")
+        self.assertEqual(
+            prepared["payload"]["details_attributes"][0]["tax_rate_id"],
+            "tax-21",
+        )
+
+    def test_first_invoice_uses_product_tax_and_ledger_defaults(self) -> None:
+        class FirstInvoiceClient:
+            administration_id = "sales-admin"
+
+            def get_contact(self, contact_id: str):
+                return {
+                    "id": contact_id,
+                    "customer_id": "C-NEW",
+                    "company_name": "New customer",
+                }
+
+            def list_sales_invoices(self, **_kwargs):
+                return []
+
+            def get_product(self, product_id: str):
+                self.requested_product_id = product_id
+                return {
+                    "id": product_id,
+                    "tax_rate_id": "tax-9",
+                    "ledger_account_id": "ledger-product",
+                }
+
+            def list_tax_rates(self):
+                return [{"id": "tax-9", "percentage": "9"}]
+
+        client = FirstInvoiceClient()
+        set_active_administration_id(client.administration_id)
+        with mock.patch.object(sales.ctx, "get_client", return_value=client):
+            prepared = sales.prepare_create_sales_invoice_draft(
+                "contact-new",
+                [
+                    {
+                        "description": "First product invoice",
+                        "price": "100.00",
+                        "product_id": "product-9",
+                    }
+                ],
+            )
+
+        line = prepared["payload"]["details_attributes"][0]
+        self.assertEqual(client.requested_product_id, "product-9")
+        self.assertEqual(line["tax_rate_id"], "tax-9")
+        self.assertEqual(line["ledger_account_id"], "ledger-product")
+        self.assertEqual(line["product_id"], "product-9")
+        self.assertEqual(prepared["preview"]["total_price_incl_tax"], "109.00")
 
 
 if __name__ == "__main__":

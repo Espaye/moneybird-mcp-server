@@ -28,10 +28,10 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from moneybird import oauth
-from moneybird.client import MoneybirdClient
-from moneybird.config import MoneybirdError, data_dir
-from moneybird.credentials import (
+from moneybird_mcp import oauth
+from moneybird_mcp.client import MoneybirdClient
+from moneybird_mcp.config import MoneybirdError, data_dir
+from moneybird_mcp.credentials import (
     CREDENTIAL_MODE_ENV,
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
 )
@@ -280,7 +280,7 @@ def build_gateway_app(mcp_app: Any | None = None) -> GatewayDispatcher:
             "MONEYBIRD_TOOL_DISCOVERY",
             os.environ.get("MCP_TOOL_DISCOVERY", "search"),
         )
-        from moneybird.tools import mcp
+        from moneybird_mcp.tools import mcp
 
         mcp_app = mcp.http_app(transport="http")
     store = GatewayStore()

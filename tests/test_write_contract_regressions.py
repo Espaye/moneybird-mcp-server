@@ -6,16 +6,16 @@ import tempfile
 import unittest
 from unittest import mock
 
-from moneybird import safety
-from moneybird.config import MoneybirdError
-from moneybird.credentials import set_active_administration_id
-from moneybird.tools import bank, ledger, payments, sales, sales_batches
-from moneybird.tools._writes import (
+from moneybird_mcp import safety
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.credentials import set_active_administration_id
+from moneybird_mcp.tools import bank, ledger, payments, sales, sales_batches
+from moneybird_mcp.tools._writes import (
     mark_write_dispatch_started,
     run_approved_write,
 )
-from moneybird.tools.approvals import APPROVAL_EXECUTORS
-from moneybird.write_contracts import WRITE_SPECS
+from moneybird_mcp.tools.approvals import APPROVAL_EXECUTORS
+from moneybird_mcp.write_contracts import WRITE_SPECS
 
 
 class WriteContractRegressionTests(unittest.TestCase):
@@ -270,6 +270,12 @@ class WriteContractRegressionTests(unittest.TestCase):
             def get_contact(self, _contact_id):
                 return {"id": "contact-1"}
 
+            def list_sales_invoices(self, **_kwargs):
+                return []
+
+            def list_tax_rates(self):
+                return [{"id": "tax-21", "percentage": "21"}]
+
             def create_sales_invoice(self, _payload):
                 return {"id": "invoice-1"}
 
@@ -297,6 +303,7 @@ class WriteContractRegressionTests(unittest.TestCase):
                         "description": "Expected",
                         "price": "10",
                         "amount": "1",
+                        "tax_rate_id": "tax-21",
                         "ledger_account_id": "ledger-1",
                     }
                 ],

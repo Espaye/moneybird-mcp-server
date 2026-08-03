@@ -120,7 +120,7 @@ Set `MONEYBIRD_ADMINISTRATION_ID` when the credential can access more than one a
 
 ### Local OAuth store
 
-When a personal token is absent, local and single-user modes can use the OAuth store created by `python -m moneybird.oauth_login`.
+When a personal token is absent, local and single-user modes can use the OAuth store created by `python -m moneybird_mcp.oauth_login`.
 
 The token file contains secrets and is not encrypted by this project. Protect the data directory with an appropriate filesystem ACL.
 

@@ -1,7 +1,7 @@
 """Build the Claude Desktop extension bundle (.mcpb).
 
 A .mcpb is a zip containing manifest.json, server/main.py and server/lib/ (the
-moneybird package plus all dependencies, pip-installed with --target). Because
+moneybird_mcp package plus all dependencies, pip-installed with --target). Because
 the dependency tree contains compiled wheels (pydantic-core), the bundle is
 specific to the platform and Python minor version it was built on — build on
 Windows for Windows users, on macOS for macOS users.

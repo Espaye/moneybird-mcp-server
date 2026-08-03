@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from moneybird.config import MoneybirdError, load_env_file
+from moneybird_mcp.config import MoneybirdError, load_env_file
 
 ROOT = Path(__file__).resolve().parent.parent
 SECURITY_ENV_KEYS = {
@@ -99,8 +99,8 @@ def _run_probe(cwd: Path, *, args: list[str] | None = None, **env: str) -> dict:
     code = """
 import json
 import os
-from moneybird.capabilities import capability_mode
-from moneybird.server import build_config
+from moneybird_mcp.capabilities import capability_mode
+from moneybird_mcp.server import build_config
 
 config = build_config(%r)
 keys = %r
@@ -140,7 +140,7 @@ def test_stripped_environment_still_resolves_third_party_imports() -> None:
     """
 
     completed = subprocess.run(
-        [sys.executable, "-c", "import httpx, moneybird; print('ok')"],
+        [sys.executable, "-c", "import httpx, moneybird_mcp; print('ok')"],
         env=_clean_subprocess_env(),
         check=False,
         capture_output=True,
@@ -321,11 +321,11 @@ import sys
 import types
 
 fake_mcp = types.SimpleNamespace(run=lambda **kwargs: None)
-fake_tools = types.ModuleType("moneybird.tools")
+fake_tools = types.ModuleType("moneybird_mcp.tools")
 fake_tools.mcp = fake_mcp
-sys.modules["moneybird.tools"] = fake_tools
+sys.modules["moneybird_mcp.tools"] = fake_tools
 
-from moneybird.server import main
+from moneybird_mcp.server import main
 main([])
 print(json.dumps({"data_dir": os.environ["MONEYBIRD_MCP_DATA_DIR"]}))
 """
@@ -357,7 +357,7 @@ import os
 import sys
 from unittest import mock
 
-from moneybird import oauth_login
+from moneybird_mcp import oauth_login
 
 with (
     mock.patch.object(

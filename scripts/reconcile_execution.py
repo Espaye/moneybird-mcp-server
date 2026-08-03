@@ -11,8 +11,8 @@ import json
 import os
 from pathlib import Path
 
-from moneybird.credentials import set_active_administration_id
-from moneybird.safety import (
+from moneybird_mcp.credentials import set_active_administration_id
+from moneybird_mcp.safety import (
     approval_execution_state,
     list_unresolved_approval_executions,
     reconcile_approval_execution,

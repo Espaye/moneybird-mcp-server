@@ -44,6 +44,8 @@ List the Moneybird administrations available to this connection, then show the s
 
 Leave `MONEYBIRD_ADMINISTRATION_ID` out when the token can reach only one administration. When it can reach several, set the exact administration ID after listing them.
 
+Claude Code stores MCP registrations at a scope. The default `local` scope applies only to the current project. Use `--scope user` for a private configuration that must be available in every project. Project scope writes `.mcp.json` for sharing and must not contain a personal Moneybird token. If a server is connected but its tools are absent in another directory, inspect its scope with `claude mcp get moneybird`.
+
 ## Install with `pip`
 
 ```bash
@@ -57,6 +59,8 @@ moneybird-mcp
 ```
 
 The console command communicates over stdio. Normally the MCP client starts it; running it in an ordinary terminal is mainly useful for checking configuration or viewing `--help`.
+
+On Windows, close every MCP client running this command before a `pip` install or upgrade. Otherwise the locked `moneybird-mcp.exe` can make `pip` fail with `WinError 32` after removing part of the old installation. Keep the client closed and rerun the install command to repair it. The recommended `uvx` setup avoids replacing that in-use console script.
 
 ## Optional PDF support
 
@@ -98,6 +102,8 @@ With `pip`:
 python -m pip install --upgrade moneybird-mcp
 ```
 
+On Windows, quit the MCP client before running this command. If an earlier attempt reported `WinError 32`, rerun it with the client still closed.
+
 With `uvx`, force a package refresh when needed:
 
 ```bash
@@ -129,7 +135,7 @@ Local and authenticated single-user modes can use Moneybird's OAuth authorizatio
 3. Run:
 
 ```bash
-python -m moneybird.oauth_login --env-file /absolute/path/operator.env
+python -m moneybird_mcp.oauth_login --env-file /absolute/path/operator.env
 ```
 
 This works for an installed package as well as a source checkout; in a checkout

@@ -18,8 +18,8 @@ os.environ.setdefault(
 from starlette.testclient import TestClient
 
 from gateway import app as gateway_app
-from moneybird import oauth
-from moneybird.credentials import (
+from moneybird_mcp import oauth
+from moneybird_mcp.credentials import (
     CREDENTIAL_MODE_ENV,
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
 )
@@ -180,11 +180,11 @@ class GatewayDemoTests(unittest.TestCase):
         fake_mcp = mock.Mock()
         mounted_app = EchoMcpApp()
         fake_mcp.http_app.return_value = mounted_app
-        fake_tools = types.ModuleType("moneybird.tools")
+        fake_tools = types.ModuleType("moneybird_mcp.tools")
         fake_tools.mcp = fake_mcp
         os.environ[CREDENTIAL_MODE_ENV] = "local"
 
-        with mock.patch.dict(sys.modules, {"moneybird.tools": fake_tools}):
+        with mock.patch.dict(sys.modules, {"moneybird_mcp.tools": fake_tools}):
             built = gateway_app.build_gateway_app()
 
         fake_mcp.http_app.assert_called_once_with(transport="http")

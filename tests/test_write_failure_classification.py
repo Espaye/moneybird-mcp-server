@@ -21,10 +21,10 @@ os.environ.setdefault(
 
 import httpx
 
-from moneybird import safety
-from moneybird.config import MoneybirdError, MoneybirdHTTPError
-from moneybird.formatting import format_reported_error, parse_reported_error
-from moneybird.safety import (
+from moneybird_mcp import safety
+from moneybird_mcp.config import MoneybirdError, MoneybirdHTTPError
+from moneybird_mcp.formatting import format_reported_error, parse_reported_error
+from moneybird_mcp.safety import (
     UNRESOLVED_APPROVAL_STATES,
     classify_failed_write,
     record_applied_write,
@@ -147,7 +147,7 @@ class AppliedWriteLedgerTests(unittest.TestCase):
         self.addCleanup(reset_applied_writes)
 
     def test_only_mutating_requests_count(self) -> None:
-        from moneybird.client import MoneybirdClient
+        from moneybird_mcp.client import MoneybirdClient
 
         client = MoneybirdClient(token="t", administration_id="1")
 
@@ -156,7 +156,7 @@ class AppliedWriteLedgerTests(unittest.TestCase):
             text = "{}"
             headers: dict = {}
 
-        with mock.patch("moneybird.client.get_shared_http_client") as pool:
+        with mock.patch("moneybird_mcp.client.get_shared_http_client") as pool:
             pool.return_value.request.return_value = _Response()
             client._request("GET", "/1/contacts.json")
             self.assertEqual(safety.applied_write_count(), 0)
@@ -164,7 +164,7 @@ class AppliedWriteLedgerTests(unittest.TestCase):
             self.assertEqual(safety.applied_write_count(), 1)
 
     def test_a_rejected_mutation_does_not_count(self) -> None:
-        from moneybird.client import MoneybirdClient
+        from moneybird_mcp.client import MoneybirdClient
 
         client = MoneybirdClient(token="t", administration_id="1")
 
@@ -173,7 +173,7 @@ class AppliedWriteLedgerTests(unittest.TestCase):
             text = VALIDATION_BODY
             headers: dict = {}
 
-        with mock.patch("moneybird.client.get_shared_http_client") as pool:
+        with mock.patch("moneybird_mcp.client.get_shared_http_client") as pool:
             pool.return_value.request.return_value = _Rejected()
             with self.assertRaises(MoneybirdHTTPError):
                 client._request("POST", "/1/contacts.json", body={"contact": {}})
@@ -188,7 +188,7 @@ class AppliedWriteLedgerTests(unittest.TestCase):
         though only a read had succeeded — reintroducing exactly the audit-trail
         noise this classification exists to remove.
         """
-        from moneybird.client import MoneybirdClient
+        from moneybird_mcp.client import MoneybirdClient
 
         client = MoneybirdClient(token="t", administration_id="1")
 
@@ -203,7 +203,7 @@ class AppliedWriteLedgerTests(unittest.TestCase):
             client.fetch_financial_mutations_by_ids,
             client.fetch_recurring_sales_invoices_by_ids,
         )
-        with mock.patch("moneybird.client.get_shared_http_client") as pool:
+        with mock.patch("moneybird_mcp.client.get_shared_http_client") as pool:
             pool.return_value.request.return_value = _Response()
             for reader in readers:
                 with self.subTest(reader=reader.__name__):
@@ -214,7 +214,7 @@ class AppliedWriteLedgerTests(unittest.TestCase):
 
     def test_a_real_write_after_a_batch_read_is_still_counted(self) -> None:
         # The exclusion must not swallow genuine mutations that follow a read.
-        from moneybird.client import MoneybirdClient
+        from moneybird_mcp.client import MoneybirdClient
 
         client = MoneybirdClient(token="t", administration_id="1")
 
@@ -223,17 +223,17 @@ class AppliedWriteLedgerTests(unittest.TestCase):
             text = "{}"
             headers: dict = {}
 
-        with mock.patch("moneybird.client.get_shared_http_client") as pool:
+        with mock.patch("moneybird_mcp.client.get_shared_http_client") as pool:
             pool.return_value.request.return_value = _Response()
             client.fetch_contacts_by_ids(["1"])
             client._request("PATCH", "/1/contacts/1.json", body={"contact": {}})
         self.assertEqual(safety.applied_write_count(), 1)
 
     def test_a_transport_failure_does_not_count(self) -> None:
-        from moneybird.client import MoneybirdClient
+        from moneybird_mcp.client import MoneybirdClient
 
         client = MoneybirdClient(token="t", administration_id="1")
-        with mock.patch("moneybird.client.get_shared_http_client") as pool:
+        with mock.patch("moneybird_mcp.client.get_shared_http_client") as pool:
             pool.return_value.request.side_effect = httpx.ConnectError("down")
             with self.assertRaises(MoneybirdError):
                 client._request("POST", "/1/contacts.json", body={"contact": {}})
@@ -264,7 +264,7 @@ class EndToEndApprovalOutcomeTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-        from moneybird.credentials import set_active_administration_id
+        from moneybird_mcp.credentials import set_active_administration_id
 
         set_active_administration_id(self.administration_id)
         self.addCleanup(set_active_administration_id, None)
@@ -273,9 +273,9 @@ class EndToEndApprovalOutcomeTests(unittest.TestCase):
         # Each test needs its own payload: an unresolved approval keeps its
         # fingerprint locked, so a second identical write would be refused
         # before it ever reaches the classification under test.
-        from moneybird.client import MoneybirdClient
-        from moneybird.tools import _context as ctx
-        from moneybird.tools import contacts as contact_tools
+        from moneybird_mcp.client import MoneybirdClient
+        from moneybird_mcp.tools import _context as ctx
+        from moneybird_mcp.tools import contacts as contact_tools
 
         client = MoneybirdClient(
             token="dummy", administration_id=self.administration_id
@@ -285,7 +285,7 @@ class EndToEndApprovalOutcomeTests(unittest.TestCase):
                 company_name=company_name, email="nobody@example.com"
             )
             approval_id = prepared["approval_id"]
-            with mock.patch("moneybird.client.get_shared_http_client") as pool:
+            with mock.patch("moneybird_mcp.client.get_shared_http_client") as pool:
                 pool.return_value.request.return_value = response
                 with self.assertRaises(MoneybirdError) as caught:
                     contact_tools.create_contact_from_approval(approval_id)

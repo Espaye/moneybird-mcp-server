@@ -1,6 +1,6 @@
 * @Espaye
 
 /.github/ @Espaye
-/moneybird/safety.py @Espaye
-/moneybird/credentials.py @Espaye
-/moneybird/tools/_writes.py @Espaye
+/moneybird_mcp/safety.py @Espaye
+/moneybird_mcp/credentials.py @Espaye
+/moneybird_mcp/tools/_writes.py @Espaye

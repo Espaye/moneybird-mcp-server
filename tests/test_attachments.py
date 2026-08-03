@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from moneybird.attachments import (
+from moneybird_mcp.attachments import (
     extract_pdf_text,
     looks_like_pdf,
     safe_attachment_filename,
@@ -132,7 +132,7 @@ class ExtractPdfTextTests(unittest.TestCase):
         context.Process.return_value = process
 
         with mock.patch(
-            "moneybird.attachments.multiprocessing.get_context",
+            "moneybird_mcp.attachments.multiprocessing.get_context",
             return_value=context,
         ):
             result = extract_pdf_text(_minimal_pdf("worker failure"))
@@ -174,7 +174,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
             return False
 
     def test_redirect_drops_authorization_header(self) -> None:
-        from moneybird.client import MoneybirdClient
+        from moneybird_mcp.client import MoneybirdClient
 
         client = MoneybirdClient("secret-token", "123")
         redirect_headers = email.message.Message()
@@ -206,7 +206,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
                 return_value=FakeOpener(),
             ) as build_opener,
             mock.patch(
-                "moneybird.client.socket.getaddrinfo",
+                "moneybird_mcp.client.socket.getaddrinfo",
                 return_value=[
                     (
                         socket.AF_INET,
@@ -245,8 +245,8 @@ class BinaryRequestRedirectTests(unittest.TestCase):
         )
 
     def test_second_redirect_from_signed_storage_is_refused(self) -> None:
-        from moneybird.client import MoneybirdClient
-        from moneybird.config import MoneybirdError
+        from moneybird_mcp.client import MoneybirdClient
+        from moneybird_mcp.config import MoneybirdError
 
         client = MoneybirdClient("secret-token", "123")
         first_headers = email.message.Message()
@@ -270,7 +270,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
         with (
             mock.patch.object(urllib.request, "build_opener", return_value=FakeOpener()),
             mock.patch(
-                "moneybird.client.socket.getaddrinfo",
+                "moneybird_mcp.client.socket.getaddrinfo",
                 return_value=[
                     (
                         socket.AF_INET,
@@ -286,8 +286,8 @@ class BinaryRequestRedirectTests(unittest.TestCase):
                 client.download_attachment("purchase_invoice", "456", "789")
 
     def test_bounded_reader_rejects_declared_and_streamed_overflow(self) -> None:
-        from moneybird.client import _read_bounded_response
-        from moneybird.config import MoneybirdError
+        from moneybird_mcp.client import _read_bounded_response
+        from moneybird_mcp.config import MoneybirdError
 
         declared = self._FakeResponse(b"1234", "application/pdf")
         declared.headers["Content-Length"] = "5"
@@ -299,8 +299,8 @@ class BinaryRequestRedirectTests(unittest.TestCase):
             _read_bounded_response(streamed, max_bytes=4)
 
     def test_redirect_policy_rejects_non_https_and_private_addresses(self) -> None:
-        from moneybird.client import _validated_attachment_redirect
-        from moneybird.config import MoneybirdError
+        from moneybird_mcp.client import _validated_attachment_redirect
+        from moneybird_mcp.config import MoneybirdError
 
         with self.assertRaisesRegex(MoneybirdError, "credential-free HTTPS"):
             _validated_attachment_redirect(
@@ -308,7 +308,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
                 "http://storage.example/file",
             )
         with mock.patch(
-            "moneybird.client.socket.getaddrinfo",
+            "moneybird_mcp.client.socket.getaddrinfo",
             return_value=[
                 (
                     socket.AF_INET,
@@ -326,7 +326,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
                 )
 
     def test_pinned_connection_uses_numeric_tcp_target_and_original_tls_name(self) -> None:
-        from moneybird.client import _PinnedHTTPSConnection
+        from moneybird_mcp.client import _PinnedHTTPSConnection
 
         raw_socket = mock.Mock()
         tls_socket = object()
@@ -339,7 +339,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
             timeout=7,
         )
 
-        with mock.patch("moneybird.client.socket.socket", return_value=raw_socket):
+        with mock.patch("moneybird_mcp.client.socket.socket", return_value=raw_socket):
             connection.connect()
 
         raw_socket.connect.assert_called_once_with(("93.184.216.34", 443))
@@ -350,7 +350,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
         self.assertIs(connection.sock, tls_socket)
 
     def test_pinned_handler_uses_supported_https_handler_api(self) -> None:
-        from moneybird.client import _PinnedHTTPSConnection, _PinnedHTTPSHandler
+        from moneybird_mcp.client import _PinnedHTTPSConnection, _PinnedHTTPSHandler
 
         handler = _PinnedHTTPSHandler(("93.184.216.34",))
         request = urllib.request.Request("https://storage.example/file")
@@ -364,15 +364,15 @@ class BinaryRequestRedirectTests(unittest.TestCase):
         self.assertTrue(do_open.call_args.kwargs["context"].check_hostname)
 
     def test_mixed_public_private_dns_answers_fail_closed(self) -> None:
-        from moneybird.client import _validated_attachment_redirect_target
-        from moneybird.config import MoneybirdError
+        from moneybird_mcp.client import _validated_attachment_redirect_target
+        from moneybird_mcp.config import MoneybirdError
 
         answers = [
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443)),
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 443)),
         ]
         with (
-            mock.patch("moneybird.client.socket.getaddrinfo", return_value=answers),
+            mock.patch("moneybird_mcp.client.socket.getaddrinfo", return_value=answers),
             self.assertRaisesRegex(MoneybirdError, "non-public"),
         ):
             _validated_attachment_redirect_target(
@@ -381,8 +381,8 @@ class BinaryRequestRedirectTests(unittest.TestCase):
             )
 
     def test_non_public_and_malformed_dns_answers_fail_closed(self) -> None:
-        from moneybird.client import _validated_attachment_redirect_target
-        from moneybird.config import MoneybirdError
+        from moneybird_mcp.client import _validated_attachment_redirect_target
+        from moneybird_mcp.config import MoneybirdError
 
         addresses = [
             "127.0.0.1",
@@ -410,7 +410,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
                 ]
                 with (
                     mock.patch(
-                        "moneybird.client.socket.getaddrinfo",
+                        "moneybird_mcp.client.socket.getaddrinfo",
                         return_value=answers,
                     ),
                     self.assertRaises(MoneybirdError),
@@ -421,8 +421,8 @@ class BinaryRequestRedirectTests(unittest.TestCase):
                     )
 
     def test_redirect_rejects_credentials_fragment_and_nondefault_port(self) -> None:
-        from moneybird.client import _validated_attachment_redirect_target
-        from moneybird.config import MoneybirdError
+        from moneybird_mcp.client import _validated_attachment_redirect_target
+        from moneybird_mcp.config import MoneybirdError
 
         locations = [
             "http://storage.example/file",
@@ -443,7 +443,7 @@ class BinaryRequestRedirectTests(unittest.TestCase):
                 )
 
     def test_direct_response_returns_bytes(self) -> None:
-        from moneybird.client import MoneybirdClient
+        from moneybird_mcp.client import MoneybirdClient
 
         client = MoneybirdClient("secret-token", "123")
 
@@ -490,9 +490,9 @@ class ReadDocumentAttachmentToolTests(unittest.TestCase):
             return _minimal_pdf("Stroom 40,00"), "application/pdf"
 
     def _call(self, fake, **kwargs):
-        from moneybird import tools
-        from moneybird.credentials import set_active_administration_id
-        from moneybird.tools import _context as tool_context
+        from moneybird_mcp import tools
+        from moneybird_mcp.credentials import set_active_administration_id
+        from moneybird_mcp.tools import _context as tool_context
 
         def get_fake_client(*args, **_kwargs):
             set_active_administration_id(fake.administration_id)
@@ -520,10 +520,10 @@ class ReadDocumentAttachmentToolTests(unittest.TestCase):
     def test_hosted_mode_refuses_pdf_parsing_without_capacity_controls(self) -> None:
         import os
 
-        from moneybird import tools
-        from moneybird.config import MoneybirdError
-        from moneybird.credentials import CREDENTIAL_MODE_ENV
-        from moneybird.tools import _context as tool_context
+        from moneybird_mcp import tools
+        from moneybird_mcp.config import MoneybirdError
+        from moneybird_mcp.credentials import CREDENTIAL_MODE_ENV
+        from moneybird_mcp.tools import _context as tool_context
 
         with (
             mock.patch.dict(
@@ -550,8 +550,8 @@ class ReadDocumentAttachmentToolTests(unittest.TestCase):
         self.assertNotIn("saved_path", result)
 
     def test_declared_oversize_is_rejected_before_download(self) -> None:
-        from moneybird.attachments import DEFAULT_MAX_ATTACHMENT_BYTES
-        from moneybird.config import MoneybirdError
+        from moneybird_mcp.attachments import DEFAULT_MAX_ATTACHMENT_BYTES
+        from moneybird_mcp.config import MoneybirdError
 
         fake = self.FakeClient(
             attachments=[
