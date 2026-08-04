@@ -85,11 +85,14 @@ moneybird-mcp --help
 - Search contacts, sales invoices, purchase invoices, receipts, general journals, and bank mutations.
 - Read Moneybird reports, including profit and loss, balance sheet, general ledger, VAT, debtor, and creditor reports.
 - Review purchase invoices, invoice-delivery settings, bank mutations, and bookkeeping inconsistencies.
+- Audit product data and calculate guarded bulk price changes with exact decimal previews.
 - Read PDF attachments locally when the optional PDF dependency is installed.
 - Build a local search index for faster ranked search.
 - Prepare guarded write previews when writes have been explicitly enabled.
 
 The server uses compact Tool Search by default, so an MCP client does not need to load every tool schema at startup. See the [tool reference](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/tool-reference.md) and [Moneybird API coverage](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/moneybird_api_coverage.md).
+
+Use `list_supported_workflows` to discover the small set of outcomes that are integrated and tested end to end. The generated [workflow catalogue](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/workflow-catalogue.md) records their risk, mode, version, prerequisites, verification, and limitations. Product tools perform their concrete administration and record preflight themselves.
 
 ## Read-only and write modes
 

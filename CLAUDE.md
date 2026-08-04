@@ -314,6 +314,17 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
 - Duplicate-suppression blijft geldig na een latere `failed`/`partial_failure`-auditregel.
   Alleen een expliciete, nieuwere `invalidated`-regel heft een bewezen succes voor exact
   dezelfde fingerprint op; een later succes sluit die fingerprint opnieuw.
+- **Productprijswijzigingen zijn product-only en gebruiken een afgeleide semantische fingerprint.**
+  Gebruik `audit_products` en `analyse_product_price_adjustment` vóór
+  `prepare_bulk_update_product_prices`. De prepare-tool leidt de fingerprint af uit
+  ingangsdag, selectie, strategie en afronding. Die voorkomt een tweede uitvoering na
+  succes en blokkeert het claimen van een nieuwe approval zolang een gedeeltelijke of
+  ambigue poging onopgelost is. De flow rekent uitsluitend met `Decimal`, controleert
+  alle opgeslagen `updated_at`-versies vóór de eerste PATCH en
+  leest elk product na de write opnieuw. Hij wijzigt geen bestaande facturen, periodieke
+  facturen, abonnementssjablonen of subscriptions en doet daar ook geen impliciete claim over.
+  Product PATCH is altijd direct: een datum vóór of na vandaag is analysis-only en kan niet
+  worden gebackdatet of ingepland.
 
 ## API coverage reference
 
@@ -327,7 +338,8 @@ asset bundled on developer.moneybird.com.
 
 - `moneybird_mcp/tools/` — MCP tool definitions, split by domain (`sales.py`, `bank.py`,
   `payments.py`, `contacts.py`, `ledger.py`, `purchases.py`, `reference.py`,
-  `reports.py`, `core.py`, `sales_batches.py`, `workflows.py`, `approvals.py`).
+  `reports.py`, `core.py`, `sales_batches.py`, `workflows.py`, `catalogue.py`,
+  `products.py`, `approvals.py`).
   `_registry.py` holds the FastMCP
   instance + server instructions; `_context.py` is the patchable indirection tests use
   (`mock.patch.object(moneybird_mcp.tools._context, "get_client", ...)`); `_writes.py` is
@@ -354,6 +366,12 @@ asset bundled on developer.moneybird.com.
   local performance counters.
 - `moneybird_mcp/tool_discovery.py` — compact FastMCP BM25 Tool Search configuration and the
   always-visible core tool set.
+- `moneybird_mcp/workflow_catalogue.py` — kleine typed, versioned registry met alleen
+  volledig geïntegreerde productworkflows. `list_supported_workflows` exposeert hem;
+  `scripts/render_workflow_catalogue.py --check` keeps `docs/workflow-catalogue.md`
+  generated from that source. Product audit/calculation logic lives in
+  `moneybird_mcp/product_workflows.py`; its MCP boundary and guarded executor live in
+  `tools/products.py`.
 - `moneybird_mcp/vat_settlement.py` — btw-afwikkeling: gross-vs-reported comparison (reverse-charge
   aware, each side judged separately), settlement-account resolution by name with id overrides,
   period-end derivation, declared-amount validation, and the balanced memoriaal builder. The

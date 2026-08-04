@@ -14,10 +14,12 @@ from ._registry import SERVER_INSTRUCTIONS as SERVER_INSTRUCTIONS
 from ._registry import mcp
 from .approvals import *  # noqa: F401,F403
 from .bank import *  # noqa: F401,F403
+from .catalogue import *  # noqa: F401,F403
 from .contacts import *  # noqa: F401,F403
 from .core import *  # noqa: F401,F403
 from .ledger import *  # noqa: F401,F403
 from .payments import *  # noqa: F401,F403
+from .products import *  # noqa: F401,F403
 from .purchases import *  # noqa: F401,F403
 from .reference import *  # noqa: F401,F403
 from .reports import *  # noqa: F401,F403

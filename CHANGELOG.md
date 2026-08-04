@@ -7,6 +7,16 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Added
 
+- A small typed, versioned product-workflow catalogue exposed through
+  `list_supported_workflows`. The checked-in catalogue is generated from the same
+  registry and lists only workflows integrated and tested end to end.
+- A product/pricing vertical slice: read-only product inventory auditing, exact-decimal
+  percentage/fixed/explicit price analysis, and guarded product-only bulk price updates
+  with exclusions, rounding, derived semantic duplicate suppression, concrete
+  administration/source-version preflight, honest known-partial outcomes, and independent
+  read-after-write verification. Product updates explicitly do not claim to change
+  invoices, recurring invoices, subscription templates, or subscriptions.
+
 - `get_server_status` now reports the package version and credential state. In
   local or single-user mode it remains callable without credentials and returns
   the setup problem as data instead of failing like a Moneybird API tool.

@@ -65,6 +65,12 @@ WRITE_SPECS: dict[str, WriteSpec] = {
         "canonical ordered child payloads",
         "reconcile each child before resolving the parent",
     ),
+    "bulk_update_product_prices": _spec(
+        "complete-batch product updated_at, old price, identity, and accounting-default snapshots",
+        "independent product GET proves the exact new price and unchanged identity/accounting defaults",
+        "workflow version plus effective day, selectors, strategy, and rounding",
+        "re-read each product; uncertain dispatch remains ambiguous and partial children stay explicit",
+    ),
     "create_contact": _spec(
         "provider id must be absent before dispatch and returned after create",
         "independent GET compares every requested contact field",

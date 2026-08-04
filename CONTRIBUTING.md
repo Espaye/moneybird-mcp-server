@@ -40,6 +40,13 @@ No real Moneybird credential is needed for the test suite. Keep `.env`, OAuth st
 approvals, audit logs, sync indexes, FTS databases, and downloaded attachments out of commits
 and test fixtures.
 
+When workflow metadata changes, regenerate and verify the catalogue:
+
+```bash
+python scripts/render_workflow_catalogue.py
+python scripts/render_workflow_catalogue.py --check
+```
+
 The initial coverage gate is a 70% regression floor, slightly below the measured
 baseline so platform-specific branches do not make the gate flaky. Raise it after
 merging focused behavioural tests for high-risk modules; never add assertion-free

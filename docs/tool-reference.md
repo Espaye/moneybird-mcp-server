@@ -38,6 +38,14 @@ These stay visible without a search step:
 - `list_projects`
 - `list_time_entries`
 
+### Workflow discovery and products
+
+- `list_supported_workflows`
+- `audit_products`
+- `analyse_product_price_adjustment`
+
+`list_supported_workflows` lists only workflows integrated and tested end to end; pass a workflow id to return its complete definition. Product audit and pricing tools resolve the active administration and validate the selected product records directly instead of relying on a generic readiness claim.
+
 ### Sales
 
 - `list_sales_invoices`
@@ -106,6 +114,9 @@ Write families include:
 - banking: link, unlink, and reclassify mutation bookings;
 - combined bookkeeping correction batches;
 - meter-usage invoice runs.
+- product-only bulk price updates.
+
+`prepare_bulk_update_product_prices` supports percentage, fixed-amount, and explicit mappings with filters, exclusions, exact-decimal rounding policies, a maximum of 100 products, source versions, and per-product verification. It derives a semantic fingerprint from the effective day, selectors, strategy, and rounding so repeating the same request cannot silently apply it twice. Execution stops at the first failure; already verified products and a later definitive rejection are returned as a known partial result. Updates are immediate and cannot be backdated or scheduled. Existing invoices, recurring invoices, subscription templates, and subscriptions are never changed by this workflow.
 
 The approval ID is not independent evidence of human consent. Keep client-side destructive-tool confirmation enabled and use writes only in a supervised local or authenticated single-user deployment.
 
@@ -126,6 +137,15 @@ Prompts include:
 The resource `moneybird://playbook/bookkeeping` serves the repository bookkeeping playbook on demand.
 
 Bookkeeping guidance can help a model reason consistently, but it is not tax advice and does not replace deterministic enforcement or professional review.
+
+## Workflow catalogue
+
+The typed registry in `moneybird_mcp.workflow_catalogue` is the machine-readable source for workflow ids and versions, intent examples, required tools/scopes, risk, preconditions, verification, failure modes, limitations, prompt links, and test status. Regenerate the checked-in [workflow catalogue](workflow-catalogue.md) with:
+
+```bash
+python scripts/render_workflow_catalogue.py
+python scripts/render_workflow_catalogue.py --check
+```
 
 ## Attachment reading
 
@@ -152,3 +172,5 @@ Hosted request mode does not read or build durable search indexes. It performs c
 - The project does not guarantee bookkeeping correctness, tax correctness, or data recovery.
 
 See [Deployment and safety](deployment-and-safety.md) and [Security policy](../SECURITY.md).
+
+For opt-in seeded workflow scenarios, see [Developer-administration workflow tests](developer-administration-testing.md).
