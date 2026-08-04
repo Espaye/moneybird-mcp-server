@@ -293,7 +293,8 @@ class ServerStatusCredentialTests(unittest.TestCase):
             status = core.get_server_status()
 
         get_client.assert_not_called()
-        self.assertEqual(status["version"], "0.6.0")
+        self.assertEqual(status["version"], "0.6.1")
+        self.assertEqual(status["capability_mode"], "write_enabled")
         self.assertEqual(
             status["credential_state"],
             {
@@ -321,3 +322,9 @@ class PackagingVersionSyncTests(unittest.TestCase):
         manifest = json.loads((root / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(pyproject["project"]["version"], manifest["version"])
         self.assertEqual(pyproject["project"]["version"], moneybird_mcp.__version__)
+
+    def test_mcp_server_info_uses_the_package_version(self) -> None:
+        import moneybird_mcp
+        from moneybird_mcp.tools._registry import mcp
+
+        self.assertEqual(mcp.version, moneybird_mcp.__version__)

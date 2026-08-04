@@ -9,6 +9,7 @@ from typing import Any, Callable
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
+from .. import __version__
 from ..config import MoneybirdError
 from ..performance_middleware import ToolTelemetryMiddleware
 
@@ -104,6 +105,7 @@ SYNC INDEX (read this):
 
 mcp = FastMCP(
     name="Moneybird MCP",
+    version=__version__,
     instructions=SERVER_INSTRUCTIONS,
     middleware=[ToolTelemetryMiddleware()],
 )

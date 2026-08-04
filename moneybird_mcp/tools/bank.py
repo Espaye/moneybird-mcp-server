@@ -64,9 +64,17 @@ def list_financial_mutations(
         filter=filter,
         period=period,
     )
+    financial_accounts = {
+        str(item.get("id") or ""): item
+        for item in client.list_financial_accounts(limit=100, page=1)
+    }
     return {
         "financial_mutations": [
-            compact_financial_mutation_summary(item, client.administration_id)
+            compact_financial_mutation_summary(
+                item,
+                client.administration_id,
+                financial_accounts.get(str(item.get("financial_account_id") or "")),
+            )
             for item in mutations
         ],
         "page": page,
@@ -842,7 +850,9 @@ def prepare_link_bank_mutation_booking(
         Field(description="Optional partial amount as a decimal string, e.g. '121.00'. Empty = use the mutation's current amount_open."),
     ] = "",
 ) -> dict[str, Any]:
-    """Use this before linking a bank/cash mutation to a booking: an open invoice or document
+    """Book a bank transaction to a ledger, invoice, or purchase document. Dutch: bankmutatie koppelen aan factuur or bankmutatie boeken op grootboek.
+
+    Use this before linking a bank/cash mutation to a booking: an open invoice or document
     (booking_type SalesInvoice or Document) or directly to a ledger category (LedgerAccount).
     This is the manual counterpart of Moneybird's bank reconciliation. When price is empty, the
     preview explicitly fills it from the mutation's current amount_open; Moneybird never receives
@@ -903,6 +913,20 @@ def prepare_link_bank_mutation_booking(
             "price": str(amount),
         }
     )
+    warnings: list[str] = []
+    target_account_type = str(target_snapshot.get("account_type") or "")
+    if booking_type == "LedgerAccount" and target_account_type in {
+        "revenue",
+        "expenses",
+        "direct_costs",
+        "other_income_expenses",
+    }:
+        warnings.append(
+            "A direct ledger booking does not accept tax_rate_id and creates no VAT "
+            "posting: the full amount is booked to this profit-and-loss account. If "
+            "the amount includes VAT, link it to an invoice/document or use an "
+            "explicit balanced journal with separate VAT lines."
+        )
     return stage_write(
         "link_bank_mutation_booking",
         summary=f"Link financial mutation {financial_mutation_id} to {booking_type} {booking_id}",
@@ -923,6 +947,7 @@ def prepare_link_bank_mutation_booking(
             },
             "booking": booking,
             "booking_target": target_preview,
+            "warnings": warnings,
             "price_note": (
                 f"Price defaulted to the mutation's amount_open: {amount}."
                 if price_was_defaulted
@@ -1104,6 +1129,13 @@ def prepare_unlink_bank_mutation_booking(
             f"No {booking_type} with id {booking_id} found on financial mutation "
             f"{financial_mutation_id}. Present: {haystack}."
         )
+    unlink_preview = dict(target)
+    if booking_type == "LedgerAccountBooking":
+        ledger_account_id = str(target.get("ledger_account_id") or "")
+        if ledger_account_id:
+            ledger_account = client.get_ledger_account(ledger_account_id)
+            unlink_preview["ledger_account_name"] = ledger_account.get("name")
+            unlink_preview["ledger_account_number"] = ledger_account.get("account_id")
 
     return stage_write(
         "unlink_bank_mutation_booking",
@@ -1122,7 +1154,7 @@ def prepare_unlink_bank_mutation_booking(
                 "message": mutation.get("message"),
                 **state,
             },
-            "unlink": target,
+            "unlink": unlink_preview,
         },
         fingerprint=duplicate_fingerprint(
             "unlink_bank_mutation_booking",
@@ -1205,6 +1237,7 @@ def _execute_unlink_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
             "record_id_matches": record_id_matches,
             "booking_removed_from_mutation": not still_present,
             "after": after,
+            "fully_verified": fully_verified,
         },
     }
 

@@ -93,6 +93,10 @@ class SalesWorkflowWriteSafetyTests(unittest.TestCase):
             side_effect=resolve_client,
         ):
             first_pause = sales.prepare_pause_sales_invoice_workflow("123")
+            self.assertIn(
+                "automatic workflow",
+                first_pause["preview"]["effect"],
+            )
             first_result = sales.pause_sales_invoice_workflow_from_approval(
                 first_pause["approval_id"]
             )

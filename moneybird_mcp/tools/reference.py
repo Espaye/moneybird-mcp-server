@@ -10,6 +10,7 @@ from ..config import (
 )
 from ..formatting import (
     compact_financial_account_summary,
+    compact_ledger_account_summary,
 )
 from . import _context as ctx
 from ._params import FilterString, Limit, Page, Period
@@ -60,19 +61,11 @@ def list_tax_rates() -> dict[str, Any]:
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_ledger_accounts() -> dict[str, Any]:
-    """Use this when you need valid Moneybird ledger_account_id values for invoice lines."""
+    """List ledger ids and RGS taxonomy codes, including codes usable for new accounts."""
     client = ctx.get_client()
     ledger_accounts = client.list_ledger_accounts()
     return {
-        "ledger_accounts": [
-            {
-                "id": str(item.get("id")),
-                "name": item.get("name"),
-                "account_type": item.get("account_type"),
-                "active": item.get("active"),
-            }
-            for item in ledger_accounts
-        ]
+        "ledger_accounts": [compact_ledger_account_summary(item) for item in ledger_accounts]
     }
 
 
@@ -121,7 +114,7 @@ def list_time_entries(
     filter: FilterString = "",
     period: Period = "",
 ) -> dict[str, Any]:
-    """Use this to list Moneybird time entries (logged hours).
+    """Use this to list Moneybird time entries (logged hours). Dutch: geschreven uren bekijken; for uren registreren, note that this tool is read-only.
 
     Optional `filter` accepts Moneybird query syntax (e.g. 'contact_id:123',
     'project_id:456', 'state:open', 'user_id:789'); combine with commas.

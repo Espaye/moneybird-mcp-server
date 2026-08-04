@@ -57,6 +57,26 @@ def _money_values_equal(left: Any, right: Any) -> bool:
     return left_value.is_finite() and right_value.is_finite() and left_value == right_value
 
 
+def _sales_invoice_patch_has_updates(patch: Any) -> bool:
+    """Reject empty patches, including line containers that only carry row ids."""
+
+    if not isinstance(patch, dict) or not patch:
+        return False
+    if set(patch) - {"details_attributes"}:
+        return True
+    details = patch.get("details_attributes")
+    if isinstance(details, dict):
+        rows = list(details.values())
+    elif isinstance(details, (list, tuple)):
+        rows = details
+    else:
+        return False
+    return any(
+        isinstance(row, dict) and bool(set(row) - {"id"})
+        for row in rows
+    )
+
+
 def _prepare_batch_create_sales_invoices(
     client: Any,
     entries: list[dict[str, Any]],
@@ -297,7 +317,7 @@ def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
 def prepare_batch_update_sales_invoices(
     entries: Annotated[
         list[dict[str, Any]],
-        Field(description="One dict per update: sales_invoice_id (or customer_id plus filters) and the fields to change, e.g. details_attributes line edits."),
+        Field(description="One dict per update: an explicit invoice id plus a reference replacement, date changes, and/or detail_updates; or a customer id plus filters to locate one invoice. Unknown keys and empty patches are rejected, and an invalid reference field names the supported replacement key."),
     ],
 ) -> dict[str, Any]:
     """Use this before updating one or more existing sales invoices, either by explicit invoice id or by customer lookup plus filters."""
@@ -309,9 +329,54 @@ def prepare_batch_update_sales_invoices(
     preview_rows: list[dict[str, Any]] = []
     seen_invoice_ids: set[str] = set()
 
-    for entry in entries:
+    selector_fields = {
+        "sales_invoice_id",
+        "customer_id",
+        "state",
+        "reference",
+        "period_filter",
+    }
+    update_fields = {
+        "new_reference",
+        "invoice_date",
+        "due_date",
+        "detail_updates",
+    }
+    detail_update_fields = {
+        "row_order",
+        "description",
+        "period",
+        "price",
+        "amount",
+        "tax_rate_id",
+        "ledger_account_id",
+    }
+
+    for entry_index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise MoneybirdError(f"entries[{entry_index}] must be a dict.")
+        unknown_fields = sorted(set(entry) - selector_fields - update_fields)
+        if unknown_fields:
+            raise MoneybirdError(
+                f"entries[{entry_index}] has unsupported field(s): "
+                f"{', '.join(unknown_fields)}."
+            )
         sales_invoice_id = str(entry.get("sales_invoice_id", "")).strip()
         if sales_invoice_id:
+            inapplicable_filters = sorted(
+                set(entry) & {"customer_id", "state", "reference", "period_filter"}
+            )
+            if inapplicable_filters:
+                guidance = (
+                    " Use new_reference to change the invoice reference."
+                    if "reference" in inapplicable_filters
+                    else ""
+                )
+                raise MoneybirdError(
+                    f"entries[{entry_index}] supplies sales_invoice_id, so lookup-only "
+                    f"field(s) are not allowed: {', '.join(inapplicable_filters)}."
+                    f"{guidance}"
+                )
             invoice = client.get_sales_invoice(sales_invoice_id)
         else:
             customer_id = str(entry.get("customer_id", "")).strip()
@@ -339,8 +404,25 @@ def prepare_batch_update_sales_invoices(
             )
         seen_invoice_ids.add(resolved_invoice_id)
 
+        raw_detail_updates = entry.get("detail_updates", [])
+        if not isinstance(raw_detail_updates, list):
+            raise MoneybirdError(
+                f"entries[{entry_index}].detail_updates must be a list."
+            )
         details_patch = []
-        for detail_update in entry.get("detail_updates", []):
+        for detail_index, detail_update in enumerate(raw_detail_updates):
+            if not isinstance(detail_update, dict):
+                raise MoneybirdError(
+                    f"entries[{entry_index}].detail_updates[{detail_index}] must be a dict."
+                )
+            unknown_detail_fields = sorted(
+                set(detail_update) - detail_update_fields
+            )
+            if unknown_detail_fields:
+                raise MoneybirdError(
+                    f"entries[{entry_index}].detail_updates[{detail_index}] has "
+                    f"unsupported field(s): {', '.join(unknown_detail_fields)}."
+                )
             row_order = int(detail_update.get("row_order", 0))
             details = invoice.get("details") or []
             matching = next((detail for detail in details if int(detail.get("row_order", 0)) == row_order), None)
@@ -348,19 +430,23 @@ def prepare_batch_update_sales_invoices(
                 raise MoneybirdError(
                     f"Could not find detail row_order {row_order} on invoice {invoice.get('id')}."
                 )
-            details_patch.append(
-                clean_dict(
-                    {
-                        "id": matching["id"],
-                        "description": detail_update.get("description", ""),
-                        "period": detail_update.get("period", ""),
-                        "price": detail_update.get("price", ""),
-                        "amount": detail_update.get("amount", ""),
-                        "tax_rate_id": detail_update.get("tax_rate_id"),
-                        "ledger_account_id": detail_update.get("ledger_account_id"),
-                    }
-                )
+            detail_patch = clean_dict(
+                {
+                    "id": matching["id"],
+                    "description": detail_update.get("description", ""),
+                    "period": detail_update.get("period", ""),
+                    "price": detail_update.get("price", ""),
+                    "amount": detail_update.get("amount", ""),
+                    "tax_rate_id": detail_update.get("tax_rate_id"),
+                    "ledger_account_id": detail_update.get("ledger_account_id"),
+                }
             )
+            if not (set(detail_patch) - {"id"}):
+                raise MoneybirdError(
+                    f"entries[{entry_index}].detail_updates[{detail_index}] produces "
+                    "an empty line patch. Provide at least one supported line field."
+                )
+            details_patch.append(detail_patch)
 
         sales_invoice_patch = clean_dict(
             {
@@ -370,6 +456,12 @@ def prepare_batch_update_sales_invoices(
                 "details_attributes": details_patch,
             }
         )
+        if not _sales_invoice_patch_has_updates(sales_invoice_patch):
+            raise MoneybirdError(
+                f"entries[{entry_index}] produces an empty invoice patch. Provide at "
+                "least one supported update field: new_reference, invoice_date, "
+                "due_date, or a non-empty detail_updates list."
+            )
         prepared_items.append(
             {
                 "sales_invoice_id": resolved_invoice_id,
@@ -440,6 +532,12 @@ def batch_update_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
         # Validate the complete batch before the first mutation. A stale later
         # row must never turn an otherwise avoidable batch into a partial write.
         for item in payload["items"]:
+            if not _sales_invoice_patch_has_updates(item.get("patch")):
+                raise MoneybirdError(
+                    f"Sales invoice {item.get('sales_invoice_id')} has an empty patch; "
+                    "execution is refused. Prepare the batch again with a supported "
+                    "update field."
+                )
             current = client.get_sales_invoice(item["sales_invoice_id"])
             if str(current.get("id") or "") != str(item["sales_invoice_id"]):
                 raise MoneybirdError(

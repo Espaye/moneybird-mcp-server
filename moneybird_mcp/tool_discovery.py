@@ -7,6 +7,7 @@ from typing import Annotated, Any
 from fastmcp.exceptions import ToolError
 from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.server.context import Context
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import Tool, ToolResult
 from pydantic import ValidationError as PydanticValidationError
 
@@ -42,6 +43,23 @@ def _compact_validation_error(
     return f"Invalid arguments for {tool_name}: {rendered}."
 
 
+class CompactValidationErrorMiddleware(Middleware):
+    """Give direct MCP calls the same bounded validation errors as the proxy."""
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[Any],
+        call_next: CallNext[Any, Any],
+    ) -> Any:
+        try:
+            return await call_next(context)
+        except FastMCPValidationError as exc:
+            tool_name = str(getattr(context.message, "name", None) or "tool")
+            raise ToolError(
+                _compact_validation_error(exc, tool_name=tool_name)
+            ) from None
+
+
 def configure_tool_discovery(mcp: Any, mode: str | None = None) -> str:
     resolved = str(
         mode
@@ -61,6 +79,7 @@ def configure_tool_discovery(mcp: Any, mode: str | None = None) -> str:
                 f"{previous!r}; restart the server to switch modes."
             )
         return resolved
+    mcp.add_middleware(CompactValidationErrorMiddleware())
     if resolved == "search":
         from fastmcp.server.transforms.search import BM25SearchTransform
 

@@ -116,9 +116,24 @@ class FakeClient:
                 resulting.append({**operation, "id": f"created-{next_id}"})
                 next_id += 1
         target["details"] = resulting
-        target["total_price_incl_tax"] = str(
-            sum((Decimal(str(item.get("price") or "0")) for item in resulting), Decimal("0"))
-        )
+        tax_rates = {str(item["id"]): item for item in self.list_tax_rates()}
+        total_incl = Decimal("0")
+        for item in resulting:
+            price = Decimal(str(item.get("price") or "0"))
+            if not target["prices_are_incl_tax"]:
+                percentage = Decimal(
+                    str(
+                        tax_rates.get(str(item.get("tax_rate_id") or ""), {}).get(
+                            "percentage"
+                        )
+                        or "0"
+                    )
+                )
+                price = (price * (Decimal("1") + percentage / Decimal("100"))).quantize(
+                    Decimal("0.01")
+                )
+            total_incl += price
+        target["total_price_incl_tax"] = str(total_incl.quantize(Decimal("0.01")))
         target["version"] = int(target.get("version") or 0) + 1
         target["updated_at"] = "2026-07-22T15:00:00Z"
         return target

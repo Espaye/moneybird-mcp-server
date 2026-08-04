@@ -38,6 +38,7 @@ from ..vat_settlement import (
     build_vat_settlement_journal,
     compare_gross_to_reported,
     count_rubrieken,
+    find_vat_settlement_journals,
     ledger_movements_from_report,
     month_periods,
     period_end_date,
@@ -66,8 +67,8 @@ from ._writes import (
 def prepare_create_ledger_account(
     name: Annotated[str, Field(description="Ledger account (category) name as it should appear in reports.")],
     account_type: Annotated[str, Field(description="Moneybird account_type, e.g. 'expenses', 'revenue', 'direct_costs', 'current_assets', 'non_current_assets', 'current_liabilities', 'equity', 'other_income_expenses'.")],
+    rgs_code: Annotated[str, Field(description="Required Dutch RGS 3.5 taxonomy code, for example 'WBedAlkOal'. Use list_ledger_accounts to inspect taxonomy codes already used by this administration.")],
     account_id: Annotated[str, Field(description="Optional ledger account number (grootboeknummer).")] = "",
-    rgs_code: Annotated[str, Field(description="Optional Dutch RGS reference code.")] = "",
     active: bool = True,
 ) -> dict[str, Any]:
     """Use this before creating a Moneybird ledger account. Do not execute the write until the user explicitly confirms."""
@@ -75,6 +76,12 @@ def prepare_create_ledger_account(
         raise MoneybirdError("name is required.")
     if not account_type.strip():
         raise MoneybirdError("account_type is required.")
+    if not rgs_code.strip():
+        raise MoneybirdError(
+            "rgs_code is required by Moneybird. Pass an RGS 3.5 taxonomy code such "
+            "as 'WBedAlkOal'; list_ledger_accounts exposes taxonomy codes already "
+            "used by this administration."
+        )
 
     client = ctx.get_client()
     payload = clean_dict(
@@ -129,6 +136,14 @@ def _execute_create_ledger_account(client, payload: dict[str, Any]) -> dict[str,
         for key, value in expected.items()
         if str(record.get(key) or "") != str(value or "")
     }
+    expected_rgs_code = str(payload["rgs_code"])
+    taxonomy_item = record.get("taxonomy_item") or {}
+    actual_rgs_code = str(taxonomy_item.get("code") or "")
+    if actual_rgs_code != expected_rgs_code:
+        mismatches["rgs_code"] = {
+            "expected": expected_rgs_code,
+            "actual": actual_rgs_code,
+        }
     record_id_matches = str(record.get("id") or "") == record_id
     fully_verified = record_id_matches and not mismatches
     return {
@@ -172,7 +187,7 @@ def prepare_create_general_journal_document(
     ],
     description: Annotated[str, Field(description="Shared description. Moneybird stores no header text on a journal document, so this is applied to every line that has no description of its own.")] = "",
 ) -> dict[str, Any]:
-    """Use this before creating a Moneybird general journal document. Do not execute the write until the user explicitly confirms."""
+    """Use this before creating a Moneybird general journal document. Dutch: memoriaalboeking maken or memoriaal boeken. Do not execute the write until the user explicitly confirms."""
     if not reference.strip():
         raise MoneybirdError("reference is required.")
     if not date.strip():
@@ -472,6 +487,53 @@ def reclassify_document_lines_from_approval(approval_id: ApprovalId) -> dict[str
     }
 
 
+def _vat_period_general_journals(client, period: str) -> list[dict[str, Any]]:
+    """Load journals inside the exact VAT period, including their account lines."""
+
+    months = month_periods(period)
+    years = sorted({month[:4] for month in months})
+    by_id: dict[str, dict[str, Any]] = {}
+    for year in years:
+        page = 1
+        while True:
+            journals = client.list_documents(
+                "general_journal_document",
+                limit=100,
+                page=page,
+                filter=f"period:{year}0101..{year}1231",
+            )
+            new_records = 0
+            for journal in journals:
+                journal_id = str(journal.get("id") or "")
+                key = journal_id or f"{journal.get('date')}:{journal.get('reference')}"
+                if key not in by_id:
+                    new_records += 1
+                by_id[key] = journal
+            if len(journals) < 100 or new_records == 0:
+                break
+            page += 1
+
+    start_text, end_text = str(period).strip().split("..", 1)
+    start = f"{start_text[:4]}-{start_text[4:6]}-{start_text[6:8]}"
+    end = f"{end_text[:4]}-{end_text[4:6]}-{end_text[6:8]}"
+    in_period: list[dict[str, Any]] = []
+    for journal in by_id.values():
+        journal_date = str(journal.get("date") or "")
+        if not start <= journal_date <= end:
+            continue
+        entries = (
+            journal.get("general_journal_document_entries")
+            or journal.get("details")
+            or journal.get("entries")
+            or []
+        )
+        journal_id = str(journal.get("id") or "")
+        if not entries and journal_id and hasattr(client, "get_document"):
+            journal = client.get_document("general_journal_document", journal_id)
+        in_period.append(journal)
+    return in_period
+
+
 def _vat_settlement_context(
     client,
     period: str,
@@ -496,17 +558,42 @@ def _vat_settlement_context(
     )
     payable = movements[str(accounts["payable"]["id"])]
     receivable = movements[str(accounts["receivable"]["id"])]
+    general_journals = _vat_period_general_journals(client, period)
+    settlement_journals = find_vat_settlement_journals(
+        general_journals,
+        accounts=accounts,
+        period=period,
+    )
     # The tax report caps at one month, so a quarter is fetched month by month.
     reported = reported_vat_totals(
         client.get_report("tax", period=month) for month in report_months
     )
     # Gross ledger turnover and the reported rubrieken are compared, never merged:
     # reverse-charge VAT moves both accounts while reporting a zero tax amount.
+    comparison_payable = payable.net_credit + sum(
+        (
+            money_decimal(journal["payable_restore"])
+            for journal in settlement_journals
+        ),
+        start=money_decimal("0"),
+    )
+    comparison_receivable = receivable.net_debit + sum(
+        (
+            money_decimal(journal["receivable_restore"])
+            for journal in settlement_journals
+        ),
+        start=money_decimal("0"),
+    )
     comparison = compare_gross_to_reported(
-        gross_payable=payable.net_credit,
-        gross_deductible=receivable.net_debit,
+        gross_payable=comparison_payable,
+        gross_deductible=comparison_receivable,
         reported_payable=reported["payable"],
         reported_deductible=reported["deductible"],
+    )
+    comparison["basis"] = (
+        "reconstructed_before_existing_settlement_journals"
+        if settlement_journals
+        else "current_period_ledger_movements"
     )
     return {
         "accounts": accounts,
@@ -515,6 +602,10 @@ def _vat_settlement_context(
         "receivable": receivable,
         "reported": reported,
         "comparison": comparison,
+        "comparison_payable": comparison_payable,
+        "comparison_receivable": comparison_receivable,
+        "general_journals": general_journals,
+        "settlement_journals": settlement_journals,
         "ledger_accounts": ledger_accounts,
     }
 
@@ -539,6 +630,7 @@ def analyze_vat_settlement(
     )
     payable = context["payable"]
     receivable = context["receivable"]
+    already_settled = bool(context["settlement_journals"])
     return {
         "period": period,
         "accounts": {
@@ -551,9 +643,16 @@ def analyze_vat_settlement(
         },
         # Gross balances are what a settlement journal must clear.
         "gross_movements": {
-            "payable_net_credit": str(payable.net_credit),
-            "receivable_net_debit": str(receivable.net_debit),
-            "net_position": str(payable.net_credit - receivable.net_debit),
+            "payable_net_credit": str(context["comparison_payable"]),
+            "receivable_net_debit": str(context["comparison_receivable"]),
+            "net_position": str(
+                context["comparison_payable"] - context["comparison_receivable"]
+            ),
+            "basis": context["comparison"]["basis"],
+            "current_period_net_after_journals": {
+                "payable_net_credit": str(payable.net_credit),
+                "receivable_net_debit": str(receivable.net_debit),
+            },
         },
         # The reported view is the separate cross-check, not the clearing basis.
         "reported": {
@@ -563,11 +662,26 @@ def analyze_vat_settlement(
             "rows": context["reported"]["rows"],
         },
         "gross_vs_reported": context["comparison"],
+        "settlement_status": {
+            "already_settled": already_settled,
+            "settlement_journals": context["settlement_journals"],
+            "message": (
+                "This period already contains a settlement-like general journal "
+                "touching the VAT accounts. Do not settle it again."
+                if already_settled
+                else "No settlement-like general journal was found inside this period."
+            ),
+        },
         "next_step": (
-            "The filed amount is never derived from these figures: a Dutch return is "
-            "filed in whole euros and may be rounded in the taxpayer's favour. Ask the "
-            "user for the amount actually filed and paid (or read it from Moneybird's "
-            "VAT overview), then call prepare_vat_settlement_journal with it."
+            "Do not prepare another VAT settlement for this period. Review the listed "
+            "general journal(s) if the period should be reopened or corrected."
+            if already_settled
+            else (
+                "The filed amount is never derived from these figures: a Dutch return is "
+                "filed in whole euros and may be rounded in the taxpayer's favour. Ask the "
+                "user for the amount actually filed and paid (or read it from Moneybird's "
+                "VAT overview), then call prepare_vat_settlement_journal with it."
+            )
         ),
     }
 
@@ -597,7 +711,7 @@ def _vat_settlement_snapshot(
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_vat_settlement_journal(
     period: VatSettlementPeriod,
-    reference: Annotated[str, Field(description="Reference for the settlement journal, e.g. 'BTW-2026-Q2'. Also used to detect an already-settled period.")],
+    reference: Annotated[str, Field(description="Reference for the settlement journal, e.g. 'BTW-2026-Q2'. Prior settlements are detected independently by period and VAT-account lines, so changing this text cannot bypass the guard.")],
     declared_amount: Annotated[str, Field(description="The amount actually filed and settled, as a decimal string in whole euros. Positive = payable to the tax authority, negative = refund. Take this from the filed return or Moneybird's VAT overview; never derive it from the ledger, because filing rounds to whole euros in the taxpayer's favour.")],
     date: Annotated[str, Field(description="Journal date. Leave empty to use the period's closing date, which is what keeps the journal inside the period it clears.")] = "",
     description: str = "",
@@ -643,12 +757,9 @@ def prepare_vat_settlement_journal(
     preflight = settlement_preflight(
         movements=context["movements"],
         accounts=accounts,
-        existing_journals=client.list_documents(
-            "general_journal_document",
-            limit=100,
-            filter=f"period:{year_period_for_date(journal_date)}",
-        ),
+        existing_journals=context["general_journals"],
         reference=reference.strip(),
+        period=period,
         journal_date=journal_date,
         period_locked_until=str(administration.get("period_locked_until") or ""),
         period_end=closing_date,
@@ -785,17 +896,24 @@ def _execute_vat_settlement(client, payload: dict[str, Any]) -> dict[str, Any]:
         drift.append(
             f"administration lock changed from '{snapshot['period_locked_until']}' to '{locked_until}'"
         )
+    current_journals = _vat_period_general_journals(client, period)
+    settlement_journals = find_vat_settlement_journals(
+        current_journals,
+        accounts=accounts,
+        period=period,
+    )
     existing = [
         journal
-        for journal in client.list_documents(
-            "general_journal_document",
-            limit=100,
-            filter=f"period:{snapshot['journal_year_period']}",
-        )
+        for journal in current_journals
         if str(journal.get("reference") or "").casefold()
         == str(snapshot["reference"]).casefold()
     ]
-    if existing:
+    if settlement_journals:
+        drift.append(
+            f"VAT period {period} now contains {len(settlement_journals)} "
+            "settlement-like journal(s) touching the VAT accounts"
+        )
+    elif existing:
         drift.append(
             f"a journal with reference '{snapshot['reference']}' now exists "
             f"({len(existing)} match(es))"

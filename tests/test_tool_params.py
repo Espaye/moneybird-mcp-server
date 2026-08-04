@@ -51,6 +51,18 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertIn("this_month", schema["period"]["description"])
         self.assertEqual(schema["page"]["minimum"], 0)
 
+    def test_report_periods_have_safe_defaults(self) -> None:
+        profit_loss = self._tool_schema("get_profit_loss")
+        balance_sheet = self._tool_schema("get_balance_sheet")
+        general_ledger = self._tool_schema("get_general_ledger")
+        generic = self._tool_schema("get_financial_report")
+
+        for schema in (profit_loss, balance_sheet, general_ledger):
+            self.assertNotIn("period", schema.get("required", []))
+            self.assertEqual(schema["properties"]["period"]["default"], "this_year")
+        self.assertNotIn("period", generic.get("required", []))
+        self.assertEqual(generic["properties"]["period"]["default"], "this_month")
+
     def test_register_payment_exposes_document_type_enum(self) -> None:
         schema = self._tool_schema("prepare_register_payment")["properties"]
         self.assertEqual(set(schema["document_type"]["enum"]), PAYABLE_DOCUMENT_KINDS)
@@ -71,6 +83,13 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertIn("desired_lines", schema)
         self.assertIn("actual invoice/PDF", schema["desired_lines"]["description"])
         self.assertIn("prices_are_incl_tax", schema)
+
+    def test_create_ledger_account_requires_and_explains_rgs_code(self) -> None:
+        tool_schema = self._tool_schema("prepare_create_ledger_account")
+        self.assertIn("rgs_code", tool_schema["required"])
+        description = tool_schema["properties"]["rgs_code"]["description"]
+        self.assertIn("WBedAlkOal", description)
+        self.assertIn("list_ledger_accounts", description)
 
     def test_purchase_review_exposes_optional_description_checks(self) -> None:
         schema = self._tool_schema("review_purchase_invoices")["properties"]

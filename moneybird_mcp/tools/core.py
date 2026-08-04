@@ -7,6 +7,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from .. import __version__
+from ..capabilities import capability_mode
 from ..client import normalize_generic_get_path, validate_moneybird_id
 from ..config import (
     READ_ONLY_ANNOTATIONS,
@@ -72,6 +73,7 @@ def get_server_status(
         # Moneybird and refresh the durable token store.
         return {
             "version": __version__,
+            "capability_mode": capability_mode().value,
             "credential_state": {
                 "mode": credential_mode,
                 "configured": False,
@@ -92,6 +94,7 @@ def get_server_status(
     client = ctx.get_client(require_administration=False)
     return {
         "version": __version__,
+        "capability_mode": capability_mode().value,
         "credential_state": {
             "mode": credential_mode,
             "configured": True,

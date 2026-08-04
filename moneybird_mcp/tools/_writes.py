@@ -21,7 +21,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import Any, Callable
 
-from ..capabilities import require_write_capability
+from ..capabilities import capability_mode, require_write_capability, writes_enabled
 from ..config import MoneybirdError
 from ..formatting import duplicate_fingerprint, iso_now
 from ..safety import (
@@ -97,6 +97,14 @@ def stage_write(
     approval = make_approval(action, payload, summary)
     approval["payload"] = payload
     approval["preview"] = preview
+    approval["capability_mode"] = capability_mode().value
+    approval["execution_available"] = writes_enabled()
+    if not approval["execution_available"]:
+        approval["warning"] = (
+            "This preview is not executed. The server is in read_only capability "
+            "mode, so execution will be rejected unless an operator explicitly "
+            "restarts it with MONEYBIRD_CAPABILITY_MODE=write_enabled."
+        )
     return approval
 
 
@@ -151,6 +159,12 @@ def run_approved_write(
             error=str(exc),
             result=audit_result,
         )
+        if audit_result == "ambiguous":
+            raise MoneybirdError(
+                f"{exc} The write result is ambiguous: it may already have been "
+                "applied in Moneybird. Verify the administration before retrying; "
+                "this approval cannot be executed again."
+            ) from exc
         raise
     else:
         _ACTIVE_EXECUTION.reset(execution_token)

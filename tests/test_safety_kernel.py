@@ -308,13 +308,17 @@ class SafetyKernelTests(unittest.TestCase):
                 "Could not reach Moneybird for operation GET verification."
             )
 
-        with self.assertRaisesRegex(MoneybirdError, "Could not reach"):
+        with self.assertRaises(MoneybirdError) as caught:
             run_approved_write(
                 Client(),
                 first["approval_id"],
                 "verification_timeout_demo",
                 apply_then_timeout,
             )
+        message = str(caught.exception)
+        self.assertIn("Could not reach", message)
+        self.assertIn("may already have been applied", message)
+        self.assertIn("Verify the administration before retrying", message)
 
         self.assertEqual(upstream_writes, 1)
         self.assertEqual(
@@ -369,6 +373,14 @@ class SafetyKernelTests(unittest.TestCase):
             self._approval_state(approval["approval_id"]),
             ("pending", None),
         )
+        audit_entries = [
+            json.loads(line)
+            for line in safety.audit_log_path("safety-admin").read_text(
+                encoding="utf-8"
+            ).splitlines()
+        ]
+        self.assertEqual(audit_entries[-1]["action"], "policy_demo")
+        self.assertEqual(audit_entries[-1]["result"], "policy_blocked")
 
         result = run_approved_write(
             Client(),
@@ -378,6 +390,22 @@ class SafetyKernelTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "done")
         self.assertEqual(executor_calls, 1)
+
+    def test_read_only_prepare_exposes_that_execution_is_unavailable(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"MONEYBIRD_CAPABILITY_MODE": "read_only"},
+        ):
+            prepared = stage_write(
+                "policy_preview_demo",
+                summary="policy preview",
+                payload={"value": "unchanged"},
+                preview={"value": "unchanged"},
+            )
+
+        self.assertEqual(prepared["capability_mode"], "read_only")
+        self.assertFalse(prepared["execution_available"])
+        self.assertIn("execution will be rejected", prepared["warning"])
 
     def test_read_only_policy_preserves_manual_executor_approvals(self) -> None:
         from moneybird_mcp.tools import contacts, ledger, sales_batches, workflows

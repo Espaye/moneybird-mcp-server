@@ -24,6 +24,7 @@ from moneybird_mcp.vat_settlement import (
     LedgerMovement,
     build_vat_settlement_journal,
     compare_gross_to_reported,
+    find_vat_settlement_journals,
     ledger_movements_from_report,
     month_periods,
     reported_vat_totals,
@@ -80,6 +81,20 @@ Q2_TAX_REPORTS = {
 }
 
 DECLARED_Q2 = Decimal("4423.00")
+
+
+def _q2_settlement_journal(*, reference="VAT settlement already booked"):
+    return {
+        "id": "journal-existing",
+        "reference": reference,
+        "date": "2026-06-30",
+        "general_journal_document_entries": [
+            {"ledger_account_id": PAYABLE, "debit": "5232.05", "credit": "0.00"},
+            {"ledger_account_id": RECEIVABLE, "debit": "0.00", "credit": "808.00"},
+            {"ledger_account_id": SETTLEMENT, "debit": "0.00", "credit": "4423.00"},
+            {"ledger_account_id": ROUNDING, "debit": "0.00", "credit": "1.05"},
+        ],
+    }
 
 
 def accounts_by_role():
@@ -291,6 +306,23 @@ class AccountResolutionTests(unittest.TestCase):
         self.assertIn("rounding_ledger_account_id", message)
         self.assertIn("prepare_create_ledger_account", message)
         self.assertNotIn("16224 Te betalen btw", message)
+
+    def test_rounding_candidates_prefer_semantically_adjacent_accounts(self):
+        accounts = [
+            item for item in LEDGER_ACCOUNTS if item["id"] != ROUNDING
+        ] + [
+            {"id": "1", "name": "Huisvestingskosten", "account_id": "45185", "account_type": "expenses"},
+            {"id": "2", "name": "Verkoopkosten", "account_id": "45680", "account_type": "expenses"},
+            {"id": "3", "name": "Vervoerskosten", "account_id": "45875", "account_type": "expenses"},
+            {"id": "4", "name": "Koersverschillen", "account_id": "46500", "account_type": "other_income_expenses"},
+        ]
+
+        with self.assertRaises(MoneybirdError) as caught:
+            resolve_vat_accounts(accounts)
+
+        message = str(caught.exception)
+        self.assertIn("46500 Koersverschillen", message)
+        self.assertNotIn("Vervoerskosten", message)
 
 
 class SettlementJournalTests(unittest.TestCase):
@@ -554,6 +586,49 @@ class SettlementPreflightTests(unittest.TestCase):
         self.assertFalse(preflight["clear_to_prepare"])
         self.assertEqual(len(preflight["existing_reference_matches"]), 1)
 
+    def test_period_and_vat_lines_block_even_under_a_different_reference(self):
+        preflight = settlement_preflight(
+            movements=self._movements(),
+            accounts=accounts_by_role(),
+            existing_journals=[
+                _q2_settlement_journal(reference="something entirely different")
+            ],
+            reference="BTW-2026-Q2-nogmaals",
+            period="20260401..20260630",
+        )
+
+        self.assertFalse(preflight["clear_to_prepare"])
+        self.assertEqual(
+            preflight["existing_period_settlement_matches"][0]["id"],
+            "journal-existing",
+        )
+        self.assertIn(
+            "Changing the journal reference",
+            " ".join(preflight["blocking_findings"]),
+        )
+
+    def test_single_account_correction_is_not_mislabeled_as_a_settlement(self):
+        correction = {
+            "id": "correction-1",
+            "reference": "VAT correction",
+            "date": "2026-06-30",
+            "general_journal_document_entries": [
+                {
+                    "ledger_account_id": PAYABLE,
+                    "debit": "5.00",
+                    "credit": "0.00",
+                }
+            ],
+        }
+        self.assertEqual(
+            find_vat_settlement_journals(
+                [correction],
+                accounts=accounts_by_role(),
+                period="20260401..20260630",
+            ),
+            [],
+        )
+
     def test_period_without_gross_movement_blocks(self):
         preflight = settlement_preflight(
             movements=self._movements("0.00", "0.00"),
@@ -632,6 +707,33 @@ class AnalyzeVatSettlementToolTests(unittest.TestCase):
 
         self.assertEqual(client.list_ledger_accounts_calls, 0)
 
+    def test_already_settled_period_is_reconstructed_not_called_anomalous(self):
+        from moneybird_mcp.tools import _context
+        from moneybird_mcp.tools import ledger as ledger_tools
+
+        client = FakeClient(
+            general_journals=[_q2_settlement_journal()],
+            ledger_override=_general_ledger("0.00", "0.00"),
+        )
+        with mock.patch.object(_context, "get_client", return_value=client):
+            result = ledger_tools.analyze_vat_settlement(
+                period="20260401..20260630"
+            )
+
+        self.assertTrue(result["settlement_status"]["already_settled"])
+        self.assertFalse(result["gross_vs_reported"]["is_anomaly"])
+        self.assertEqual(
+            result["gross_movements"]["basis"],
+            "reconstructed_before_existing_settlement_journals",
+        )
+        self.assertEqual(
+            result["gross_movements"]["current_period_net_after_journals"][
+                "payable_net_credit"
+            ],
+            "0.00",
+        )
+        self.assertIn("Do not prepare another", result["next_step"])
+
 
 class PrepareVatSettlementToolTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -679,12 +781,10 @@ class PrepareVatSettlementToolTests(unittest.TestCase):
 
     def test_already_settled_period_refuses_before_any_write(self):
         client = FakeClient(
-            general_journals=[
-                {"id": "9", "reference": "BTW-2026-Q2", "date": "2026-06-30"}
-            ]
+            general_journals=[_q2_settlement_journal(reference="different text")]
         )
         with self.assertRaises(MoneybirdError) as caught:
-            self._prepare(client=client)
+            self._prepare(client=client, reference="BTW-2026-Q2-nogmaals")
         self.assertIn("already", str(caught.exception))
 
     def test_monthly_period_prepares_end_to_end(self):
@@ -867,7 +967,9 @@ class UnexplainedDifferenceGuardTests(PrepareVatSettlementToolTests):
     def test_unexplained_difference_blocks_preparation(self):
         with self.assertRaises(MoneybirdError) as caught:
             self._prepare(client=self._mismatched_client())
-        self.assertIn("do not reconcile", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn("do not reconcile", message)
+        self.assertEqual(message.count("Gross movements do not reconcile"), 1)
 
     def test_override_records_the_deliberate_exception(self):
         staged = self._prepare(
@@ -946,12 +1048,12 @@ class ExecuteVatSettlementTests(PrepareVatSettlementToolTests):
         client = self._settling_client()
         staged = self._prepare(client=client)
         client.general_journals = [
-            {"id": "9", "reference": "BTW-2026-Q2", "date": "2026-06-30"}
+            _q2_settlement_journal(reference="different text")
         ]
 
         with self.assertRaises(MoneybirdError) as caught:
             self._execute(client, staged["approval_id"])
-        self.assertIn("now exists", str(caught.exception))
+        self.assertIn("settlement-like journal", str(caught.exception))
         self.assertEqual(client.created, [])
 
     def test_a_new_lock_since_approval_aborts_before_dispatch(self):

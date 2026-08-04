@@ -180,6 +180,85 @@ def period_end_date(period: str) -> str:
     return _parse_range_day(end_text, "Period end").isoformat()
 
 
+def find_vat_settlement_journals(
+    existing_journals: Iterable[dict[str, Any]],
+    *,
+    accounts: dict[str, dict[str, Any]],
+    period: str,
+) -> list[dict[str, Any]]:
+    """Find settlement-like journals by period and VAT-account participation.
+
+    A free-text reference is not a durable identity for a VAT period. A normal
+    settlement touches both VAT accounts, or one VAT account plus the tax-authority
+    settlement account. Corrections that touch only one VAT account are deliberately
+    not classified as settlements.
+    """
+
+    month_periods(period)
+    start_text, end_text = str(period).strip().split("..", 1)
+    start = _parse_range_day(start_text, "Period start")
+    end = _parse_range_day(end_text, "Period end")
+    role_ids = {
+        role: str(account.get("id") or "")
+        for role, account in accounts.items()
+        if role in {"payable", "receivable", "settlement"}
+    }
+    matches: list[dict[str, Any]] = []
+    for journal in existing_journals:
+        journal_date = str(journal.get("date") or "").strip()
+        try:
+            journal_day = date.fromisoformat(journal_date)
+        except ValueError:
+            continue
+        if not start <= journal_day <= end:
+            continue
+        entries = (
+            journal.get("general_journal_document_entries")
+            or journal.get("details")
+            or journal.get("entries")
+            or []
+        )
+        touched_ids = {
+            str(entry.get("ledger_account_id") or "")
+            for entry in entries
+            if isinstance(entry, dict)
+        }
+        touched_roles = {
+            role for role, account_id in role_ids.items() if account_id in touched_ids
+        }
+        touches_vat_pair = {"payable", "receivable"} <= touched_roles
+        touches_vat_and_settlement = (
+            "settlement" in touched_roles
+            and bool({"payable", "receivable"} & touched_roles)
+        )
+        if not (touches_vat_pair or touches_vat_and_settlement):
+            continue
+
+        payable_restore = ZERO
+        receivable_restore = ZERO
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            account_id = str(entry.get("ledger_account_id") or "")
+            debit = money_decimal(entry.get("debit") or 0)
+            credit = money_decimal(entry.get("credit") or 0)
+            if account_id == role_ids.get("payable"):
+                payable_restore += debit - credit
+            if account_id == role_ids.get("receivable"):
+                receivable_restore += credit - debit
+        matches.append(
+            {
+                "id": str(journal.get("id") or ""),
+                "reference": journal.get("reference"),
+                "date": journal_date,
+                "touched_roles": sorted(touched_roles),
+                "payable_restore": str(payable_restore),
+                "receivable_restore": str(receivable_restore),
+            }
+        )
+    return matches
+
+
 def count_rubrieken(reported: dict[str, Any]) -> int:
     """Number of distinct rubrieken behind a reported total.
 
@@ -390,13 +469,47 @@ def resolve_vat_accounts(
             if str(item.get("name") or "").casefold() == default_name.casefold()
         ]
         if len(candidates) != 1:
+            compatible = [
+                item
+                for item in ledger_accounts
+                if str(item.get("account_type") or "") in ACCOUNT_ROLE_TYPES[role]
+            ]
+            if role == "rounding":
+                # A generic expenses account is type-compatible but not a
+                # plausible place for a VAT rounding difference. Only suggest
+                # names that actually signal a difference/rounding purpose.
+                semantic_terms = ("afrond", "round", "koers", "verschil", "difference")
+                compatible = [
+                    item
+                    for item in compatible
+                    if any(
+                        term in str(item.get("name") or "").casefold()
+                        for term in semantic_terms
+                    )
+                ]
+                compatible.sort(
+                    key=lambda item: (
+                        str(item.get("account_type") or "")
+                        != "other_income_expenses",
+                        str(item.get("account_id") or ""),
+                        str(item.get("name") or "").casefold(),
+                    )
+                )
+            else:
+                compatible.sort(
+                    key=lambda item: (
+                        str(item.get("account_id") or ""),
+                        str(item.get("name") or "").casefold(),
+                    )
+                )
             available = ", ".join(
-                sorted(
-                    f"{item.get('account_id') or '?'} {item.get('name')}"
-                    for item in ledger_accounts
-                    if str(item.get("account_type") or "") in ACCOUNT_ROLE_TYPES[role]
-                )[:3]
-            ) or "none"
+                f"{item.get('account_id') or '?'} {item.get('name')}"
+                for item in compatible[:3]
+            ) or (
+                "none with a difference/rounding-related name"
+                if role == "rounding"
+                else "none"
+            )
             guidance = (
                 "Pass rounding_ledger_account_id. If no suitable account exists, "
                 "create one through prepare_create_ledger_account before preparing "
@@ -535,6 +648,7 @@ def settlement_preflight(
     accounts: dict[str, dict[str, Any]],
     existing_journals: list[dict[str, Any]],
     reference: str,
+    period: str = "",
     journal_date: str = "",
     period_locked_until: str = "",
     period_end: str = "",
@@ -561,8 +675,23 @@ def settlement_preflight(
         for journal in existing_journals
         if str(journal.get("reference") or "").casefold() == reference.casefold()
     ]
+    period_settlement_matches = (
+        find_vat_settlement_journals(
+            existing_journals,
+            accounts=accounts,
+            period=period,
+        )
+        if period
+        else []
+    )
     blocking: list[str] = []
-    if reference_matches:
+    if period_settlement_matches:
+        blocking.append(
+            f"VAT period {period} already contains {len(period_settlement_matches)} "
+            "settlement-like general journal(s) touching the VAT accounts. Changing "
+            "the journal reference does not make the period safe to settle again."
+        )
+    elif reference_matches:
         blocking.append(
             f"A general journal document with reference '{reference}' already "
             f"exists ({len(reference_matches)} match(es)); this period looks settled."
@@ -603,8 +732,8 @@ def settlement_preflight(
 
     if comparison and comparison.get("is_anomaly") and not allow_unexplained_difference:
         blocking.append(
-            "The gross ledger movements do not reconcile with the reported "
-            f"rubrieken: {comparison.get('explanation')} Settling now would absorb "
+            "The VAT comparison is anomalous. "
+            f"{comparison.get('explanation')} Settling now would absorb "
             "that difference into the rounding line. Investigate first, or pass "
             "allow_unexplained_difference to record a deliberate exception."
         )
@@ -619,6 +748,7 @@ def settlement_preflight(
             {"id": journal.get("id"), "date": journal.get("date")}
             for journal in reference_matches
         ],
+        "existing_period_settlement_matches": period_settlement_matches,
         "period_locked_until": locked_until,
         "period_end": closing_day,
         "journal_date": journal_day,
