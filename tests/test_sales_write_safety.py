@@ -16,10 +16,13 @@ class SalesWorkflowWriteSafetyTests(unittest.TestCase):
         def __init__(self) -> None:
             self.record = {
                 "id": "123",
-                "invoice_id": "2026-001",
+                "invoice_id": "2026-0001",
+                "contact_id": "contact-1",
                 "state": "scheduled",
                 "paused": False,
                 "invoice_date": "2026-08-01",
+                "currency": "EUR",
+                "total_price_incl_tax": "108.89",
                 "version": 1,
                 "updated_at": "2026-07-30T10:00:00Z",
             }
@@ -29,6 +32,14 @@ class SalesWorkflowWriteSafetyTests(unittest.TestCase):
         def get_sales_invoice(self, sales_invoice_id: str):
             assert sales_invoice_id == "123"
             return dict(self.record)
+
+        def get_contact(self, contact_id: str):
+            assert contact_id == "contact-1"
+            return {
+                "id": contact_id,
+                "delivery_method": "Email",
+                "send_invoices_to_email": "klant@example.com",
+            }
 
         def pause_sales_invoice(self, sales_invoice_id: str):
             assert sales_invoice_id == "123"
@@ -124,7 +135,9 @@ class SalesWorkflowWriteSafetyTests(unittest.TestCase):
                         "invoice_date": "2026-07-01",
                         "prices_are_incl_tax": False,
                         "currency": "EUR",
-                        "reference": "Different reference",
+                        "reference": "Verify total",
+                        "total_price_excl_tax": "90.00",
+                        "total_price_incl_tax": "108.90",
                         "details": [
                             {
                                 "description": "Different line",
@@ -161,6 +174,10 @@ class SalesWorkflowWriteSafetyTests(unittest.TestCase):
         self.assertEqual(preview["line_items"][0]["quantity"], "3")
         self.assertEqual(preview["line_items"][0]["unit_price"], "1000.00")
         self.assertEqual(preview["line_items"][0]["amount_incl_tax"], "3630.00")
+        duplicate = preview["potential_duplicates"][0]
+        self.assertEqual(duplicate["currency"], "EUR")
+        self.assertEqual(duplicate["total_price_excl_tax"], "90.00")
+        self.assertEqual(duplicate["total_price_incl_tax"], "108.90")
         self.assertEqual(
             prepared["payload"]["details_attributes"][0]["tax_rate_id"],
             "tax-21",
@@ -211,6 +228,41 @@ class SalesWorkflowWriteSafetyTests(unittest.TestCase):
         self.assertEqual(line["ledger_account_id"], "ledger-product")
         self.assertEqual(line["product_id"], "product-9")
         self.assertEqual(prepared["preview"]["total_price_incl_tax"], "109.00")
+
+    def test_send_preview_summary_resolves_email_recipient_and_total(self) -> None:
+        client = self.FakeClient()
+        set_active_administration_id(client.administration_id)
+        with mock.patch.object(sales.ctx, "get_client", return_value=client):
+            prepared = sales.prepare_send_sales_invoice("123")
+
+        self.assertEqual(
+            prepared["summary"],
+            "Email invoice 2026-0001 (EUR 108.89) to klant@example.com",
+        )
+        self.assertEqual(
+            prepared["payload"]["sales_invoice_sending"]["email_address"],
+            "klant@example.com",
+        )
+        self.assertEqual(prepared["preview"]["delivery_method"], "Email")
+
+    def test_manual_send_summary_says_that_no_email_will_be_sent(self) -> None:
+        client = self.FakeClient()
+        client.record.update(invoice_id="2026-0002", total_price_incl_tax="42.00")
+        set_active_administration_id(client.administration_id)
+        with mock.patch.object(sales.ctx, "get_client", return_value=client):
+            prepared = sales.prepare_send_sales_invoice(
+                "123",
+                delivery_method="Manual",
+            )
+
+        self.assertEqual(
+            prepared["summary"],
+            "Mark invoice 2026-0002 (EUR 42.00) as sent (Manual, no email)",
+        )
+        self.assertNotIn(
+            "email_address",
+            prepared["payload"]["sales_invoice_sending"],
+        )
 
 
 if __name__ == "__main__":

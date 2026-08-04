@@ -5,8 +5,10 @@ import os
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.server.context import Context
 from fastmcp.tools.base import Tool, ToolResult
+from pydantic import ValidationError as PydanticValidationError
 
 from .config import READ_ONLY_ANNOTATIONS, MoneybirdError
 
@@ -21,6 +23,23 @@ ALWAYS_VISIBLE_TOOLS = [
     "prepare_bookkeeping_correction_batch",
     "execute_approved_action",
 ]
+
+
+def _compact_validation_error(
+    error: FastMCPValidationError,
+    *,
+    tool_name: str,
+) -> str:
+    cause = error.__cause__
+    if not isinstance(cause, PydanticValidationError):
+        return f"Invalid arguments for {tool_name}."
+    details = []
+    for issue in cause.errors(include_url=False, include_input=False):
+        location = ".".join(str(part) for part in issue.get("loc") or ())
+        message = str(issue.get("msg") or "invalid value")
+        details.append(f"{location or 'arguments'}: {message}")
+    rendered = "; ".join(details) or "invalid arguments"
+    return f"Invalid arguments for {tool_name}: {rendered}."
 
 
 def configure_tool_discovery(mcp: Any, mode: str | None = None) -> str:
@@ -139,7 +158,12 @@ def configure_tool_discovery(mcp: Any, mode: str | None = None) -> str:
                             "approval_id so the MCP client sees its destructive "
                             "annotation."
                         )
-                    return await ctx.fastmcp.call_tool(name, arguments)
+                    try:
+                        return await ctx.fastmcp.call_tool(name, arguments)
+                    except FastMCPValidationError as exc:
+                        raise ToolError(
+                            _compact_validation_error(exc, tool_name=name)
+                        ) from None
 
                 return Tool.from_function(
                     fn=call_tool,

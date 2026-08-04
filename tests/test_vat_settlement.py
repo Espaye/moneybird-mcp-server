@@ -130,6 +130,20 @@ class FakeClient:
         return self.general_journals
 
 
+class NoRoundingExactClient(FakeClient):
+    """Stock-like chart without Afrondingsverschillen and an exact VAT position."""
+
+    def list_ledger_accounts(self):
+        return [item for item in LEDGER_ACCOUNTS if item["id"] != ROUNDING]
+
+    def get_report(self, name, *, period, **_kwargs):
+        if name == "general_ledger":
+            return _general_ledger("100.00", "40.00")
+        if name == "tax" and period == "202604":
+            return _tax_report("100.00", "40.00", "0.00")
+        raise AssertionError(f"unexpected report {name} for {period}")
+
+
 class LedgerMovementParsingTests(unittest.TestCase):
     def test_extracts_debit_and_credit_turnover(self):
         movements = ledger_movements_from_report(
@@ -274,7 +288,9 @@ class AccountResolutionTests(unittest.TestCase):
             resolve_vat_accounts(without_rounding)
         message = str(caught.exception)
         self.assertIn("Afrondingsverschillen", message)
-        self.assertIn("16224 Te betalen btw", message)
+        self.assertIn("rounding_ledger_account_id", message)
+        self.assertIn("prepare_create_ledger_account", message)
+        self.assertNotIn("16224 Te betalen btw", message)
 
 
 class SettlementJournalTests(unittest.TestCase):
@@ -584,6 +600,39 @@ class SettlementPreflightTests(unittest.TestCase):
         self.assertEqual(preflight["period_locked_until"], "")
 
 
+class AnalyzeVatSettlementToolTests(unittest.TestCase):
+    def test_analysis_works_without_a_rounding_account(self):
+        from moneybird_mcp.tools import _context
+        from moneybird_mcp.tools import ledger as ledger_tools
+
+        client = NoRoundingExactClient()
+        with mock.patch.object(_context, "get_client", return_value=client):
+            result = ledger_tools.analyze_vat_settlement(
+                period="20260401..20260430"
+            )
+
+        self.assertEqual(result["gross_movements"]["net_position"], "60.00")
+        self.assertNotIn("rounding", result["accounts"])
+
+    def test_invalid_period_is_rejected_before_ledger_api_calls(self):
+        from moneybird_mcp.tools import _context
+        from moneybird_mcp.tools import ledger as ledger_tools
+
+        class CallCountingClient:
+            list_ledger_accounts_calls = 0
+
+            def list_ledger_accounts(self):
+                self.list_ledger_accounts_calls += 1
+                return LEDGER_ACCOUNTS
+
+        client = CallCountingClient()
+        with mock.patch.object(_context, "get_client", return_value=client):
+            with self.assertRaisesRegex(MoneybirdError, "explicit range"):
+                ledger_tools.analyze_vat_settlement(period="this_year")
+
+        self.assertEqual(client.list_ledger_accounts_calls, 0)
+
+
 class PrepareVatSettlementToolTests(unittest.TestCase):
     def setUp(self) -> None:
         from moneybird_mcp.credentials import set_active_administration_id
@@ -653,6 +702,34 @@ class PrepareVatSettlementToolTests(unittest.TestCase):
         self.assertEqual(
             staged["preview"]["total_debit"], staged["preview"]["total_credit"]
         )
+
+    def test_exact_settlement_does_not_require_a_rounding_account(self):
+        staged = self._prepare(
+            client=NoRoundingExactClient(),
+            period="20260401..20260430",
+            reference="BTW-2026-04-exact",
+            date="",
+            declared_amount="60",
+        )
+
+        settlement = staged["preview"]["vat_settlement"]
+        self.assertEqual(settlement["rounding_difference"], "0.00")
+        self.assertNotIn("rounding", settlement["accounts"])
+        self.assertEqual(len(staged["preview"]["entries"]), 3)
+
+    def test_nonzero_rounding_names_the_real_override_and_creation_tool(self):
+        with self.assertRaises(MoneybirdError) as caught:
+            self._prepare(
+                client=NoRoundingExactClient(),
+                period="20260401..20260430",
+                reference="BTW-2026-04-rounded",
+                date="",
+                declared_amount="59",
+            )
+
+        message = str(caught.exception)
+        self.assertIn("rounding_ledger_account_id", message)
+        self.assertIn("prepare_create_ledger_account", message)
 
     def test_staged_payload_matches_the_quarter_settlement(self):
         staged = self._prepare()

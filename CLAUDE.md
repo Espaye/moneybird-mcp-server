@@ -148,7 +148,9 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   `read_document_attachment` en geef je als exacte `desired_lines` mee; die modus valideert ids en
   weigert een verdeling die het totaal wijzigt. Contactgerichte reviews gebruiken de volledige
   versioned sync-feed (met paginering als fallback), zodat oudere boekjaren niet door Moneybirds
-  impliciete huidige-boekjaarfilter verdwijnen. Elke reconcile
+  impliciete huidige-boekjaarfilter verdwijnen. Een patroon heet pas "gebruikelijk" na minstens
+  twee eerdere facturen van die leverancier; reviewredenen tonen grootboeknummer en -naam in
+  plaats van alleen het interne id. Elke reconcile
   slaat de documentversie op en breekt vóór de PATCH af als de factuur sinds de preview is gewijzigd.
   (Ontwerp: `docs/reading_pdf_attachments.md`; logica: `moneybird_mcp/purchase_reconcile.py`.)
 - **Een btw-betaling boeken is de helft; de aangifteperiode schoonboeken is de andere helft.**
@@ -162,7 +164,9 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   **in je voordeel** worden afgerond (verschuldigd omlaag, voorbelasting omhoog), dus het betaalde
   bedrag ligt legitiem onder het exacte saldo. Leid dat bedrag nooit af en hanteer geen
   vaste tolerantiegrens — vraag de aangifte; de tool toetst het bedrag op hele euro's en tegen
-  een uit het aantal rubrieken *afgeleide* grens. Restant naar `Afrondingsverschillen`. Let op:
+  een uit het aantal rubrieken *afgeleide* grens. Een niet-nulrestant gaat naar
+  `Afrondingsverschillen`; de read-only analyse zoekt die rekening niet op en de prepare-flow
+  vereist hem alleen wanneer werkelijk een afrondingsregel nodig is. Let op:
   het memoriaal balanceert per definitie, dus een verkeerd bedrag verdwijnt zonder die controles
   geruisloos in de afrondingsregel en komt daarna als geverifieerd terug. Logica:
   `moneybird_mcp/vat_settlement.py`; playbook §3 + §3b; regressietests (met verlegde btw, refunds en
@@ -224,7 +228,10 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   teruggegeven betaling/grootboekboeking een ondertekend `price` gebruikt. De client vertaalt
   daarom het ondertekende toolbedrag aan de HTTP-grens. De uitvoerder controleert daarna ook het
   teruggegeven teken, `amount_open` en de verwerkte status; alleen "er verscheen een koppeling" is
-  niet voldoende bewijs van succes.
+  niet voldoende bewijs van succes. Als `price` in de prepare-call leeg is, wordt de actuele
+  ondertekende `amount_open` al in de approval en payload ingevuld; er gaat nooit een lege prijs
+  naar Moneybird. Bewijst de nacontrole dat vóór en na identiek zijn, dan is de zichtbare status
+  `failed`, niet `completed_with_errors`.
 - **Groepeer samenhangende correcties in één taakpreview.** Gebruik
   `prepare_bookkeeping_correction_batch` wanneer een opdracht zowel inkoopfactuurcorrecties als
   directe bankherclassificaties bevat. De workflow maakt één exact `approval_id`, preflight alle

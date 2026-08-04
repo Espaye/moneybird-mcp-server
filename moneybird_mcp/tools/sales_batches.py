@@ -65,7 +65,16 @@ def _prepare_batch_create_sales_invoices(
 ) -> dict[str, Any]:
     if not entries:
         raise MoneybirdError("Provide at least one batch entry.")
-    batch_items = [build_batch_invoice_payload(client, entry) for entry in entries]
+    batch_items: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        try:
+            batch_items.append(build_batch_invoice_payload(client, entry))
+        except MoneybirdError as exc:
+            reference = str(entry.get("reference") or "").strip()
+            context = f"entry[{index}]"
+            if reference:
+                context += f" (reference {reference!r})"
+            raise MoneybirdError(f"{context}: {exc}") from exc
     apply_batch_group_merge_checks(batch_items)
     preview = summarize_batch_preview(batch_items)
     if fail_on_duplicate and preview["duplicate_count"]:

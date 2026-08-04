@@ -8,9 +8,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Annotated
 
 from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from moneybird_mcp.config import (
     PREPARE_ANNOTATIONS,
@@ -47,6 +49,17 @@ def _scratch_server() -> FastMCP:
         name="hidden_write_from_approval",
         description="Execute a prepared mutation.",
         annotations=WRITE_ANNOTATIONS,
+    )
+
+    def constrained(
+        record_id: Annotated[str, Field(pattern=r"^[0-9]+$")],
+    ) -> str:
+        return record_id
+
+    server.tool(
+        constrained,
+        name="hidden_constrained_read",
+        annotations=READ_ONLY_ANNOTATIONS,
     )
     return server
 
@@ -108,6 +121,29 @@ class ToolDiscoveryTests(unittest.TestCase):
             "directly exposed execute_approved_action",
         ):
             asyncio.run(call())
+
+    def test_call_tool_compacts_pydantic_validation_errors(self) -> None:
+        server = _scratch_server()
+        configure_tool_discovery(server, "search")
+
+        async def call() -> None:
+            async with Client(server) as client:
+                await client.call_tool(
+                    "call_tool",
+                    {
+                        "name": "hidden_constrained_read",
+                        "arguments": {"record_id": "not-a-number"},
+                    },
+                )
+
+        with self.assertRaises(ToolError) as caught:
+            asyncio.run(call())
+
+        message = str(caught.exception)
+        self.assertIn("Invalid arguments for hidden_constrained_read", message)
+        self.assertIn("record_id", message)
+        self.assertNotIn("input_value", message)
+        self.assertNotIn("pydantic.dev", message)
 
     def test_direct_call_refuses_hidden_mutating_executor(self) -> None:
         server = _scratch_server()

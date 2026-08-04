@@ -80,6 +80,27 @@ their own licences.
 
 ### Fixed
 
+- Bank-mutation links with an omitted `price` now stage the mutation's current
+  `amount_open` as an explicit signed price, so Moneybird never receives a nil
+  amount. A verified no-op is reported as `failed`, not partial completion.
+  Compact mutation lists now count invoice/document payments as bookings as
+  well as direct ledger bookings, expose `amount_open` and `settlement_state`,
+  and fall back to the account identifier/IBAN when an imported bank account has
+  no display name.
+- VAT analysis now validates its explicit whole-month range before any API call
+  and no longer resolves or advertises the rounding account it does not use.
+  Settlement preparation resolves `Afrondingsverschillen` only when the declared
+  amount actually creates a non-zero rounding line; a missing required account
+  names `rounding_ledger_account_id`, points to
+  `prepare_create_ledger_account`, and shows at most three plausible candidates.
+- Sales-invoice send approvals now bind and summarize the resolved delivery
+  method, invoice number, total, and email recipient. Purchase-review reasons
+  render ledger numbers/names instead of opaque ids and require at least two
+  prior supplier invoices before calling a pattern "usual". Batch invoice
+  preparation errors identify the failing zero-based entry and its reference.
+- Compact `call_tool` validation failures now omit Pydantic internals, input
+  dumps, and documentation URLs. Potential-invoice-duplicate warnings now
+  include currency and excl./incl.-VAT totals.
 - **Compact discovery can no longer hide a write behind unannotated `call_tool`.**
   The proxy now advertises itself as read-only, accepts only targets explicitly
   annotated read-only, and omits action-specific write executors from search

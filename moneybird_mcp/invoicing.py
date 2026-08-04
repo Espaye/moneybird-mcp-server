@@ -1183,6 +1183,9 @@ def find_potential_invoice_duplicates(
                     "state": invoice.get("state"),
                     "invoice_date": invoice.get("invoice_date"),
                     "reference": invoice.get("reference"),
+                    "currency": invoice.get("currency"),
+                    "total_price_excl_tax": invoice.get("total_price_excl_tax"),
+                    "total_price_incl_tax": invoice.get("total_price_incl_tax"),
                 }
             )
     return duplicates

@@ -78,6 +78,11 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertTrue(option["default"])
         self.assertIn("advisory", option["description"])
 
+    def test_vat_analysis_exposes_its_explicit_range_contract(self) -> None:
+        schema = self._tool_schema("analyze_vat_settlement")["properties"]
+        self.assertIn("Explicit whole-month date range only", schema["period"]["description"])
+        self.assertNotIn("rounding_ledger_account_id", schema)
+
     def test_direct_purchase_reference_lookup_registers(self) -> None:
         schema = self._tool_schema("get_purchase_invoice_by_reference")["properties"]
         self.assertIn("reference", schema)

@@ -48,6 +48,43 @@ class ScanAttentionTests(unittest.TestCase):
 
         self.assertEqual(result["count"], 0)
 
+    def test_one_prior_invoice_is_not_enough_to_claim_a_usual_pattern(self):
+        older = reference_june("only-prior")
+        target = target_july("target")
+        target["state"] = "pending_payment"
+
+        result = scan_purchase_invoices_for_attention(
+            FakeClient([target, older]),
+            include_description_mapping_checks=False,
+        )
+
+        self.assertEqual(result["count"], 0)
+
+    def test_missing_usual_ledger_is_rendered_with_number_and_name(self):
+        class NamedLedgerClient(FakeClient):
+            def list_ledger_accounts(self):
+                return [
+                    {"id": LEDGER_ZAK, "account_id": "46801.01", "name": "Algemene kosten"},
+                    {"id": LEDGER_PRIV, "account_id": "45185", "name": "Huisvestingskosten"},
+                ]
+
+        history = [reference_june(f"good-{index}") for index in range(3)]
+        target = target_july("missing-ledger")
+        target["details"] = [target["details"][0]]
+
+        result = scan_purchase_invoices_for_attention(
+            NamedLedgerClient([target, *history]),
+            include_description_mapping_checks=False,
+        )
+
+        flagged = next(
+            item for item in result["flagged"]
+            if item["document_id"] == "missing-ledger"
+        )
+        reasons = " ".join(flagged["reasons"])
+        self.assertIn("45185 Huisvestingskosten", reasons)
+        self.assertNotIn(LEDGER_PRIV, reasons)
+
     def test_description_mapping_check_is_advisory_and_optional(self):
         older, target = self._wetterskip_history()
 
