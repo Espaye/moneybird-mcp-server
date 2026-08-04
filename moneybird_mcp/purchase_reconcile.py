@@ -110,17 +110,108 @@ def _expected_lines(desired: list[dict[str, Any]]) -> list[dict[str, str]]:
 # Building a reconcile (fix) payload from a reference invoice
 # --------------------------------------------------------------------------- #
 
-def _rebalance(desired: list[dict[str, Any]], target_total: Decimal) -> None:
-    """Nudge the largest line so the prices sum exactly to ``target_total``."""
+def _line_total_incl_tax(
+    line: dict[str, Any],
+    *,
+    prices_are_incl_tax: bool,
+    tax_rates: dict[str, dict[str, Any]],
+) -> Decimal:
+    price = money_decimal(line.get("price"))
+    if prices_are_incl_tax:
+        return price.quantize(CENT, rounding=ROUND_HALF_UP)
+    tax_rate_id = _line_tax(line)
+    tax_rate = tax_rates.get(tax_rate_id)
+    if tax_rate is None:
+        raise MoneybirdError(
+            f"Reference line uses unknown tax_rate_id {tax_rate_id or '(empty)'}; "
+            "cannot prove the incl-tax total."
+        )
+    percentage = Decimal(str(tax_rate.get("percentage") or "0"))
+    return (price * (Decimal("1") + percentage / Decimal("100"))).quantize(
+        CENT,
+        rounding=ROUND_HALF_UP,
+    )
+
+
+def _calculated_total_incl_tax(
+    desired: list[dict[str, Any]],
+    *,
+    prices_are_incl_tax: bool,
+    tax_rates: dict[str, dict[str, Any]],
+) -> Decimal:
+    return sum(
+        (
+            _line_total_incl_tax(
+                line,
+                prices_are_incl_tax=prices_are_incl_tax,
+                tax_rates=tax_rates,
+            )
+            for line in desired
+        ),
+        Decimal("0"),
+    ).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def _rebalance_to_incl_total(
+    desired: list[dict[str, Any]],
+    target_total: Decimal,
+    *,
+    prices_are_incl_tax: bool,
+    tax_rates: dict[str, dict[str, Any]],
+) -> Decimal:
+    """Nudge a raw line price while preserving its incl/excl-tax meaning.
+
+    ``target_total`` is always incl tax, while Moneybird interprets each line's
+    ``price`` according to ``prices_are_incl_tax``.  In excl-tax mode, therefore,
+    the residual cannot be copied into the raw price field directly.
+    """
     if not desired:
-        return
-    total = sum((line["price"] for line in desired), Decimal("0"))
-    residual = (target_total - total).quantize(CENT, rounding=ROUND_HALF_UP)
-    if residual == 0:
-        return
-    biggest = max(range(len(desired)), key=lambda i: abs(desired[i]["price"]))
-    desired[biggest]["price"] = (desired[biggest]["price"] + residual).quantize(
-        CENT, rounding=ROUND_HALF_UP
+        return Decimal("0.00")
+    calculated = _calculated_total_incl_tax(
+        desired,
+        prices_are_incl_tax=prices_are_incl_tax,
+        tax_rates=tax_rates,
+    )
+    if calculated == target_total:
+        return calculated
+
+    # Scaling and cent-rounding normally leave only a tiny residual. Try the
+    # nearest raw-cent adjustments on each line and accept only an exact gross
+    # total. If the copied tax split cannot express the requested total, fail the
+    # preview instead of staging a write whose total is known to be wrong.
+    residual = target_total - calculated
+    for index in sorted(
+        range(len(desired)),
+        key=lambda item: abs(desired[item]["price"]),
+        reverse=True,
+    ):
+        original = desired[index]["price"]
+        multiplier = Decimal("1")
+        if not prices_are_incl_tax:
+            tax_rate = tax_rates.get(_line_tax(desired[index]))
+            if tax_rate is None:
+                continue
+            percentage = Decimal(str(tax_rate.get("percentage") or "0"))
+            multiplier += percentage / Decimal("100")
+        nearest = (residual / multiplier).quantize(CENT, rounding=ROUND_HALF_UP)
+        for offset in range(-3, 4):
+            adjustment = nearest + CENT * offset
+            desired[index]["price"] = (original + adjustment).quantize(
+                CENT,
+                rounding=ROUND_HALF_UP,
+            )
+            recalculated = _calculated_total_incl_tax(
+                desired,
+                prices_are_incl_tax=prices_are_incl_tax,
+                tax_rates=tax_rates,
+            )
+            if recalculated == target_total:
+                return recalculated
+        desired[index]["price"] = original
+
+    raise MoneybirdError(
+        "The reference line/tax split cannot be rounded to the requested incl-tax "
+        f"total {target_total:.2f}. Supply exact desired_lines from the invoice instead."
     )
 
 
@@ -287,6 +378,10 @@ def build_reconcile_purchase_invoice(
     factor = resolved_total / reference_total
     reference_label = dutch_month_label(reference.get("date"))
     target_label = dutch_month_label(target.get("date"))
+    prices_are_incl_tax = bool(reference.get("prices_are_incl_tax"))
+    tax_rates = {
+        str(rate.get("id") or ""): rate for rate in client.list_tax_rates()
+    }
 
     desired: list[dict[str, Any]] = []
     for detail in reference_details:
@@ -309,9 +404,12 @@ def build_reconcile_purchase_invoice(
             }
         )
 
-    _rebalance(desired, resolved_total)
-
-    prices_are_incl_tax = bool(reference.get("prices_are_incl_tax"))
+    calculated_total = _rebalance_to_incl_total(
+        desired,
+        resolved_total,
+        prices_are_incl_tax=prices_are_incl_tax,
+        tax_rates=tax_rates,
+    )
     details_attributes = _map_lines(target.get("details") or [], desired)
 
     # Did anything actually change? Compare the resulting line set + tax flag.
@@ -373,7 +471,7 @@ def build_reconcile_purchase_invoice(
         "details_attributes": details_attributes,
         "prices_are_incl_tax": prices_are_incl_tax,
         "expected_total_before": f"{current_total:.2f}",
-        "expected_total_incl_tax": f"{resolved_total:.2f}",
+        "expected_total_incl_tax": f"{calculated_total:.2f}",
         "expected_lines": _expected_lines(desired),
         **_version_snapshot(target),
     }
@@ -390,8 +488,8 @@ def build_reconcile_purchase_invoice(
         "target_state": target.get("state"),
         "target_version": target.get("version"),
         "total_before": f"{current_total:.2f}",
-        "total_after": f"{resolved_total:.2f}",
-        "total_unchanged": current_total == resolved_total,
+        "total_after": f"{calculated_total:.2f}",
+        "total_unchanged": current_total == calculated_total,
         "prices_are_incl_tax_before": bool(target.get("prices_are_incl_tax")),
         "prices_are_incl_tax_after": prices_are_incl_tax,
         "line_count_before": len(before_lines),

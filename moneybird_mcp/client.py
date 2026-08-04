@@ -1643,11 +1643,11 @@ class MoneybirdClient:
         self,
         ledger_account: dict[str, Any],
         *,
-        rgs_code: str = "",
+        rgs_code: str,
     ) -> dict[str, Any]:
-        body = {"ledger_account": ledger_account}
-        if rgs_code:
-            body["rgs_code"] = rgs_code
+        if not str(rgs_code or "").strip():
+            raise MoneybirdError("rgs_code is required when creating a ledger account.")
+        body = {"ledger_account": ledger_account, "rgs_code": str(rgs_code).strip()}
         return self._request(
             "POST",
             f"/{self.administration_id}/ledger_accounts.json",

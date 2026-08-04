@@ -113,7 +113,7 @@ def prepare_create_contact(
     city: str = "",
     country: Annotated[str, Field(description="ISO 3166-1 alpha-2 country code.")] = "NL",
 ) -> dict[str, Any]:
-    """Use this to create a new contact: add a customer, client, supplier, or vendor to Moneybird. Use this before creating a Moneybird contact. Do not execute the write until the user explicitly confirms."""
+    """Create a new customer. Add a contact, client, supplier, or vendor. Dutch: klant toevoegen, leverancier toevoegen. Requires explicit approval before execution."""
     ctx.get_client()  # Resolve and bind the active administration to the approval.
     payload = clean_dict(
         {
@@ -581,7 +581,7 @@ def update_contact_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_archive_contact(contact_id: ContactId) -> dict[str, Any]:
-    """Use this before archiving a Moneybird contact. Do not execute the archive until the user explicitly confirms."""
+    """Use this before archiving a Moneybird contact. Archiving does not close its open invoices, and this server has no unarchive action. Do not execute the archive until the user explicitly confirms."""
     client = ctx.get_client()
     record = client.get_contact(contact_id)
     expected_record = {
@@ -600,6 +600,12 @@ def prepare_archive_contact(contact_id: ContactId) -> dict[str, Any]:
             "contact_id": contact_id,
             "title": contact_title(record),
             "expected_record": expected_record,
+            "warnings": [
+                "Archiving does not close or cancel this contact's open sales or "
+                "purchase invoices.",
+                "This MCP server has no unarchive tool, so the archive cannot be "
+                "undone through this server.",
+            ],
         },
     )
 

@@ -339,9 +339,10 @@ def compact_general_journal_summary(
 def compact_financial_mutation_summary(
     mutation: dict[str, Any],
     administration_id: str | None,
+    financial_account: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     mutation_id = str(mutation.get("id"))
-    financial_account = mutation.get("financial_account") or {}
+    financial_account = financial_account or mutation.get("financial_account") or {}
     payments = mutation.get("payments") or []
     ledger_bookings = mutation.get("ledger_account_bookings") or []
     return {
@@ -358,6 +359,8 @@ def compact_financial_mutation_summary(
             financial_account.get("name")
             or financial_account.get("identifier")
             or financial_account.get("iban")
+            or mutation.get("financial_account_name")
+            or mutation.get("financial_account_identifier")
         ),
         "bookings_count": len(payments) + len(ledger_bookings),
         "url": api_url("financial_mutations", mutation_id, administration_id),
@@ -367,12 +370,16 @@ def compact_financial_mutation_summary(
 
 
 def compact_ledger_account_summary(account: dict[str, Any]) -> dict[str, Any]:
+    taxonomy_item = account.get("taxonomy_item") or {}
     return {
         "id": str(account.get("id")),
         "name": account.get("name"),
         "account_type": account.get("account_type"),
         "account_id": account.get("account_id"),
         "active": account.get("active"),
+        "rgs_code": taxonomy_item.get("code"),
+        "rgs_name": taxonomy_item.get("name"),
+        "rgs_taxonomy_version": taxonomy_item.get("taxonomy_version"),
     }
 
 

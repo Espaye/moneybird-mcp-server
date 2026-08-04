@@ -42,7 +42,7 @@ versioning while allowing pre-1.0 breaking changes.
   `moneybird_mcp`, matching the distribution name and avoiding file ownership
   collisions with the unrelated `moneybird` project on PyPI. The console command
   remains `moneybird-mcp`; module invocations now use, for example,
-  `python -m moneybird_mcp.oauth_login`. The release version is 0.6.0 so source
+  `python -m moneybird_mcp.oauth_login`. The release version is 0.6.1 so source
   checkouts and installed 0.5.0 builds no longer report the same identity.
 - Reworked the public documentation around a short onboarding-first `README.md`, with
   dedicated getting-started, deployment-and-safety, tool-reference, and local-data-lifecycle
@@ -80,6 +80,35 @@ their own licences.
 
 ### Fixed
 
+- Batch sales-invoice updates now reject unknown or lookup-only fields instead of
+  silently dropping them, and both prepare and execute refuse an empty patch. Credit
+  invoices are verified against Moneybird's actual duplication contract — negated
+  total plus draft state — without predicting provider-owned header/line layout.
+- Ambiguous post-write failures now immediately warn that the mutation may already
+  have been applied and must be reconciled before retrying. Direct bank bookings to
+  profit-and-loss ledger accounts warn that they create no VAT posting.
+- VAT analysis detects settlement journals by exact period and participating VAT
+  accounts, reconstructs the pre-settlement movements, and no longer diagnoses an
+  already-cleared period as anomalous. The same period-based rule blocks a second
+  settlement under a different reference during both prepare and execution.
+- Profit/loss and balance-sheet rows now include ledger names, numbers, and account
+  types, and the common report tools have useful period defaults. Archive and pause
+  previews disclose their operational consequences, while common Dutch bookkeeping
+  phrases participate in compact tool search.
+- **Purchase-invoice reconciliation now preserves totals in both VAT price modes.**
+  Reference lines stay excl. tax when `prices_are_incl_tax` is false; scaling and
+  cent rebalancing are checked against the calculated incl.-tax total before an
+  approval is staged. This also fixes the combined bookkeeping-correction flow.
+- Ledger-account creation now requires the Moneybird-mandated RGS 3.5 code in
+  its tool schema and verifies it after creation. Ledger listings expose existing
+  taxonomy codes, and VAT-rounding guidance suggests only semantically adjacent
+  difference accounts instead of arbitrary expense categories.
+- Direct MCP calls now receive the same compact argument-validation errors as
+  compact `call_tool`. Status and prepare responses expose capability mode,
+  read-only execution denials are audited, reclassification previews prefer the
+  true excl.-tax line total, unlink previews/verification are complete, imported
+  financial accounts resolve their identifier, and MCP serverInfo reports the
+  package version. The beta version is now 0.6.1.
 - Bank-mutation links with an omitted `price` now stage the mutation's current
   `amount_open` as an explicit signed price, so Moneybird never receives a nil
   amount. A verified no-op is reported as `failed`, not partial completion.

@@ -140,6 +140,7 @@ def validate_document_ledger_target(kind: str, ledger_account: dict[str, Any]) -
 
 def document_detail_amount_excl_tax(detail: dict[str, Any]) -> Decimal:
     candidates = [
+        detail.get("total_price_excl_tax_with_discount"),
         detail.get("total_price_excl_tax"),
         detail.get("price_excl_tax"),
         detail.get("price"),

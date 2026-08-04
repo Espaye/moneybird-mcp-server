@@ -83,6 +83,42 @@ def _sum_prices(ops):
     )
 
 
+def _single_line_vat_documents(*, target_incl_tax: bool = False):
+    reference = {
+        "id": "ref-vat",
+        "version": 1,
+        "updated_at": "2026-10-01T10:00:00Z",
+        "date": "2026-10-01",
+        "state": "paid",
+        "reference": "HUUR-2026-10",
+        "prices_are_incl_tax": False,
+        "total_price_incl_tax": "1028.50",
+        "contact": {"id": "LANDLORD", "company_name": "Verhuurder"},
+        "details": [_line("ref-line", "Huur oktober", "850.00", LEDGER_ZAK, TAX_21)],
+    }
+    target = {
+        "id": "target-vat",
+        "version": 2,
+        "updated_at": "2026-11-01T10:00:00Z",
+        "date": "2026-11-01",
+        "state": "new",
+        "reference": "HUUR-2026-11",
+        "prices_are_incl_tax": target_incl_tax,
+        "total_price_incl_tax": "1028.50",
+        "contact": {"id": "LANDLORD", "company_name": "Verhuurder"},
+        "details": [
+            _line(
+                "target-line",
+                "Onjuiste verzamelregel",
+                "1028.50" if target_incl_tax else "850.00",
+                LEDGER_PRIV,
+                TAX_21,
+            )
+        ],
+    }
+    return reference, target
+
+
 class DutchMonthLabelTests(unittest.TestCase):
     def test_parses_iso_date(self):
         self.assertEqual(dutch_month_label("2026-07-19"), "juli 2026")
@@ -115,6 +151,44 @@ class MapLinesTests(unittest.TestCase):
 
 
 class BuildReconcileTests(unittest.TestCase):
+    def test_excl_tax_reference_keeps_raw_price_excl_tax(self):
+        reference, target = _single_line_vat_documents()
+        built = build_reconcile_purchase_invoice(
+            FakeClient([reference, target]),
+            document_id="target-vat",
+            reference_document_id="ref-vat",
+        )
+
+        self.assertFalse(built["payload"]["prices_are_incl_tax"])
+        self.assertEqual(_sum_prices(built["payload"]["details_attributes"]), Decimal("850.00"))
+        self.assertEqual(built["preview"]["total_after"], "1028.50")
+        self.assertTrue(built["preview"]["total_unchanged"])
+
+    def test_excl_tax_reference_scales_raw_price_for_requested_incl_total(self):
+        reference, target = _single_line_vat_documents()
+        built = build_reconcile_purchase_invoice(
+            FakeClient([reference, target]),
+            document_id="target-vat",
+            reference_document_id="ref-vat",
+            target_total="605.00",
+        )
+
+        self.assertEqual(_sum_prices(built["payload"]["details_attributes"]), Decimal("500.00"))
+        self.assertEqual(built["preview"]["total_after"], "605.00")
+
+    def test_incl_tax_target_flipped_to_excl_uses_excl_line_price(self):
+        reference, target = _single_line_vat_documents(target_incl_tax=True)
+        built = build_reconcile_purchase_invoice(
+            FakeClient([reference, target]),
+            document_id="target-vat",
+            reference_document_id="ref-vat",
+        )
+
+        self.assertFalse(built["payload"]["prices_are_incl_tax"])
+        self.assertEqual(_sum_prices(built["payload"]["details_attributes"]), Decimal("850.00"))
+        self.assertEqual(built["preview"]["total_after"], "1028.50")
+        self.assertTrue(built["preview"]["total_unchanged"])
+
     def test_equal_totals_verbatim_split_preserves_total(self):
         client = FakeClient([_reference_june(), _target_july()])
         built = build_reconcile_purchase_invoice(
@@ -292,6 +366,26 @@ class BuildExplicitReconcileTests(unittest.TestCase):
 
 
 class ReconcileExecutionSafetyTests(unittest.TestCase):
+    def test_excl_tax_reference_execution_preserves_incl_total(self):
+        from moneybird_mcp.tools.purchases import _execute_reconcile
+
+        reference, target = _single_line_vat_documents()
+        client = FakeClient([reference, target])
+        payload = build_reconcile_purchase_invoice(
+            client,
+            document_id="target-vat",
+            reference_document_id="ref-vat",
+        )["payload"]
+
+        with (
+            mock.patch("moneybird_mcp.tools.purchases.mark_write_dispatch_started"),
+            mock.patch("moneybird_mcp.tools.purchases.mark_write_verifying"),
+        ):
+            result = _execute_reconcile(client, payload)
+
+        self.assertEqual(result["total_after"], "1028.50")
+        self.assertTrue(result["verified_total_unchanged"])
+
     def test_executes_and_verifies_total_lines_tax_mode_and_version(self):
         from moneybird_mcp.tools.purchases import _execute_reconcile
 

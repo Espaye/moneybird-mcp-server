@@ -73,7 +73,7 @@ WRITE_SPECS: dict[str, WriteSpec] = {
     ),
     "create_credit_invoice": _spec(
         "original invoice version, total, and line snapshot",
-        "independent GET proves draft, negated total, contact, currency, and lines",
+        "independent GET proves draft state and exact negation of the original total",
         "original invoice occurrence snapshot",
         "match returned id or exact credit signature",
     ),

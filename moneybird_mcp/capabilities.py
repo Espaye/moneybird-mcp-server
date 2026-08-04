@@ -7,6 +7,7 @@ from enum import StrEnum
 from .config import MoneybirdError
 from .credentials import (
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+    get_active_administration_id,
     get_credential_mode,
 )
 
@@ -44,8 +45,24 @@ def require_write_capability(*, action: str | None = None) -> None:
     if writes_enabled():
         return
     suffix = f" for action {action!r}" if action else ""
-    raise MoneybirdError(
+    message = (
         "Moneybird writes are disabled by server policy"
         f"{suffix}. Set {CAPABILITY_MODE_ENV}=write_enabled only for an explicitly "
         "supervised deployment whose confirmation and reconciliation limits you accept."
     )
+    administration_id = get_active_administration_id()
+    if administration_id:
+        # Import lazily so the policy module remains usable while safety state is
+        # being initialized. A denied execution is still an audit event even
+        # though the pending approval deliberately remains reusable.
+        from .safety import append_audit_log
+
+        append_audit_log(
+            {
+                "action": action or "write",
+                "result": "policy_blocked",
+                "error": message,
+            },
+            administration_id=administration_id,
+        )
+    raise MoneybirdError(message)

@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from ..capabilities import require_write_capability
 from ..config import WRITE_ANNOTATIONS, MoneybirdError
+from ..credentials import CREDENTIAL_MODE_HOSTED_REQUEST_ONLY, get_credential_mode
 from ..safety import peek_approval
 from ..write_contracts import WRITE_SPECS
 from . import _context as ctx
@@ -99,15 +100,18 @@ def execute_approved_action(approval_id: ApprovalId) -> dict[str, Any]:
     and single-use; this tool only removes the need to rediscover a separate
     action-specific ``*_from_approval`` tool.
     """
-    # Reject hosted/read-only execution before resolving credentials or opening
-    # the local approvals database.
-    require_write_capability(action="execute_approved_action")
+    # Hosted mode has no local principal-bound approval state and must fail before
+    # touching credentials or the approvals database. Local read-only attempts
+    # resolve their pending action first so the policy audit names that action.
+    if get_credential_mode() == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
+        require_write_capability(action="execute_approved_action")
     client = ctx.get_client()
     pending = peek_approval(
         approval_id,
         administration_id=client.administration_id,
     )
     action = str(pending["action"])
+    require_write_capability(action=action)
     executor = APPROVAL_EXECUTORS.get(action)
     if executor is None:
         raise MoneybirdError(

@@ -385,7 +385,7 @@ def prepare_send_sales_invoice(
     email_address: Annotated[str, Field(description="Override recipient email; empty = the contact's invoice email.")] = "",
     email_message: Annotated[str, Field(description="Custom message for the invoice email body.")] = "",
 ) -> dict[str, Any]:
-    """Use this to send an invoice to a customer by email or post, now or scheduled for later. Do not execute the send until the user explicitly confirms. Scheduled sends automatically include a merge-compatibility check against other invoices already planned for that contact/date."""
+    """Use this to send an invoice to a customer by email or post, now or scheduled for later. Dutch: factuur versturen naar klant. Do not execute the send until the user explicitly confirms. Scheduled sends automatically include a merge-compatibility check against other invoices already planned for that contact/date."""
     if sending_scheduled and not invoice_date:
         raise MoneybirdError(
             "invoice_date is required when sending_scheduled is true."
@@ -582,7 +582,15 @@ def prepare_pause_sales_invoice_workflow(sales_invoice_id: SalesInvoiceId) -> di
             "sales_invoice_id": sales_invoice_id,
             "expected_record": _invoice_precondition_snapshot(record),
         },
-        preview={"sales_invoice_id": sales_invoice_id, "state": record.get("state")},
+        preview={
+            "sales_invoice_id": sales_invoice_id,
+            "state": record.get("state"),
+            "effect": (
+                "Pauses Moneybird's automatic workflow for this invoice until it is "
+                "resumed, preventing scheduled automatic workflow actions from running. "
+                "It does not delete, credit, send, or mark the invoice as paid."
+            ),
+        },
     )
 
 
@@ -724,7 +732,7 @@ def resume_sales_invoice_workflow_from_approval(approval_id: ApprovalId) -> dict
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_create_credit_invoice(sales_invoice_id: SalesInvoiceId) -> dict[str, Any]:
-    """Use this to credit, refund, cancel, or reverse a sales invoice: Moneybird duplicates it
+    """Use this to credit, refund, cancel, or reverse a sales invoice (Dutch: creditfactuur maken): Moneybird duplicates it
     into a new DRAFT credit invoice with negated amounts. Nothing is sent automatically; sending
     the credit invoice afterwards needs its own prepare_send_sales_invoice approval. Do not
     execute the write until the user explicitly confirms."""
@@ -740,15 +748,6 @@ def prepare_create_credit_invoice(sales_invoice_id: SalesInvoiceId) -> dict[str,
         )
         for detail in record.get("details") or []
     ]
-    expected_credit_details: list[dict[str, Any]] = []
-    for detail in original_details:
-        expected = dict(detail)
-        if "price" in expected:
-            expected["price"] = str(-money_decimal(expected["price"]))
-        expected_credit_details.append(expected)
-    original_contact_id = str(
-        record.get("contact_id") or (record.get("contact") or {}).get("id") or ""
-    )
     return stage_write(
         "create_credit_invoice",
         summary=f"Create draft credit invoice for {invoice_title(record)}",
@@ -762,13 +761,6 @@ def prepare_create_credit_invoice(sales_invoice_id: SalesInvoiceId) -> dict[str,
                 ),
                 "details": original_details,
             },
-            "expected_credit_invoice": clean_dict(
-                {
-                    "contact_id": original_contact_id,
-                    "currency": record.get("currency"),
-                    "details_attributes": expected_credit_details,
-                }
-            ),
         },
         preview={
             "original_invoice": {
@@ -783,8 +775,10 @@ def prepare_create_credit_invoice(sales_invoice_id: SalesInvoiceId) -> dict[str,
                 ),
             },
             "effect": (
-                "A new draft credit invoice is created with the same lines and negated amounts. "
-                "It is not sent and the original invoice is not changed."
+                "Moneybird creates a new draft credit invoice that negates the original total. "
+                "Moneybird controls the duplicated line layout and may add a credit-invoice "
+                "header or negate quantities. It is not sent and the original invoice is not "
+                "changed."
             ),
         },
         fingerprint=duplicate_fingerprint(
@@ -838,18 +832,15 @@ def _execute_create_credit_invoice(client, payload: dict[str, Any]) -> dict[str,
     record = client.get_sales_invoice(record_id)
     total_credit = money_decimal(record.get("total_price_incl_tax") or 0)
     total_original = money_decimal(payload["total_original"])
-    payload_verification = verify_sales_invoice_payload(
-        payload.get("expected_credit_invoice") or {},
-        record,
-    )
+    credit_negates_original = total_credit == -total_original
     state_is_draft = str(record.get("state") or "") == "draft"
     record_id_matches = str(record.get("id") or "") == record_id
-    fully_verified = (
-        total_credit == -total_original
-        and state_is_draft
-        and record_id_matches
-        and payload_verification["fully_verified"]
-    )
+    # Moneybird owns the duplication endpoint's line layout. In practice it may
+    # insert a "Creditfactuur voor factuur ..." header and negate quantities
+    # instead of prices, so predicting individual rows creates false failures.
+    # The safe, provider-independent invariants are the negated total and draft
+    # state on the independently re-read record.
+    fully_verified = credit_negates_original and state_is_draft
     return {
         "_status": (
             "created" if fully_verified else "completed_with_verification_errors"
@@ -860,7 +851,7 @@ def _execute_create_credit_invoice(client, payload: dict[str, Any]) -> dict[str,
         "_audit": {
             "original_sales_invoice_id": payload["sales_invoice_id"],
             "credit_invoice_id": str(record.get("id")),
-            "credit_negates_original": fully_verified,
+            "credit_negates_original": credit_negates_original,
             "state_is_draft": state_is_draft,
         },
         "credit_invoice": {
@@ -875,10 +866,16 @@ def _execute_create_credit_invoice(client, payload: dict[str, Any]) -> dict[str,
         "verification": {
             "total_original": str(total_original),
             "total_credit": str(total_credit),
-            "credit_negates_original": fully_verified,
+            "credit_negates_original": credit_negates_original,
             "state_is_draft": state_is_draft,
             "record_id_matches": record_id_matches,
-            "payload_verification": payload_verification,
+            "line_layout_checked": False,
+            "line_layout_note": (
+                "Moneybird controls credit-invoice duplication, so verification "
+                "intentionally checks the negated total and draft state, not a "
+                "predicted line layout."
+            ),
+            "fully_verified": fully_verified,
         },
     }
 

@@ -368,6 +368,54 @@ class WriteContractRegressionTests(unittest.TestCase):
         self.assertEqual(execution["state"], "failed_pre_write")
         self.assertEqual(execution["phase"], "completed")
 
+    def test_batch_update_rejects_ignored_fields_and_empty_patches(self) -> None:
+        class Client:
+            administration_id = "contract-admin"
+
+            def __init__(self) -> None:
+                self.update_calls = 0
+
+            def update_sales_invoice(self, _invoice_id, _patch):
+                self.update_calls += 1
+
+        client = Client()
+        with self._patch_client(sales_batches, client):
+            with self.assertRaisesRegex(MoneybirdError, "Use new_reference"):
+                sales_batches.prepare_batch_update_sales_invoices(
+                    [
+                        {
+                            "sales_invoice_id": "invoice-1",
+                            "reference": "MCP testfactuur v2",
+                        }
+                    ]
+                )
+            with self.assertRaisesRegex(MoneybirdError, "unsupported field"):
+                sales_batches.prepare_batch_update_sales_invoices(
+                    [{"sales_invoice_id": "invoice-1", "bogus": "value"}]
+                )
+
+            # Defensive execution check for approvals created by an older server.
+            legacy = safety.make_approval(
+                "batch_update_sales_invoices",
+                {
+                    "items": [
+                        {
+                            "sales_invoice_id": "invoice-1",
+                            "patch": {},
+                            "precondition": {},
+                        }
+                    ],
+                    "fingerprint": "legacy-empty-batch-update",
+                },
+                "legacy empty batch update",
+            )
+            with self.assertRaisesRegex(MoneybirdError, "empty patch"):
+                sales_batches.batch_update_sales_invoices_from_approval(
+                    legacy["approval_id"]
+                )
+
+        self.assertEqual(client.update_calls, 0)
+
     def test_repeatable_unlink_uses_mutation_occurrence(self) -> None:
         class Client:
             administration_id = "contract-admin"
@@ -391,6 +439,9 @@ class WriteContractRegressionTests(unittest.TestCase):
 
             def get_financial_mutation(self, _mutation_id):
                 return copy.deepcopy(self.record)
+
+            def get_ledger_account(self, ledger_account_id):
+                return {"id": ledger_account_id, "name": "Ledger one"}
 
             def unlink_financial_mutation_booking(
                 self,
@@ -531,6 +582,10 @@ class WriteContractRegressionTests(unittest.TestCase):
                 "LedgerAccount",
                 "ledger-1",
                 "-10.00",
+            )
+            self.assertIn(
+                "creates no VAT posting",
+                " ".join(prepared["preview"]["warnings"]),
             )
             client.target_version = 2
             with self.assertRaisesRegex(MoneybirdError, "target changed"):

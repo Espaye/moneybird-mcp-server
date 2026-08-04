@@ -2,6 +2,7 @@ import copy
 import os
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
@@ -110,6 +111,104 @@ class MoneybirdHelperTests(unittest.TestCase):
         self.assertEqual(summary["amount_open"], "0.0")
         self.assertEqual(summary["settlement_state"], "settled")
         self.assertEqual(summary["financial_account_name"], "NL00BANK0123456789")
+
+    def test_financial_mutation_summary_resolves_separate_account_identifier(self) -> None:
+        from moneybird_mcp.formatting import compact_financial_mutation_summary
+
+        summary = compact_financial_mutation_summary(
+            {
+                "id": "123",
+                "financial_account_id": "bank-1",
+                "payments": [],
+                "ledger_account_bookings": [],
+            },
+            "admin",
+            {
+                "id": "bank-1",
+                "name": "",
+                "identifier": "NL91ABNA0417164300",
+            },
+        )
+
+        self.assertEqual(
+            summary["financial_account_name"],
+            "NL91ABNA0417164300",
+        )
+
+    def test_ledger_account_summary_exposes_rgs_taxonomy(self) -> None:
+        from moneybird_mcp.formatting import compact_ledger_account_summary
+
+        summary = compact_ledger_account_summary(
+            {
+                "id": "ledger-1",
+                "name": "Autokosten",
+                "account_type": "expenses",
+                "account_id": "45100",
+                "active": True,
+                "taxonomy_item": {
+                    "taxonomy_version": "3.5",
+                    "code": "WBedAlkOal",
+                    "name": "Overige autokosten",
+                },
+            }
+        )
+
+        self.assertEqual(summary["rgs_code"], "WBedAlkOal")
+        self.assertEqual(summary["rgs_taxonomy_version"], "3.5")
+
+    def test_create_ledger_account_verifies_rgs_code(self) -> None:
+        from moneybird_mcp.tools import ledger
+
+        class Client:
+            def create_ledger_account(self, payload, *, rgs_code):
+                self.payload = payload
+                self.rgs_code = rgs_code
+                return {"id": "ledger-1"}
+
+            def get_ledger_account(self, ledger_account_id):
+                return {
+                    "id": ledger_account_id,
+                    "name": "Autokosten",
+                    "account_type": "expenses",
+                    "active": True,
+                    "taxonomy_item": {
+                        "taxonomy_version": "3.5",
+                        "code": "WBedAlkOal",
+                    },
+                }
+
+        client = Client()
+        with (
+            mock.patch.object(ledger, "mark_write_dispatch_started"),
+            mock.patch.object(ledger, "mark_write_verifying"),
+        ):
+            result = ledger._execute_create_ledger_account(
+                client,
+                {
+                    "ledger_account": {
+                        "name": "Autokosten",
+                        "account_type": "expenses",
+                        "active": True,
+                    },
+                    "rgs_code": "WBedAlkOal",
+                },
+            )
+
+        self.assertEqual(client.rgs_code, "WBedAlkOal")
+        self.assertTrue(result["verification"]["fully_verified"])
+
+    def test_reclassification_amount_prefers_true_excl_tax_line_total(self) -> None:
+        from moneybird_mcp.invoicing import document_detail_amount_excl_tax
+
+        amount = document_detail_amount_excl_tax(
+            {
+                "price": "1028.50",
+                "total_price_excl_tax_with_discount": "850.00",
+                "amount": "1",
+            }
+        )
+
+        self.assertEqual(amount, Decimal("850.00"))
 
     def test_compare_merge_snapshots_detects_workflow_difference(self) -> None:
         mismatches = server.compare_merge_snapshots(
@@ -1417,6 +1516,13 @@ class UnlinkBankMutationTests(unittest.TestCase):
         def get_financial_mutation(self, mutation_id):
             return dict(self.mutation)
 
+        def get_ledger_account(self, ledger_account_id):
+            return {
+                "id": ledger_account_id,
+                "account_id": "45185",
+                "name": "Huisvestingskosten",
+            }
+
         def unlink_financial_mutation_booking(self, mutation_id, *, booking_type, booking_id):
             self.mutation["ledger_account_bookings"] = []
             self.mutation["state"] = "unprocessed"
@@ -1445,10 +1551,15 @@ class UnlinkBankMutationTests(unittest.TestCase):
                 booking_id="book-1",
             )
             self.assertEqual(prepared["preview"]["unlink"]["id"], "book-1")
+            self.assertEqual(
+                prepared["preview"]["unlink"]["ledger_account_name"],
+                "Huisvestingskosten",
+            )
             result = tools.unlink_bank_mutation_booking_from_approval(
                 prepared["approval_id"]
             )
         self.assertTrue(result["verification"]["booking_removed_from_mutation"])
+        self.assertTrue(result["verification"]["fully_verified"])
 
 
 class CreditInvoiceTests(unittest.TestCase):
@@ -1466,7 +1577,15 @@ class CreditInvoiceTests(unittest.TestCase):
                 "total_price_incl_tax": "100.00",
                 "currency": "EUR",
                 "contact_id": "contact-1",
-                "details": [],
+                "details": [
+                    {
+                        "id": "line-1",
+                        "row_order": 0,
+                        "description": "Precisiewerk",
+                        "amount": "3",
+                        "price": "33.333",
+                    }
+                ],
             }
             self.credit_invoice = None
 
@@ -1486,7 +1605,22 @@ class CreditInvoiceTests(unittest.TestCase):
                 "total_price_incl_tax": "-100.00",
                 "currency": "EUR",
                 "contact_id": "contact-1",
-                "details": [],
+                "details": [
+                    {
+                        "id": "header-1",
+                        "row_order": 0,
+                        "description": "Creditfactuur voor factuur 2026-0001",
+                        "amount": "1",
+                        "price": "0.00",
+                    },
+                    {
+                        "id": "line-2",
+                        "row_order": 1,
+                        "description": "Precisiewerk",
+                        "amount": "-3",
+                        "price": "33.333",
+                    },
+                ],
             }
             return dict(self.credit_invoice)
 
@@ -1499,6 +1633,8 @@ class CreditInvoiceTests(unittest.TestCase):
             result = tools.create_credit_invoice_from_approval(prepared["approval_id"])
         self.assertEqual(result["credit_invoice"]["state"], "draft")
         self.assertTrue(result["verification"]["credit_negates_original"])
+        self.assertTrue(result["verification"]["fully_verified"])
+        self.assertFalse(result["verification"]["line_layout_checked"])
 
 
 class ReportEndpointTests(unittest.TestCase):
@@ -1513,6 +1649,84 @@ class ReportEndpointTests(unittest.TestCase):
             "/123/reports/debtors_aging.json",
             query={"period_until": "20260630"},
         )
+
+
+class ReportToolPresentationTests(unittest.TestCase):
+    class FakeClient:
+        def __init__(self):
+            self.report_calls = []
+
+        def get_report(self, name, *, period, **_kwargs):
+            self.report_calls.append((name, period))
+            return {
+                "sections": [
+                    {
+                        "title": "Expenses",
+                        "rows": [
+                            {
+                                "ledger_account_id": "ledger-1",
+                                "value": "1245.0",
+                            }
+                        ],
+                    }
+                ]
+            }
+
+        def list_ledger_accounts(self):
+            return [
+                {
+                    "id": "ledger-1",
+                    "name": "Algemene kosten",
+                    "account_id": "45000",
+                    "account_type": "expenses",
+                }
+            ]
+
+    def test_profit_loss_defaults_to_this_year_and_labels_ledger_rows(self):
+        from moneybird_mcp.tools import reports
+
+        client = self.FakeClient()
+        with mock.patch.object(reports.ctx, "get_client", return_value=client):
+            result = reports.get_profit_loss()
+
+        row = result["report"]["sections"][0]["rows"][0]
+        self.assertEqual(client.report_calls, [("profit_loss", "this_year")])
+        self.assertEqual(row["ledger_account_name"], "Algemene kosten")
+        self.assertEqual(row["ledger_account_number"], "45000")
+        self.assertEqual(row["ledger_account_type"], "expenses")
+
+    def test_balance_sheet_uses_the_same_ledger_join(self):
+        from moneybird_mcp.tools import reports
+
+        client = self.FakeClient()
+        with mock.patch.object(reports.ctx, "get_client", return_value=client):
+            result = reports.get_balance_sheet(period="20260101..20260630")
+
+        row = result["report"]["sections"][0]["rows"][0]
+        self.assertEqual(row["ledger_account_name"], "Algemene kosten")
+
+
+class ContactArchivePreviewTests(unittest.TestCase):
+    def test_archive_preview_discloses_open_documents_and_no_unarchive_tool(self):
+        from moneybird_mcp.tools import contacts
+
+        class Client:
+            administration_id = "admin"
+
+            def get_contact(self, contact_id):
+                return {
+                    "id": contact_id,
+                    "company_name": "Supplier BV",
+                    "archived": False,
+                    "version": 1,
+                }
+
+        with _ToolPatches(Client()):
+            prepared = contacts.prepare_archive_contact("contact-1")
+
+        warnings = " ".join(prepared["preview"]["warnings"])
+        self.assertIn("does not close or cancel", warnings)
+        self.assertIn("no unarchive tool", warnings)
 
     def test_pagination_rejected_for_unpaginated_report(self) -> None:
         import moneybird_mcp.client as client_module

@@ -89,6 +89,10 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
    rejection back to `ambiguous`. A request marked `retry_safe` is by construction a read,
    because nothing that could change data may be retried automatically; keep that
    invariant when adding endpoints.
+   The user-facing error for an ambiguous execution must immediately say that the write
+   may already have been applied and must be verified before retrying. The audit state
+   alone is not enough: a bare connection error otherwise looks like a safe pre-write
+   failure at the exact moment the operator must decide what to do.
 
 ## Domain gotchas learned the hard way
 
@@ -171,18 +175,29 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   geruisloos in de afrondingsregel en komt daarna als geverifieerd terug. Logica:
   `moneybird_mcp/vat_settlement.py`; playbook §3 + §3b; regressietests (met verlegde btw, refunds en
   afrondingsvarianten) in `tests/test_vat_settlement.py`. Houd de bedragen daar synthetisch —
-  deze repo is publiek.
+  deze repo is publiek. Een afgewikkelde periode wordt niet aan vrije referentietekst
+  herkend, maar aan een memoriaal **binnen de exacte periode** dat beide btw-rekeningen
+  raakt, of één btw-rekening plus de rekening voor de Belastingdienst. De analyse telt
+  die afwikkelregels terug om de bruto positie vóór afwikkeling te reconstrueren;
+  prepare én execute gebruiken dezelfde periodegebaseerde detectie, zodat een andere
+  referentie nooit een dubbele afwikkeling kan openen.
+- **Nieuwe grootboekrekeningen vereisen een RGS 3.5-code.**
+  `prepare_create_ledger_account` heeft daarom geen lege/default `rgs_code`; de code is verplicht
+  en wordt na creatie via `taxonomy_item.code` geverifieerd. `list_ledger_accounts` toont de
+  bestaande `rgs_code`, naam en taxonomieversie als voorbeelden uit de actieve administratie.
 - **Btw-aangiftes zelf zitten niet in de API** (net als de boekingsregels): `tax_returns`,
   `vat_returns`, `vat_documents`, `vat_declarations` → 404. `VatDocument` is wel een geldig
   `booking_type`, maar de id is niet op te halen; bouw daar geen flow op. `period_locked_until`
   op de administratie is wél leesbaar en zegt of een verstreken periode nog boekbaar is.
   `moneybird_request` weigert al die routes sinds 2026-08-02 met een uitleg die naar
   `analyze_vat_settlement` verwijst, zodat niemand nog de spellingen langsloopt.
-- **Document line prices are entered *incl btw*** in this administration. So a "40% / 60%"
-  split is 40% / 60% of the **incl-tax total**, and the invoice total incl = sum of line
-  `price` values. `total_price_excl_tax_with_discount` on a line is back-calculated
-  (e.g. `price 10.44` at 9% → excl `9.58`). Keep the incl total fixed to preserve the
-  payment match; the excl/btw breakdown may legitimately shift.
+- **Document line prices follow each document's `prices_are_incl_tax` flag.** With the
+  flag true, the invoice total incl is the sum of line `price` values; with it false,
+  Moneybird adds each line's tax rate to those raw prices. Reference-based purchase
+  reconciliation therefore scales the reference line's own raw price and independently
+  calculates the incl.-tax result before staging an approval. Never put an incl.-tax target
+  total directly into an excl.-tax line price. `total_price_excl_tax_with_discount` is the
+  preferred true excl.-tax amount for line previews.
 - **The `amount` field is messy in older data**: values like `"1 x"` or `""` occur and
   Moneybird treats them as `1`. Normalize to `"1"` when asked to make lines consistent;
   it doesn't change any total. Reading is handled for you: `formatting.document_line_quantity`
@@ -232,6 +247,18 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   ondertekende `amount_open` al in de approval en payload ingevuld; er gaat nooit een lege prijs
   naar Moneybird. Bewijst de nacontrole dat vóór en na identiek zijn, dan is de zichtbare status
   `failed`, niet `completed_with_errors`.
+  Een directe koppeling aan een omzet- of kostenrekening maakt géén btw-boeking en accepteert
+  geen `tax_rate_id`: het volledige bedrag landt op het grootboek. De prepare-preview moet dit
+  bij `revenue`, `expenses`, `direct_costs` en `other_income_expenses` expliciet waarschuwen;
+  bedragen inclusief btw horen via een factuur/document of een expliciet gebalanceerd
+  memoriaal met aparte btw-regels te lopen.
+- **Provider-owned duplicatie is geen regeltemplate.**
+  `prepare_create_credit_invoice` bindt de volledige originele factuur als precondition, maar
+  na Moneybirds `duplicate_creditinvoice` worden alleen het exact genegeerde incl.-btw-totaal
+  en de conceptstatus geverifieerd. Moneybird mag een `Creditfactuur voor factuur ...`-kopregel
+  toevoegen en aantallen in plaats van prijzen negeren; voorspelde regels leveren daarom geen
+  betrouwbaar verificatiesignaal. Batch-updates weigeren onbekende/inapplicable velden en een
+  lege patch zowel bij prepare als defensief bij execute.
 - **Groepeer samenhangende correcties in één taakpreview.** Gebruik
   `prepare_bookkeeping_correction_batch` wanneer een opdracht zowel inkoopfactuurcorrecties als
   directe bankherclassificaties bevat. De workflow maakt één exact `approval_id`, preflight alle
@@ -281,7 +308,9 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   geen tokens, queryparameters, bodies of responses; numerieke record-id's worden uit
   endpointnamen verwijderd. Metrics worden gegroepeerd op een afgekorte, token-afgeleide
   pseudonieme scope. Dat label filtert procesmetrics maar is geen tenantidentiteit of
-  autorisatiegrens.
+  autorisatiegrens. `get_server_status` en elk prepare-resultaat tonen ook de mechanische
+  capability mode; een geweigerde read-only uitvoering blijft pending maar schrijft een
+  `policy_blocked` audit-event.
 - Duplicate-suppression blijft geldig na een latere `failed`/`partial_failure`-auditregel.
   Alleen een expliciete, nieuwere `invalidated`-regel heft een bewezen succes voor exact
   dezelfde fingerprint op; een later succes sluit die fingerprint opnieuw.

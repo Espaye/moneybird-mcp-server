@@ -145,6 +145,26 @@ class ToolDiscoveryTests(unittest.TestCase):
         self.assertNotIn("input_value", message)
         self.assertNotIn("pydantic.dev", message)
 
+    def test_direct_call_compacts_pydantic_validation_errors(self) -> None:
+        server = _scratch_server()
+        configure_tool_discovery(server, "full")
+
+        async def call() -> None:
+            async with Client(server) as client:
+                await client.call_tool(
+                    "hidden_constrained_read",
+                    {"record_id": "not-a-number"},
+                )
+
+        with self.assertRaises(ToolError) as caught:
+            asyncio.run(call())
+
+        message = str(caught.exception)
+        self.assertIn("Invalid arguments for hidden_constrained_read", message)
+        self.assertIn("record_id", message)
+        self.assertNotIn("input_value", message)
+        self.assertNotIn("pydantic.dev", message)
+
     def test_direct_call_refuses_hidden_mutating_executor(self) -> None:
         server = _scratch_server()
         configure_tool_discovery(server, "search")
@@ -206,6 +226,13 @@ class ToolSearchRankingTests(unittest.TestCase):
         "make a draft invoice": "prepare_create_sales_invoice_draft",
         "record a payment on an invoice": "prepare_register_payment",
         "book a bank transaction to a ledger": "prepare_link_bank_mutation_booking",
+        "factuur versturen naar klant": "prepare_send_sales_invoice",
+        "bankmutatie koppelen aan factuur": "prepare_link_bank_mutation_booking",
+        "klant toevoegen": "prepare_create_contact",
+        "memoriaalboeking maken": "prepare_create_general_journal_document",
+        "creditfactuur maken": "prepare_create_credit_invoice",
+        "uren registreren": "list_time_entries",
+        "winst en verlies rekening": "get_profit_loss",
     }
 
     _ranking: dict[str, list[str]] | None = None
