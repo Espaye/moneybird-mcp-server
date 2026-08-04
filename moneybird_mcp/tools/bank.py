@@ -839,14 +839,14 @@ def prepare_link_bank_mutation_booking(
     ],
     price: Annotated[
         str,
-        Field(description="Optional partial amount as a decimal string, e.g. '121.00'. Empty = link the full open amount."),
+        Field(description="Optional partial amount as a decimal string, e.g. '121.00'. Empty = use the mutation's current amount_open."),
     ] = "",
 ) -> dict[str, Any]:
     """Use this before linking a bank/cash mutation to a booking: an open invoice or document
     (booking_type SalesInvoice or Document) or directly to a ledger category (LedgerAccount).
-    This is the manual counterpart of Moneybird's bank reconciliation. Leave price empty to let
-    Moneybird link the full open amount. Do not execute the write until the user explicitly
-    confirms."""
+    This is the manual counterpart of Moneybird's bank reconciliation. When price is empty, the
+    preview explicitly fills it from the mutation's current amount_open; Moneybird never receives
+    a nil price. Do not execute the write until the user explicitly confirms."""
     booking_type = str(booking_type).strip()
     if booking_type not in FINANCIAL_MUTATION_LINK_BOOKING_TYPES:
         supported = ", ".join(sorted(FINANCIAL_MUTATION_LINK_BOOKING_TYPES))
@@ -877,15 +877,30 @@ def prepare_link_bank_mutation_booking(
             "Moneybird did not return a mutation version/updated_at value; "
             "cannot bind this repeatable link safely."
         )
-    amount = parse_decimal_number(price, label="price") if str(price).strip() else None
+    price_was_defaulted = not str(price).strip()
+    price_source = mutation.get("amount_open") if price_was_defaulted else price
+    try:
+        amount = parse_decimal_number(price_source, label="price")
+    except MoneybirdError as exc:
+        if not price_was_defaulted:
+            raise
+        raise MoneybirdError(
+            "price was omitted, but Moneybird did not return a usable "
+            "amount_open for this financial mutation. Pass price explicitly."
+        ) from exc
     if amount == 0:
+        if price_was_defaulted:
+            raise MoneybirdError(
+                "price was omitted, but the financial mutation's amount_open is zero. "
+                "There is no open amount to link."
+            )
         raise MoneybirdError("price must be non-zero when supplied.")
 
     booking = clean_dict(
         {
             "booking_type": booking_type,
             "booking_id": str(booking_id).strip(),
-            "price": str(amount) if amount is not None else "",
+            "price": str(amount),
         }
     )
     return stage_write(
@@ -909,8 +924,8 @@ def prepare_link_bank_mutation_booking(
             "booking": booking,
             "booking_target": target_preview,
             "price_note": (
-                "No price given: Moneybird links the full open amount."
-                if amount is None
+                f"Price defaulted to the mutation's amount_open: {amount}."
+                if price_was_defaulted
                 else f"Explicit amount: {amount}."
             ),
         },
@@ -994,27 +1009,18 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
         ]
     )
     requested_price = str(payload["booking"].get("price") or "").strip()
-    expected_open = (
-        Decimal("0.00")
-        if not requested_price
-        else money_decimal(before.get("amount_open"))
-        - money_decimal(requested_price)
+    expected_open = money_decimal(before.get("amount_open")) - money_decimal(
+        requested_price
     )
-    expected_price = (
-        f"{money_decimal(requested_price):.2f}" if requested_price else ""
-    )
+    expected_price = f"{money_decimal(requested_price):.2f}"
     verification = {
         "mutation_id_matches": str(after_record.get("id") or "") == str(mutation_id),
         "exactly_one_new_link_visible": len(new_links) == 1,
         "new_link_visible_on_mutation": len(target_links) == 1,
         "booking_target_matches": len(target_links) == 1,
-        "new_link_price_matches": (
-            True
-            if not requested_price
-            else any(
-                f"{money_decimal(item.get('price')):.2f}" == expected_price
-                for item in target_links
-            )
+        "new_link_price_matches": any(
+            f"{money_decimal(item.get('price')):.2f}" == expected_price
+            for item in target_links
         ),
         "amount_open_matches": (
             f"{money_decimal(after.get('amount_open')):.2f}"
@@ -1025,8 +1031,12 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
         ),
     }
     fully_verified = all(verification.values())
+    write_effect_observed = after != before
+    status = (
+        "linked" if fully_verified else "completed_with_errors" if write_effect_observed else "failed"
+    )
     return {
-        "_status": "linked" if fully_verified else "completed_with_errors",
+        "_status": status,
         "_audit_result": "success" if fully_verified else "verification_failed",
         "_audit": {
             "financial_mutation_id": str(mutation_id),
@@ -1036,6 +1046,7 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
         "verification": {
             "before": before,
             "after": after,
+            "write_effect_observed": write_effect_observed,
             **verification,
             "fully_verified": fully_verified,
         },

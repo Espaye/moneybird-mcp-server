@@ -40,6 +40,17 @@ Period = Annotated[
     ),
 ]
 
+VatSettlementPeriod = Annotated[
+    str,
+    Field(
+        description=(
+            "Explicit whole-month date range only, e.g. "
+            "'20260401..20260630'. Symbolic values such as 'this_year' and "
+            "partial-month ranges are rejected."
+        )
+    ),
+]
+
 FilterString = Annotated[
     str,
     Field(

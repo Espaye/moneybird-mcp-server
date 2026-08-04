@@ -15,6 +15,7 @@ from ..formatting import (
     api_url,
     build_filter_string,
     clean_dict,
+    contact_invoice_email,
     contact_title,
     document_contact_title,
     duplicate_fingerprint,
@@ -392,19 +393,52 @@ def prepare_send_sales_invoice(
 
     client = ctx.get_client()
     record = client.get_sales_invoice(sales_invoice_id)
+    contact_id = str(
+        record.get("contact_id") or (record.get("contact") or {}).get("id") or ""
+    )
+    if not contact_id:
+        raise MoneybirdError(
+            f"Sales invoice {sales_invoice_id} has no contact id; cannot resolve "
+            "the delivery method and recipient safely."
+        )
+    contact = client.get_contact(contact_id)
+    resolved_delivery_method = (
+        str(delivery_method).strip()
+        or str(contact.get("delivery_method") or "").strip()
+        or "Email"
+    )
+    resolved_email = str(email_address).strip() or contact_invoice_email(contact)
+    email_delivery = resolved_delivery_method.casefold() == "email"
+    if email_delivery and not resolved_email:
+        raise MoneybirdError(
+            f"Invoice {record.get('invoice_id') or sales_invoice_id} is set to Email, "
+            "but the contact has no invoice email address. Pass email_address or "
+            "update the contact before preparing the send."
+        )
     payload = clean_dict(
         {
             "sending_scheduled": sending_scheduled,
             "invoice_date": invoice_date,
-            "delivery_method": delivery_method,
-            "email_address": email_address,
+            "delivery_method": resolved_delivery_method,
+            "email_address": resolved_email if email_delivery else "",
             "email_message": email_message,
         }
     )
+    invoice_number = str(record.get("invoice_id") or sales_invoice_id)
+    currency = str(record.get("currency") or "EUR")
+    total = str(record.get("total_price_incl_tax") or "unknown total")
+    timing = f" for {invoice_date}" if sending_scheduled else ""
+    if email_delivery:
+        action = "Schedule email" if sending_scheduled else "Email"
+        destination = f"to {resolved_email}"
+    elif resolved_delivery_method.casefold() == "manual":
+        action = "Schedule" if sending_scheduled else "Mark"
+        destination = "as sent (Manual, no email)"
+    else:
+        action = "Schedule" if sending_scheduled else "Send"
+        destination = f"via {resolved_delivery_method} (no email)"
     summary = (
-        f"Send sales invoice {sales_invoice_id} now"
-        if not sending_scheduled
-        else f"Schedule sales invoice {sales_invoice_id} for {invoice_date}"
+        f"{action} invoice {invoice_number} ({currency} {total}){timing} {destination}"
     )
     approval = stage_write(
         "send_sales_invoice",
@@ -416,6 +450,12 @@ def prepare_send_sales_invoice(
         },
         preview={
             "sales_invoice_id": sales_invoice_id,
+            "invoice_id": record.get("invoice_id"),
+            "currency": currency,
+            "total_price_incl_tax": record.get("total_price_incl_tax"),
+            "contact_id": contact_id,
+            "delivery_method": resolved_delivery_method,
+            "recipient_email": resolved_email if email_delivery else None,
             "sales_invoice_sending": payload,
         },
     )

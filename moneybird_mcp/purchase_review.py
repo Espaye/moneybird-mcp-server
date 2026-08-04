@@ -52,6 +52,24 @@ def _line_tax(detail: dict[str, Any]) -> str:
     return str(detail.get("tax_rate_id") or "")
 
 
+def _ledger_label(
+    ledger_account_id: str,
+    ledger_accounts: dict[str, dict[str, Any]],
+) -> str:
+    account = ledger_accounts.get(str(ledger_account_id))
+    if not account:
+        return str(ledger_account_id) or "(empty)"
+    label = " ".join(
+        part
+        for part in (
+            str(account.get("account_id") or "").strip(),
+            str(account.get("name") or "").strip(),
+        )
+        if part
+    )
+    return label or str(ledger_account_id)
+
+
 def _document_order_key(document: dict[str, Any]) -> tuple[str, str, str]:
     return (
         str(document.get("date") or ""),
@@ -208,6 +226,7 @@ def _description_tokens(description: Any) -> frozenset[str]:
 def _description_mapping_reasons(
     document: dict[str, Any],
     older_documents: list[dict[str, Any]],
+    ledger_accounts: dict[str, dict[str, Any]],
 ) -> list[str]:
     """Advise when a familiar description has a different ledger or tax mapping."""
     historical_lines = [
@@ -259,7 +278,8 @@ def _description_mapping_reasons(
         mismatches: list[str] = []
         if current_ledger != expected_ledger:
             mismatches.append(
-                f"ledger {current_ledger or '(empty)'} instead of historical {expected_ledger}"
+                f"ledger {_ledger_label(current_ledger, ledger_accounts)} instead "
+                f"of historical {_ledger_label(expected_ledger, ledger_accounts)}"
             )
         if current_tax != expected_tax:
             mismatches.append(
@@ -328,14 +348,22 @@ def scan_purchase_invoices_for_attention(
         contact_key = str((doc.get("contact") or {}).get("id") or "")
         by_contact.setdefault(contact_key, []).append(doc)
 
-    patterns = {
-        contact_key: _canonical_pattern(supplier_documents)
-        for contact_key, supplier_documents in by_contact.items()
+    ledger_accounts = {
+        str(account.get("id") or ""): account
+        for account in client.list_ledger_accounts()
+        if account.get("id")
     }
     flagged: list[dict[str, Any]] = []
     for doc in documents:
         contact_key = str((doc.get("contact") or {}).get("id") or "")
-        pattern = patterns.get(contact_key)
+        # "Usually" requires at least two genuinely historical documents. The
+        # invoice under review must never vote for the pattern used to judge it.
+        older_documents = [
+            previous
+            for previous in by_contact.get(contact_key, [])
+            if _document_order_key(previous) < _document_order_key(doc)
+        ]
+        pattern = _canonical_pattern(older_documents)
         details = doc.get("details") or []
         reasons: list[str] = []
 
@@ -353,7 +381,11 @@ def scan_purchase_invoices_for_attention(
                 missing = pattern["modal_ledgers"] - ledgers
                 if missing:
                     reasons.append(
-                        f"missing usual ledger account(s): {', '.join(sorted(missing))}"
+                        "missing usual ledger account(s): "
+                        + ", ".join(
+                            _ledger_label(ledger_id, ledger_accounts)
+                            for ledger_id in sorted(missing)
+                        )
                     )
             if bool(doc.get("prices_are_incl_tax")) != pattern[
                 "modal_prices_are_incl_tax"
@@ -364,12 +396,13 @@ def scan_purchase_invoices_for_attention(
                 )
 
         if include_description_mapping_checks:
-            older_documents = [
-                previous
-                for previous in by_contact.get(contact_key, [])
-                if _document_order_key(previous) < _document_order_key(doc)
-            ]
-            reasons.extend(_description_mapping_reasons(doc, older_documents))
+            reasons.extend(
+                _description_mapping_reasons(
+                    doc,
+                    older_documents,
+                    ledger_accounts,
+                )
+            )
 
         if not reasons:
             continue

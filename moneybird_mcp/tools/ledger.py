@@ -52,7 +52,7 @@ from ..write_contracts import (
     verify_general_journal_payload,
 )
 from . import _context as ctx
-from ._params import ApprovalId, DateString, Period
+from ._params import ApprovalId, DateString, VatSettlementPeriod
 from ._registry import mcp
 from ._writes import (
     mark_write_dispatch_started,
@@ -476,11 +476,18 @@ def _vat_settlement_context(
     client,
     period: str,
     overrides: dict[str, str],
+    *,
+    roles: tuple[str, ...] = ("payable", "receivable", "settlement"),
 ) -> dict[str, Any]:
     """Gather everything a settlement needs: accounts, gross movements, reported totals."""
+    # Validate locally before the first API call. A symbolic or partial period
+    # must not be hidden behind an unrelated ledger-account lookup failure.
+    report_months = month_periods(period)
+    ledger_accounts = client.list_ledger_accounts()
     accounts = resolve_vat_accounts(
-        client.list_ledger_accounts(),
+        ledger_accounts,
         overrides=overrides,
+        roles=roles,
     )
     account_ids = [str(account["id"]) for account in accounts.values()]
     movements = ledger_movements_from_report(
@@ -491,7 +498,7 @@ def _vat_settlement_context(
     receivable = movements[str(accounts["receivable"]["id"])]
     # The tax report caps at one month, so a quarter is fetched month by month.
     reported = reported_vat_totals(
-        client.get_report("tax", period=month) for month in month_periods(period)
+        client.get_report("tax", period=month) for month in report_months
     )
     # Gross ledger turnover and the reported rubrieken are compared, never merged:
     # reverse-charge VAT moves both accounts while reporting a zero tax amount.
@@ -508,16 +515,16 @@ def _vat_settlement_context(
         "receivable": receivable,
         "reported": reported,
         "comparison": comparison,
+        "ledger_accounts": ledger_accounts,
     }
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def analyze_vat_settlement(
-    period: Period,
+    period: VatSettlementPeriod,
     payable_ledger_account_id: Annotated[str, Field(description="Override for the output-VAT account (default: the one named 'Te betalen btw').")] = "",
     receivable_ledger_account_id: Annotated[str, Field(description="Override for the input-VAT account (default: the one named 'Te vorderen btw').")] = "",
     settlement_ledger_account_id: Annotated[str, Field(description="Override for the tax-authority settlement account (default: 'Betaalde en/of ontvangen btw').")] = "",
-    rounding_ledger_account_id: Annotated[str, Field(description="Override for the rounding-difference account (default: 'Afrondingsverschillen').")] = "",
 ) -> dict[str, Any]:
     """Use this to inspect the VAT position of a filed period before settling it: gross ledger movements, reported rubrieken, and whether any gap between them is explained by reverse-charge VAT."""
     client = ctx.get_client()
@@ -528,7 +535,6 @@ def analyze_vat_settlement(
             "payable": payable_ledger_account_id,
             "receivable": receivable_ledger_account_id,
             "settlement": settlement_ledger_account_id,
-            "rounding": rounding_ledger_account_id,
         },
     )
     payable = context["payable"]
@@ -590,7 +596,7 @@ def _vat_settlement_snapshot(
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
 def prepare_vat_settlement_journal(
-    period: Period,
+    period: VatSettlementPeriod,
     reference: Annotated[str, Field(description="Reference for the settlement journal, e.g. 'BTW-2026-Q2'. Also used to detect an already-settled period.")],
     declared_amount: Annotated[str, Field(description="The amount actually filed and settled, as a decimal string in whole euros. Positive = payable to the tax authority, negative = refund. Take this from the filed return or Moneybird's VAT overview; never derive it from the ledger, because filing rounds to whole euros in the taxpayer's favour.")],
     date: Annotated[str, Field(description="Journal date. Leave empty to use the period's closing date, which is what keeps the journal inside the period it clears.")] = "",
@@ -598,7 +604,7 @@ def prepare_vat_settlement_journal(
     payable_ledger_account_id: Annotated[str, Field(description="Override for the output-VAT account (default: the one named 'Te betalen btw').")] = "",
     receivable_ledger_account_id: Annotated[str, Field(description="Override for the input-VAT account (default: the one named 'Te vorderen btw').")] = "",
     settlement_ledger_account_id: Annotated[str, Field(description="Override for the tax-authority settlement account (default: 'Betaalde en/of ontvangen btw').")] = "",
-    rounding_ledger_account_id: Annotated[str, Field(description="Override for the rounding-difference account (default: 'Afrondingsverschillen').")] = "",
+    rounding_ledger_account_id: Annotated[str, Field(description="Rounding-difference account override. Needed only when declared_amount leaves a non-zero rounding line; the default lookup is 'Afrondingsverschillen'. If no suitable account exists, create one through prepare_create_ledger_account first.")] = "",
     allow_unexplained_difference: Annotated[bool, Field(description="Deliberately settle a period whose gross ledger movements do not reconcile with the reported rubrieken. Records the exception in the approval; only use after establishing the cause.")] = False,
     allow_date_outside_period: Annotated[bool, Field(description="Deliberately date the journal outside the period it clears. Leaves that period's movements standing in the period report; only use for a corrective booking.")] = False,
 ) -> dict[str, Any]:
@@ -619,7 +625,6 @@ def prepare_vat_settlement_journal(
             "payable": payable_ledger_account_id,
             "receivable": receivable_ledger_account_id,
             "settlement": settlement_ledger_account_id,
-            "rounding": rounding_ledger_account_id,
         },
     )
     accounts = context["accounts"]
@@ -655,6 +660,14 @@ def prepare_vat_settlement_journal(
     if not preflight["clear_to_prepare"]:
         raise MoneybirdError(
             "VAT settlement preflight failed: " + " ".join(preflight["blocking_findings"])
+        )
+    if money_decimal(amount_check["rounding_difference"]) != 0:
+        accounts.update(
+            resolve_vat_accounts(
+                context["ledger_accounts"],
+                overrides={"rounding": rounding_ledger_account_id},
+                roles=("rounding",),
+            )
         )
 
     journal = build_vat_settlement_journal(

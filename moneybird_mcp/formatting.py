@@ -341,16 +341,25 @@ def compact_financial_mutation_summary(
     administration_id: str | None,
 ) -> dict[str, Any]:
     mutation_id = str(mutation.get("id"))
+    financial_account = mutation.get("financial_account") or {}
+    payments = mutation.get("payments") or []
+    ledger_bookings = mutation.get("ledger_account_bookings") or []
     return {
         "id": mutation_id,
         "kind": "financial_mutation",
         "title": financial_mutation_title(mutation),
         "date": mutation.get("date"),
         "state": mutation.get("state"),
+        "settlement_state": mutation.get("settlement_state"),
         "amount": mutation.get("amount"),
+        "amount_open": mutation.get("amount_open"),
         "contra_account_name": mutation.get("contra_account_name"),
-        "financial_account_name": (mutation.get("financial_account") or {}).get("name"),
-        "bookings_count": len(mutation.get("ledger_account_bookings") or []),
+        "financial_account_name": (
+            financial_account.get("name")
+            or financial_account.get("identifier")
+            or financial_account.get("iban")
+        ),
+        "bookings_count": len(payments) + len(ledger_bookings),
         "url": api_url("financial_mutations", mutation_id, administration_id),
     }
 

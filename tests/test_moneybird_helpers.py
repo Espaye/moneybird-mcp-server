@@ -92,6 +92,25 @@ class MoneybirdHelperTests(unittest.TestCase):
         second = server.duplicate_fingerprint("batch_create_sales_invoices", payload)
         self.assertEqual(first, second)
 
+    def test_financial_mutation_summary_exposes_reconciliation_state(self) -> None:
+        from moneybird_mcp.formatting import compact_financial_mutation_summary
+
+        summary = compact_financial_mutation_summary(
+            {
+                "id": "123",
+                "settlement_state": "settled",
+                "amount_open": "0.0",
+                "financial_account": {"identifier": "NL00BANK0123456789"},
+                "payments": [{"id": "p1"}, {"id": "p2"}],
+                "ledger_account_bookings": [{"id": "l1"}],
+            },
+            "admin",
+        )
+        self.assertEqual(summary["bookings_count"], 3)
+        self.assertEqual(summary["amount_open"], "0.0")
+        self.assertEqual(summary["settlement_state"], "settled")
+        self.assertEqual(summary["financial_account_name"], "NL00BANK0123456789")
+
     def test_compare_merge_snapshots_detects_workflow_difference(self) -> None:
         mismatches = server.compare_merge_snapshots(
             {
@@ -821,6 +840,23 @@ class MeterUsageTests(unittest.TestCase):
                 },
             )
 
+    def test_batch_prepare_error_names_the_entry_and_reference(self) -> None:
+        from moneybird_mcp.tools import sales_batches
+
+        with mock.patch.object(
+            sales_batches,
+            "build_batch_invoice_payload",
+            side_effect=[{}, server.MoneybirdError("HTTP 404: record not found")],
+        ):
+            with self.assertRaises(server.MoneybirdError) as caught:
+                sales_batches._prepare_batch_create_sales_invoices(
+                    self.FakeClient(),
+                    [{"reference": "good"}, {"reference": "bad"}],
+                )
+
+        self.assertIn("entry[1] (reference 'bad')", str(caught.exception))
+        self.assertIn("HTTP 404: record not found", str(caught.exception))
+
 
 class BatchScheduleTests(unittest.TestCase):
     class FakeClient:
@@ -1015,6 +1051,7 @@ class LinkBankMutationTests(unittest.TestCase):
         administration_id = "admin"
 
         def __init__(self):
+            self.last_booking = None
             self.mutation = {
                 "id": "mut-1",
                 "date": "2026-06-20",
@@ -1045,6 +1082,7 @@ class LinkBankMutationTests(unittest.TestCase):
             return dict(self.invoice)
 
         def link_financial_mutation_booking(self, mutation_id, booking):
+            self.last_booking = dict(booking)
             self.mutation["payments"] = [
                 {"id": "pay-1", "price": "121.00", "invoice_id": "inv-1", "invoice_type": "SalesInvoice"}
             ]
@@ -1061,7 +1099,8 @@ class LinkBankMutationTests(unittest.TestCase):
                 booking_type="SalesInvoice",
                 booking_id="inv-1",
             )
-            self.assertIn("full open amount", prepared["preview"]["price_note"])
+            self.assertIn("amount_open: 121.00", prepared["preview"]["price_note"])
+            self.assertEqual(prepared["preview"]["booking"]["price"], "121.00")
             self.assertEqual(
                 prepared["preview"]["booking_target"]["total_price_incl_tax"], "121.00"
             )
@@ -1071,6 +1110,42 @@ class LinkBankMutationTests(unittest.TestCase):
         self.assertTrue(result["verification"]["new_link_visible_on_mutation"])
         self.assertTrue(result["verification"]["fully_verified"])
         self.assertEqual(result["verification"]["after"]["state"], "processed")
+        self.assertEqual(fake.last_booking["price"], "121.00")
+
+    def test_no_observable_change_is_reported_as_failed(self) -> None:
+        from moneybird_mcp import tools
+
+        class NoOpClient(self.FakeClient):
+            def link_financial_mutation_booking(self, mutation_id, booking):
+                self.last_booking = dict(booking)
+
+        fake = NoOpClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_link_bank_mutation_booking(
+                financial_mutation_id="mut-1",
+                booking_type="SalesInvoice",
+                booking_id="inv-1",
+            )
+            result = tools.link_bank_mutation_booking_from_approval(
+                prepared["approval_id"]
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["verification"]["write_effect_observed"])
+        self.assertFalse(result["verification"]["fully_verified"])
+
+    def test_omitted_price_rejects_a_zero_open_amount(self) -> None:
+        from moneybird_mcp import tools
+
+        fake = self.FakeClient()
+        fake.mutation["amount_open"] = "0.00"
+        with _ToolPatches(fake):
+            with self.assertRaisesRegex(server.MoneybirdError, "no open amount"):
+                tools.prepare_link_bank_mutation_booking(
+                    financial_mutation_id="mut-1",
+                    booking_type="SalesInvoice",
+                    booking_id="inv-1",
+                )
 
     def test_rejects_invalid_booking_type(self) -> None:
         from moneybird_mcp import tools

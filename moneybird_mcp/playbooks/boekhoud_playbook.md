@@ -219,10 +219,13 @@ de verlegde btw over de periode.
 5. Boek de bankbetaling apart op de afrekenrekening. Die debiteert wat het memoriaal
    crediteerde, waarna de rekening voor die periode op nul staat.
 
-De vier rekeningen worden op naam gevonden (*Te betalen btw*, *Te vorderen btw*, *Betaalde en/of
-ontvangen btw*, *Afrondingsverschillen*) en zijn elk per id te overschrijven. Vindt de tool ze
-niet eenduidig, dan noemt de foutmelding de kandidaten — vraag het dan aan de gebruiker in plaats
-van te gokken.
+De analyse zoekt alleen de rekeningen die zij werkelijk leest; een afrondingsrekening is daar
+geen voorwaarde. De prepare-flow vindt *Te betalen btw*, *Te vorderen btw* en *Betaalde en/of
+ontvangen btw* op naam en zoekt *Afrondingsverschillen* pas op als het aangegeven bedrag een
+niet-nulafrondingsregel oplevert. Elke gebruikte rekening is per id te overschrijven. Ontbreekt
+de benodigde afrondingsrekening, dan noemt de fout `rounding_ledger_account_id`, verwijst zij naar
+`prepare_create_ledger_account` en toont zij hooguit drie plausibele kandidaten — vraag het aan
+de gebruiker in plaats van te gokken.
 
 Twee technische randvoorwaarden:
 

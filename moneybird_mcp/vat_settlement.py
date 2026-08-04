@@ -49,6 +49,13 @@ ACCOUNT_ROLE_LABELS = {
     "rounding": "rounding differences",
 }
 
+ACCOUNT_ROLE_TYPES = {
+    "payable": {"current_liabilities"},
+    "receivable": {"current_assets", "current_liabilities"},
+    "settlement": {"current_assets", "current_liabilities"},
+    "rounding": {"expenses", "other_income_expenses"},
+}
+
 
 @dataclass(frozen=True)
 class LedgerMovement:
@@ -354,17 +361,19 @@ def resolve_vat_accounts(
     ledger_accounts: list[dict[str, Any]],
     *,
     overrides: dict[str, str] | None = None,
+    roles: Iterable[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Find the four settlement accounts by explicit id, else by conventional name.
+    """Find requested settlement accounts by explicit id or conventional name.
 
-    Raises with the available candidates rather than guessing, so an assistant
+    Raises with a short list of plausible candidates rather than guessing, so an assistant
     working in an unfamiliar administration can ask instead of inventing a target.
     """
 
     overrides = {role: str(value or "").strip() for role, value in (overrides or {}).items()}
     by_id = {str(item.get("id")): item for item in ledger_accounts}
     resolved: dict[str, dict[str, Any]] = {}
-    for role, default_name in DEFAULT_ACCOUNT_NAMES.items():
+    for role in roles or DEFAULT_ACCOUNT_NAMES:
+        default_name = DEFAULT_ACCOUNT_NAMES[role]
         override = overrides.get(role, "")
         if override:
             match = by_id.get(override)
@@ -385,14 +394,20 @@ def resolve_vat_accounts(
                 sorted(
                     f"{item.get('account_id') or '?'} {item.get('name')}"
                     for item in ledger_accounts
-                    if str(item.get("account_type") or "")
-                    in {"current_liabilities", "current_assets", "expenses", "other_income_expenses"}
-                )
+                    if str(item.get("account_type") or "") in ACCOUNT_ROLE_TYPES[role]
+                )[:3]
+            ) or "none"
+            guidance = (
+                "Pass rounding_ledger_account_id. If no suitable account exists, "
+                "create one through prepare_create_ledger_account before preparing "
+                "the settlement journal."
+                if role == "rounding"
+                else f"Pass {role}_ledger_account_id."
             )
             raise MoneybirdError(
                 f"Could not identify the {ACCOUNT_ROLE_LABELS[role]} account: found "
-                f"{len(candidates)} ledger accounts named '{default_name}'. Pass an "
-                f"explicit id for '{role}'. Candidates in this administration: {available}"
+                f"{len(candidates)} ledger accounts named '{default_name}'. {guidance} "
+                f"Plausible candidates: {available}"
             )
         resolved[role] = candidates[0]
     return resolved
@@ -446,8 +461,22 @@ def build_vat_settlement_journal(
         (accounts["payable"], payable_movement, "Te betalen btw afwikkelen"),
         (accounts["receivable"], -receivable_movement, "Te vorderen btw afwikkelen"),
         (accounts["settlement"], -declared_amount, "Aangegeven en afgerekend bedrag"),
-        (accounts["rounding"], -rounding_difference, "Afrondingsvoordeel aangifte"),
     ]
+    if rounding_difference != ZERO:
+        rounding_account = accounts.get("rounding")
+        if rounding_account is None:
+            raise MoneybirdError(
+                "This settlement needs a non-zero rounding line. Pass "
+                "rounding_ledger_account_id, or create a suitable account through "
+                "prepare_create_ledger_account first."
+            )
+        signed.append(
+            (
+                rounding_account,
+                -rounding_difference,
+                "Afrondingsvoordeel aangifte",
+            )
+        )
     entries = [
         entry
         for account, amount, line_description in signed
