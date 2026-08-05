@@ -5,6 +5,8 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+## 0.6.1 — 2026-08-05
+
 ### Added
 
 - A small typed, versioned product-workflow catalogue exposed through
