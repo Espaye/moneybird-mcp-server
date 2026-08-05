@@ -29,6 +29,7 @@ from .ledger import (
     vat_settlement_journal_from_approval,
 )
 from .payments import register_payment_from_approval
+from .products import bulk_update_product_prices_from_approval
 from .purchases import reconcile_purchase_invoice_from_approval
 from .sales import (
     create_credit_invoice_from_approval,
@@ -54,6 +55,7 @@ APPROVAL_EXECUTORS: dict[str, ApprovalExecutor] = {
     "bookkeeping_correction_batch": (
         bookkeeping_correction_batch_from_approval
     ),
+    "bulk_update_product_prices": bulk_update_product_prices_from_approval,
     "create_contact": create_contact_from_approval,
     "create_credit_invoice": create_credit_invoice_from_approval,
     "create_general_journal_document": (

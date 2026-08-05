@@ -28,6 +28,7 @@ class IdentifierSchemaTests(unittest.TestCase):
             _params.SalesInvoiceId,
             _params.FinancialMutationId,
             _params.FinancialAccountId,
+            _params.ProductId,
         )
         rejected = (
             "",

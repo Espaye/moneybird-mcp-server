@@ -1051,11 +1051,35 @@ class MoneybirdClient:
             retry_safe=True,
         )
 
-    def list_products(self, *, limit: int = 25, page: int = 1) -> list[dict[str, Any]]:
+    def list_products(
+        self,
+        *,
+        limit: int = 25,
+        page: int = 1,
+        query: str = "",
+        currency: str = "",
+        active: bool | None = True,
+        ledger_account_id: str = "",
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {
+            "per_page": max(1, min(limit, 100)),
+            "page": max(1, page),
+        }
+        if query:
+            params["query"] = str(query).strip()
+        if currency:
+            params["currency"] = str(currency).strip().upper()
+        if active is not None:
+            params["active"] = active
+        if ledger_account_id:
+            params["ledger_account_id"] = validate_moneybird_id(
+                ledger_account_id,
+                "ledger_account_id",
+            )
         return self._request(
             "GET",
             f"/{self.administration_id}/products.json",
-            {"per_page": max(1, min(limit, 100)), "page": max(1, page)},
+            params,
         )
 
     def get_product(self, product_id: str) -> dict[str, Any]:
@@ -1063,6 +1087,26 @@ class MoneybirdClient:
         return self._request(
             "GET",
             f"/{self.administration_id}/products/{product_id}.json",
+        )
+
+    def get_product_by_identifier(self, identifier: str) -> dict[str, Any]:
+        encoded_identifier = _encode_human_route_segment(identifier, "identifier")
+        return self._request(
+            "GET",
+            f"/{self.administration_id}/products/identifier/{encoded_identifier}.json",
+            operation="/:administration/products/identifier/:identifier.json",
+        )
+
+    def update_product(
+        self,
+        product_id: str,
+        product: dict[str, Any],
+    ) -> dict[str, Any]:
+        product_id = validate_moneybird_id(product_id, "product_id")
+        return self._request(
+            "PATCH",
+            f"/{self.administration_id}/products/{product_id}.json",
+            body={"product": product},
         )
 
     def list_tax_rates(self) -> list[dict[str, Any]]:

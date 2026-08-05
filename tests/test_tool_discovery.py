@@ -233,6 +233,13 @@ class ToolSearchRankingTests(unittest.TestCase):
         "creditfactuur maken": "prepare_create_credit_invoice",
         "uren registreren": "list_time_entries",
         "winst en verlies rekening": "get_profit_loss",
+        "increase product prices by 4 percent": "prepare_bulk_update_product_prices",
+        "verhoog productprijzen met 3,5 procent": "prepare_bulk_update_product_prices",
+        "dry run new product prices from a spreadsheet": "analyse_product_price_adjustment",
+        "bereken eerst nieuwe productprijzen zonder wijzigen": "analyse_product_price_adjustment",
+        "find duplicate product SKUs": "audit_products",
+        "zoek dubbele product-SKU's": "audit_products",
+        "find products with zero prices or missing VAT": "audit_products",
     }
 
     _ranking: dict[str, list[str]] | None = None

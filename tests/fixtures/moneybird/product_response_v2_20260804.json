@@ -1,0 +1,15 @@
+{
+  "id": "494537722772326285",
+  "administration_id": 123,
+  "description": "My product description",
+  "title": null,
+  "identifier": "SKU1234",
+  "price": "100.0",
+  "currency": "EUR",
+  "frequency": null,
+  "frequency_type": null,
+  "tax_rate_id": "494537637003003018",
+  "ledger_account_id": "494537636859348090",
+  "created_at": "2026-08-04T12:52:26.423Z",
+  "updated_at": "2026-08-04T12:52:26.423Z"
+}

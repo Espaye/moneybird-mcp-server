@@ -85,11 +85,14 @@ moneybird-mcp --help
 - Contacten, verkoopfacturen, inkoopfacturen, bonnen, memoriaalboekingen en bankmutaties doorzoeken.
 - Moneybird-rapporten lezen, waaronder winst-en-verliesrekening, balans, grootboek, btw-, debiteuren- en crediteurenrapporten.
 - Inkoopfacturen, factuurverzendinstellingen, bankmutaties en boekhoudkundige inconsistenties controleren.
+- Productgegevens controleren en beveiligde bulkprijswijzigingen met exacte decimale voorbeelden berekenen.
 - PDF-bijlagen lokaal lezen wanneer de optionele PDF-afhankelijkheid is geïnstalleerd.
 - Een lokale zoekindex bouwen voor snellere gerangschikte zoekresultaten.
 - Beveiligde voorbeelden van schrijfacties voorbereiden wanneer schrijfacties expliciet zijn ingeschakeld.
 
 De server gebruikt standaard compacte Tool Search. Daardoor hoeft een MCP-client niet bij het starten elk toolschema te laden. Bekijk het [tooloverzicht](docs/tool-reference.md) en de [dekking van de Moneybird API](docs/moneybird_api_coverage.md).
+
+Gebruik `list_supported_workflows` om de kleine set uitkomsten te vinden die van begin tot eind geïntegreerd en getest zijn. De gegenereerde [workflowcatalogus](docs/workflow-catalogue.md) vermeldt risico, modus, versie, voorwaarden, verificatie en beperkingen. De producttools voeren zelf hun concrete administratie- en recordpreflight uit.
 
 ## Alleen-lezenmodus en schrijfacties
 

@@ -1,13 +1,12 @@
 # Moneybird API — full endpoint catalogue and server coverage
 
 Generated from the official OpenAPI spec published on developer.moneybird.com
-(spec version `v2-20260710-57729b61b9`, retrieved 2026-07-11). The spec is bundled as a JS
-asset on the docs site (`/assets/api-openapi.yaml-<hash>.js`, referenced from
-`/assets/entry.client-<hash>.js`); evaluate that module with Node and read its `schema`
-export to regenerate this file.
+(spec version `v2-20260804-e670210355`, retrieved 2026-08-04). Moneybird now publishes the
+source directly at `https://raw.githubusercontent.com/moneybird/openapi/refs/heads/main/openapi.yml`.
+The checked-in `moneybird_api_paths.json` strips the optional `{format}` suffix before use.
 
-> 296 operations in the API: **77** with a dedicated tool or flow, **55** readable
-> through the generic `moneybird_request` escape hatch, **164** not exposed by this server.
+> 296 operations in the API: **81** with a dedicated tool or flow, **52** readable
+> through the generic `moneybird_request` escape hatch, **163** not exposed by this server.
 
 Legend: ✅ dedicated tool/flow · 🔎 reachable read-only via `moneybird_request` (no dedicated
 tool) · — not exposed (writes are only ever exposed through explicit `prepare_*` /
@@ -291,7 +290,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 | POST | `/products` | Creates a new product | — |
 | DELETE | `/products/{id}` | Deletes a product | — |
 | GET | `/products/{id}` | Returns information about a product | 🔎 moneybird_request (generic GET) |
-| PATCH | `/products/{id}` | Updates a product | — |
+| PATCH | `/products/{id}` | Updates a product | ✅ `prepare_bulk_update_product_prices` |
 | POST | `/products/{id}/sales_link` | Create online sales link | — |
 | GET | `/products/identifier/{identifier}` | Returns information about a product based on the identifier | 🔎 moneybird_request (generic GET) |
 

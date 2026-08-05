@@ -17,6 +17,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLIENT_SOURCE = REPO_ROOT / "moneybird_mcp" / "client.py"
 SPEC_PATH = REPO_ROOT / "docs" / "moneybird_api_paths.json"
+COVERAGE_PATH = REPO_ROOT / "docs" / "moneybird_api_coverage.md"
 
 DOCUMENT_COLLECTION_PATHS = [
     "documents/purchase_invoices",
@@ -105,6 +106,25 @@ class ClientSpecConformanceTests(unittest.TestCase):
         self.assertIn("POST", methods)
         self.assertIn("PATCH", methods)
         self.assertIn("DELETE", methods)
+
+    def test_coverage_catalogue_counts_and_spec_version_are_in_sync(self) -> None:
+        spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+        coverage = COVERAGE_PATH.read_text(encoding="utf-8")
+        self.assertIn(f"spec version `{spec['info']['version']}`", coverage)
+        rows = re.findall(
+            r"^\| (GET|POST|PATCH|PUT|DELETE) \| `[^`]+` \| .* \| (.*?) \|$",
+            coverage,
+            flags=re.MULTILINE,
+        )
+        self.assertEqual(len(rows), 296)
+        dedicated = sum("✅" in status for _, status in rows)
+        generic = sum("🔎" in status for _, status in rows)
+        unexposed = sum(status.strip() == "—" for _, status in rows)
+        self.assertEqual((dedicated, generic, unexposed), (81, 52, 163))
+        self.assertIn(
+            "| PATCH | `/products/{id}` | Updates a product | ✅ `prepare_bulk_update_product_prices` |",
+            coverage,
+        )
 
 
 if __name__ == "__main__":

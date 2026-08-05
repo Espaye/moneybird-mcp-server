@@ -1,8 +1,8 @@
 {
  "info": {
-  "version": "v2-20260710-57729b61b9",
-  "retrieved": "2026-07-11",
-  "source": "https://developer.moneybird.com (bundled OpenAPI asset)"
+  "version": "v2-20260804-e670210355",
+  "retrieved": "2026-08-04",
+  "source": "https://raw.githubusercontent.com/moneybird/openapi/refs/heads/main/openapi.yml"
  },
  "paths": {
   "/administrations": {

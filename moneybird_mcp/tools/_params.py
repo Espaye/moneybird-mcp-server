@@ -85,6 +85,10 @@ SalesInvoiceId = Annotated[
     MoneybirdId,
     Field(description="Moneybird sales invoice id (long numeric string)."),
 ]
+ProductId = Annotated[
+    MoneybirdId,
+    Field(description="Moneybird product id (long numeric string), e.g. from list_products."),
+]
 FinancialMutationId = Annotated[
     MoneybirdId,
     Field(description="Financial mutation (bank transaction) id, e.g. from list_financial_mutations."),
