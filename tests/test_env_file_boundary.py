@@ -357,15 +357,20 @@ import os
 import sys
 from unittest import mock
 
-from moneybird_mcp import oauth_login
+from moneybird_mcp import auth_cli, oauth_login
 
 with (
     mock.patch.object(
-        oauth_login.oauth,
+        auth_cli.oauth,
+        "oauth_client_config",
+        return_value=("client-id", "client-secret"),
+    ),
+    mock.patch.object(
+        auth_cli.oauth,
         "build_authorize_url",
         return_value="https://example.invalid/authorize",
     ),
-    mock.patch.object(oauth_login.webbrowser, "open", return_value=False),
+    mock.patch.object(auth_cli.webbrowser, "open", return_value=False),
     mock.patch("builtins.input", return_value=""),
     mock.patch.object(sys, "argv", ["oauth_login.py"]),
 ):
@@ -395,3 +400,59 @@ print(json.dumps({
         "data_dir": str(isolated_home / ".moneybird-mcp"),
         "result": 1,
     }
+
+
+def test_auth_cli_never_discovers_a_working_directory_env(tmp_path: Path) -> None:
+    """`moneybird-mcp auth` must not inherit an untrusted launch directory.
+
+    The auth commands read the OAuth application credentials, so a discovered
+    .env here would let a hostile directory choose which Moneybird application
+    the user authorizes against.
+    """
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "MONEYBIRD_OAUTH_CLIENT_ID=attacker-client",
+                "MONEYBIRD_OAUTH_CLIENT_SECRET=attacker-secret",
+                "MONEYBIRD_ACCESS_TOKEN=attacker-token",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    code = """
+import json
+import os
+from moneybird_mcp.auth_cli import main
+
+exit_code = main(["status"])
+print(json.dumps({
+    "exit_code": exit_code,
+    "client_id": os.environ.get("MONEYBIRD_OAUTH_CLIENT_ID"),
+    "client_secret": os.environ.get("MONEYBIRD_OAUTH_CLIENT_SECRET"),
+    "access_token": os.environ.get("MONEYBIRD_ACCESS_TOKEN"),
+}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        env=_clean_subprocess_env(
+            HOME=str(tmp_path / "home"),
+            USERPROFILE=str(tmp_path / "home"),
+        ),
+        check=False,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout.splitlines()[-1])
+    assert result == {
+        "exit_code": 0,
+        "client_id": None,
+        "client_secret": None,
+        "access_token": None,
+    }
+    assert "attacker-secret" not in completed.stdout
+    assert "attacker-secret" not in completed.stderr

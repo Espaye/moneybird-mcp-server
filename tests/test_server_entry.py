@@ -235,7 +235,7 @@ class MissingCredentialAnnouncementTests(unittest.TestCase):
         server = self._announce("local", configured=False)
         self.assertTrue(server.instructions.startswith("\nSETUP INCOMPLETE"))
         self.assertIn("MONEYBIRD_ACCESS_TOKEN", server.instructions)
-        self.assertIn("python -m moneybird_mcp.oauth_login", server.instructions)
+        self.assertIn("moneybird-mcp auth login", server.instructions)
         # The real instructions must survive: the banner is a prefix, not a
         # replacement, or a configured-later session loses every rule.
         self.assertIn("ORIGINAL INSTRUCTIONS", server.instructions)

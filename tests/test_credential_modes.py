@@ -20,6 +20,7 @@ from moneybird_mcp.credentials import (
     credentials_are_configured,
     resolve_credentials,
 )
+from moneybird_mcp.oauth_store import OAuthConnection
 
 
 class CredentialResolutionModeTests(unittest.TestCase):
@@ -45,7 +46,7 @@ class CredentialResolutionModeTests(unittest.TestCase):
                     "MONEYBIRD_ADMINISTRATION_ID": "999",
                 },
             ),
-            mock.patch.object(oauth, "get_access_token") as stored_oauth,
+            mock.patch.object(oauth, "get_connection") as stored_oauth,
         ):
             resolved = resolve_credentials(CREDENTIAL_MODE_HOSTED_REQUEST_ONLY)
 
@@ -63,7 +64,7 @@ class CredentialResolutionModeTests(unittest.TestCase):
                     "MONEYBIRD_ADMINISTRATION_ID": "999",
                 },
             ),
-            mock.patch.object(oauth, "get_access_token") as stored_oauth,
+            mock.patch.object(oauth, "get_connection") as stored_oauth,
         ):
             with self.assertRaisesRegex(MoneybirdError, "Hosted request credentials"):
                 resolve_credentials(CREDENTIAL_MODE_HOSTED_REQUEST_ONLY)
@@ -77,7 +78,7 @@ class CredentialResolutionModeTests(unittest.TestCase):
         }
         with (
             mock.patch.dict(os.environ, {"MONEYBIRD_ACCESS_TOKEN": "operator-token"}),
-            mock.patch.object(oauth, "get_access_token") as stored_oauth,
+            mock.patch.object(oauth, "get_connection") as stored_oauth,
         ):
             with self.assertRaisesRegex(MoneybirdError, "Hosted request credentials"):
                 resolve_credentials(CREDENTIAL_MODE_HOSTED_REQUEST_ONLY)
@@ -93,7 +94,7 @@ class CredentialResolutionModeTests(unittest.TestCase):
                     "MONEYBIRD_ADMINISTRATION_ID": "7",
                 },
             ),
-            mock.patch.object(oauth, "get_access_token") as stored_oauth,
+            mock.patch.object(oauth, "get_connection") as stored_oauth,
         ):
             resolved = resolve_credentials(CREDENTIAL_MODE_NETWORK_SINGLE_USER)
 
@@ -116,7 +117,7 @@ class CredentialResolutionModeTests(unittest.TestCase):
                         os.environ,
                         {"MONEYBIRD_ACCESS_TOKEN": "operator-token"},
                     ),
-                    mock.patch.object(oauth, "get_access_token") as stored_oauth,
+                    mock.patch.object(oauth, "get_connection") as stored_oauth,
                 ):
                     with self.assertRaisesRegex(
                         MoneybirdError, "tenant headers are not allowed"
@@ -228,7 +229,7 @@ class MissingCredentialGuidanceTests(unittest.TestCase):
         with (
             mock.patch.object(dependencies, "get_http_headers", return_value={}),
             mock.patch.dict(os.environ, {}, clear=False),
-            mock.patch.object(oauth, "get_access_token", return_value=None),
+            mock.patch.object(oauth, "get_connection", return_value=None),
         ):
             os.environ.pop("MONEYBIRD_ACCESS_TOKEN", None)
             with self.assertRaises(MoneybirdError) as caught:
@@ -238,32 +239,34 @@ class MissingCredentialGuidanceTests(unittest.TestCase):
     def test_local_advice_names_only_options_local_mode_has(self) -> None:
         message = self._message(CREDENTIAL_MODE_LOCAL)
         self.assertIn("MONEYBIRD_ACCESS_TOKEN", message)
-        self.assertIn("python -m moneybird_mcp.oauth_login", message)
+        self.assertIn("moneybird-mcp auth login", message)
         self.assertNotIn("X-Moneybird-Token", message)
         self.assertNotIn("scripts/", message)
 
     def test_single_user_advice_rules_out_tenant_headers(self) -> None:
         message = self._message(CREDENTIAL_MODE_NETWORK_SINGLE_USER)
         self.assertIn("MONEYBIRD_ACCESS_TOKEN", message)
-        self.assertIn("python -m moneybird_mcp.oauth_login", message)
+        self.assertIn("moneybird-mcp auth login", message)
         self.assertNotIn("scripts/", message)
         self.assertIn("rejected", message)
 
     def test_startup_probe_never_contacts_moneybird_or_writes_the_store(self) -> None:
         """The advisory check must not refresh an expired token.
 
-        resolve_credentials() would: get_access_token refreshes against
+        resolve_credentials() would: get_connection refreshes against
         Moneybird on a 20s timeout and persists the rotated token. Doing that
         before the server accepts its first connection lets a slow upstream
         stall startup until a client or health check declares the server dead.
         """
-        expired = {"access_token": "stored", "expires_in": 1, "obtained_at": 0}
+        expired = OAuthConnection(
+            access_token="stored", refresh_token="rt", expires_in=1, obtained_at=0
+        )
         with (
             mock.patch.dict(os.environ, {}, clear=False),
-            mock.patch.object(oauth, "load_tokens", return_value=expired) as load,
-            mock.patch.object(oauth, "get_access_token") as resolve_token,
+            mock.patch.object(oauth, "load_connection", return_value=expired) as load,
+            mock.patch.object(oauth, "get_connection") as resolve_token,
             mock.patch.object(oauth, "refresh_access_token") as refresh,
-            mock.patch.object(oauth, "store_tokens") as write,
+            mock.patch.object(oauth, "save_connection") as write,
         ):
             os.environ.pop("MONEYBIRD_ACCESS_TOKEN", None)
             configured = credentials_are_configured(CREDENTIAL_MODE_LOCAL)
@@ -277,7 +280,7 @@ class MissingCredentialGuidanceTests(unittest.TestCase):
     def test_startup_probe_reports_environment_and_empty_store(self) -> None:
         with (
             mock.patch.dict(os.environ, {"MONEYBIRD_ACCESS_TOKEN": "token"}),
-            mock.patch.object(oauth, "load_tokens") as load,
+            mock.patch.object(oauth, "load_connection") as load,
         ):
             self.assertTrue(credentials_are_configured(CREDENTIAL_MODE_LOCAL))
         load.assert_not_called()  # the environment already answered

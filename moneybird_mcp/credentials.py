@@ -114,11 +114,24 @@ def _credentials_from_environment() -> Credentials | None:
 def _credentials_from_oauth_store() -> Credentials | None:
     from . import oauth
 
-    token = oauth.get_access_token()
-    if not token:
+    connection = oauth.get_connection()
+    if connection is None:
         return None
-    administration_id = os.environ.get("MONEYBIRD_ADMINISTRATION_ID", "").strip() or None
-    return Credentials(token=token, administration_id=administration_id, source="oauth")
+    # An explicit environment value still wins, keeping the whole configuration
+    # system's "the parent process is authoritative" rule intact. The
+    # administration chosen during `auth login` is the fallback, so a user who
+    # completed OAuth does not additionally have to set an environment variable
+    # for a token that can reach several administrations.
+    administration_id = (
+        os.environ.get("MONEYBIRD_ADMINISTRATION_ID", "").strip()
+        or connection.administration_id
+        or None
+    )
+    return Credentials(
+        token=connection.access_token,
+        administration_id=administration_id,
+        source="oauth",
+    )
 
 
 def resolve_credentials(mode: str | None = None) -> Credentials:
@@ -161,8 +174,9 @@ def resolve_credentials(mode: str | None = None) -> Credentials:
 # Only the modes that can actually fall back this far need a message; hosted
 # request mode fails earlier, on the missing header.
 _OAUTH_LOGIN_HINT = (
-    "log in via OAuth with 'python -m moneybird_mcp.oauth_login' (add "
-    "--env-file PATH to point at a configuration file)"
+    "connect through Moneybird OAuth with 'moneybird-mcp auth login' (add "
+    "--env-file PATH to point at a configuration file holding the "
+    "application's client id and secret)"
 )
 
 
@@ -170,7 +184,7 @@ def credentials_are_configured(mode: str) -> bool:
     """Report whether a credential source exists, without network I/O or writes.
 
     Startup diagnostics must use this instead of :func:`resolve_credentials`.
-    Resolving reaches :func:`oauth.get_access_token`, which refreshes an expired
+    Resolving reaches :func:`oauth.get_connection`, which refreshes an expired
     token against Moneybird on a 20-second timeout and rewrites the token store
     — before the server has accepted its first connection. A slow or unreachable
     Moneybird would then stall startup long enough for an MCP client or health
@@ -188,12 +202,12 @@ def credentials_are_configured(mode: str) -> bool:
     from . import oauth
 
     try:
-        record = oauth.load_tokens()
+        record = oauth.load_connection()
     except (MoneybirdError, OSError, ValueError):
         # An unreadable or malformed store is not proof of a configured
         # identity, and diagnosing it is the resolution path's job.
         return False
-    return bool(record and record.get("access_token"))
+    return bool(record and record.access_token)
 
 
 def missing_credentials_message(mode: str) -> str:

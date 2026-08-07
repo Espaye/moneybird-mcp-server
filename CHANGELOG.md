@@ -7,6 +7,36 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Added
 
+- **`moneybird-mcp auth login | status | logout | scopes`** — first-class local OAuth.
+  A user registers an external Moneybird application once, supplies its client id and
+  secret, and runs `auth login`; the command prints (and optionally opens) the
+  authorization URL, takes the short out-of-band code Moneybird displays, exchanges it,
+  verifies the result, selects the administration, and stores the connection. No
+  Moneybird access or refresh token is ever copied by hand, and the MCP client
+  configuration needs no credentials at all. `auth status` reports which identity is
+  active and from where; `auth logout` deletes local credentials and says plainly that
+  Moneybird publishes no revocation endpoint, so access is withdrawn at
+  <https://moneybird.com/user/applications>. `python -m moneybird_mcp.oauth_login` and
+  `python scripts/oauth_login.py` remain as aliases for `auth login`.
+- **Administration selection at login.** A connection reaching exactly one
+  administration selects it; several are listed and offered interactively, or chosen
+  with `--administration ID`. Nothing is picked silently, because a guessed
+  administration sends every later write to the wrong books. The choice is stored with
+  the connection, so `MONEYBIRD_ADMINISTRATION_ID` is no longer needed after an OAuth
+  login — an explicit environment value still overrides it, and `auth status` flags the
+  override.
+- **`moneybird_mcp/oauth_scopes.py`** — the requested scopes with a documented rationale
+  per tool area, named profiles (`full`, `bookkeeping`, `invoicing`), and validation that
+  rejects an unknown scope before the browser opens. Selectable with `--scopes` or
+  `MONEYBIRD_OAUTH_SCOPES`. Moneybird scopes have no read-only variant and are *not* a
+  write policy: that remains `MONEYBIRD_CAPABILITY_MODE` plus the
+  prepare/approve/execute flow. Rows the mapping infers (products, projects, reports)
+  are marked as inferred rather than presented as documented.
+- **`moneybird_mcp/oauth_store.py`** — a typed `OAuthConnection` and a `TokenStore`
+  interface with a local owner-only, atomically written JSON implementation. Every
+  method takes the profile explicitly, so a hosted backend can swap in per-tenant
+  storage without touching the API client. `OAuthConnection` redacts both tokens in its
+  `repr`/`str`, so a traceback or a `%r` cannot leak one.
 - `suggest_bank_mutation_matches`: for each unprocessed bank mutation, the open sales
   invoice, purchase invoice, or receipt it most likely settles. Moneybird's own
   transaction screen suggests matches and auto-links at full certainty, but nothing
@@ -53,6 +83,18 @@ and no discovery layer is needed in front of it.
 
 ### Changed
 
+- **Token-endpoint failures now say what went wrong.** `HTTP 400` alone is not
+  actionable, so the RFC 6749 `error` / `error_description` fields are extracted and
+  paired with specific guidance: `invalid_client` points at the application credentials,
+  `invalid_grant` explains that codes are single-use and expire. Only those two fields
+  are ever quoted — the token endpoint is the one endpoint whose responses contain
+  credentials, so the body is never rendered wholesale. Timeouts and network failures are
+  reported distinctly, and neither grant is retried automatically: repeating a consumed
+  authorization code turns a blip into a dead grant, and a refresh may rotate the refresh
+  token.
+- OAuth `--env-file` handling, the state-directory default and the "no `.env` is ever
+  discovered" rule are unchanged and now covered by a subprocess regression for the auth
+  commands specifically, since those read the OAuth application credentials.
 - **The runnable server now defaults to `--tool-discovery full` instead of `search`.**
   Compact discovery shrinks the advertised catalogue to ~7 KB, but that catalogue lives
   in the client's *cached* prompt prefix, so the saving is nearly free anyway — while
@@ -88,6 +130,14 @@ and no discovery layer is needed in front of it.
 
 ### Fixed
 
+- **A token refresh no longer discards the refresh token or the granted scopes.**
+  Moneybird may answer a refresh-token grant with only a new access token; the whole
+  stored record was previously replaced by that response, so the refresh token vanished
+  and the next expiry would have forced a re-login. An absent field now means
+  "unchanged", never "cleared". A *failed* refresh raises and leaves the stored
+  credentials exactly as they were, so an unreachable Moneybird cannot cost a user their
+  grant, and the message names re-authentication as the remedy only when the grant is
+  actually the problem.
 - `suggest_bank_mutation_matches` reads Moneybird's rate-limit headers correctly.
   They do not follow the IETF RateLimit draft: `RateLimit-Remaining` is *seconds until
   reset* (it tracks `RateLimit-Reset` minus now, and exceeds `RateLimit-Limit`, which a

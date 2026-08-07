@@ -14,11 +14,32 @@ Use Claude, ChatGPT, Cursor, or another MCP client to search and work with a Mon
 
 ## Get started
 
-You need Python 3.11 or newer, an MCP client, and a fresh [Moneybird API token](https://developer.moneybird.com/authentication).
+You need Python 3.11 or newer and an MCP client. There are two ways to connect a Moneybird account.
 
-### Recommended: run with `uvx`
+### Recommended: connect through Moneybird OAuth
 
-Add this server configuration to your MCP client:
+Register an [external OAuth application](https://moneybird.com/user/applications/new) with redirect URI `urn:ietf:wg:oauth:2.0:oob`, put its client id and secret in a file you select explicitly, and log in once:
+
+```bash
+python -m pip install --upgrade moneybird-mcp
+moneybird-mcp auth login --env-file /absolute/path/moneybird-mcp.env
+```
+
+The command prints an authorization URL, you approve it in Moneybird, and you paste back only the short authorization code it shows. It then verifies the connection, picks the administration, and stores the tokens locally. No Moneybird token is ever copied by hand. Your MCP client then needs no credentials at all:
+
+```json
+{
+  "mcpServers": {
+    "moneybird": { "command": "moneybird-mcp" }
+  }
+}
+```
+
+Manage it with `moneybird-mcp auth status`, `auth logout`, and `auth scopes`. Full detail: [Connecting through Moneybird OAuth](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/oauth.md).
+
+### Advanced: personal API token
+
+Still fully supported. Create a [Moneybird API token](https://developer.moneybird.com/authentication) and run with `uvx`:
 
 ```json
 {
@@ -37,7 +58,7 @@ Add this server configuration to your MCP client:
 
 Restart the client and ask it to list your Moneybird administrations.
 
-`MONEYBIRD_ADMINISTRATION_ID` is optional when the token can access only one administration. Never paste a real Moneybird token into a chat, issue, log, or committed file.
+`MONEYBIRD_ADMINISTRATION_ID` is optional when the token can access only one administration. Never paste a real Moneybird token into a chat, issue, log, or committed file. When both a personal token and an OAuth connection exist, the personal token wins; `moneybird-mcp auth status` says which one is active.
 
 Claude Code registrations are scoped. Its default `local` scope is available only in the current project; use `--scope user` when Moneybird should be available from every project. If `claude mcp list` says connected but a different project shows no tools, check `claude mcp get moneybird` and re-add the configuration at user scope. Do not use project scope for a configuration containing a personal token, because project scope writes a shared `.mcp.json` file.
 
@@ -118,8 +139,10 @@ The most useful settings are:
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `MONEYBIRD_ACCESS_TOKEN` | none | Moneybird personal API token |
-| `MONEYBIRD_ADMINISTRATION_ID` | automatic when unambiguous | Administration to use |
+| `MONEYBIRD_ACCESS_TOKEN` | none | Moneybird personal API token; takes precedence over an OAuth connection |
+| `MONEYBIRD_ADMINISTRATION_ID` | the one chosen at OAuth login, else automatic when unambiguous | Administration to use |
+| `MONEYBIRD_OAUTH_CLIENT_ID` / `_SECRET` | none | Registered OAuth application, for `auth login` |
+| `MONEYBIRD_OAUTH_SCOPES` | `full` | Scope profile or explicit list requested at login |
 | `MONEYBIRD_CAPABILITY_MODE` | `read_only` | `read_only` or `write_enabled` |
 | `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` for installed stdio | Local approvals, audit, OAuth, and search state |
 | `MCP_TOOL_DISCOVERY` | `search` | Compact discovery; use `full` for older clients |
@@ -160,6 +183,7 @@ These files are not encrypted by this project. Restrict access to the directory 
 ## Documentation
 
 - [Getting started](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/getting-started.md)
+- [Connecting through Moneybird OAuth](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/oauth.md)
 - [Tool reference](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/tool-reference.md)
 - [Deployment and safety](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/deployment-and-safety.md)
 - [Local data lifecycle](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/data-lifecycle.md)

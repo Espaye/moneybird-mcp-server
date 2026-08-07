@@ -25,15 +25,37 @@ scripts that import the package directly (see below).
   - `network_single_user`: authenticated network edge → env → local OAuth profile; request
     Moneybird headers are rejected;
   - `hosted_request_only`: one nonblank trusted request context; no env/OAuth fallback.
-- **OAuth**: `moneybird_mcp/oauth.py` implements the authorization-code flow (app credentials in
-  the parent environment or an explicit file as
-  `MONEYBIRD_OAUTH_CLIENT_ID`/`MONEYBIRD_OAUTH_CLIENT_SECRET`; interactive login via
-  `python -m moneybird_mcp.oauth_login --env-file PATH`, out-of-band redirect; the CLI lives in
-  `moneybird_mcp/oauth_login.py` so a pip install has it, and `scripts/oauth_login.py` is a
-  checkout wrapper — error messages must never point at a path the wheel lacks). Tokens persist in
-  `moneybird_oauth_tokens.json` in the data dir and are used automatically in local or
-  network-single-user mode when `MONEYBIRD_ACCESS_TOKEN` is absent. Hosted request mode never
-  reads that store.
+- **OAuth**: split across four modules so a hosted callback flow can replace only the top
+  layer. `oauth_scopes.py` (scope catalogue + rationale + profiles), `oauth_store.py`
+  (`OAuthConnection` + the `TokenStore` interface + the local `FileTokenStore`),
+  `oauth.py` (URL construction, both grants, refresh-on-read session), `auth_cli.py`
+  (presentation only). App credentials come from `MONEYBIRD_OAUTH_CLIENT_ID` /
+  `MONEYBIRD_OAUTH_CLIENT_SECRET` in the parent environment or an explicit `--env-file`.
+  The user-facing command is `moneybird-mcp auth login | status | logout | scopes`;
+  `moneybird_mcp/oauth_login.py` and `scripts/oauth_login.py` are aliases kept so existing
+  documentation and shell history still work — error messages must never point at a path
+  the wheel lacks. Tokens persist in `moneybird_oauth_tokens.json` in the data dir and are
+  used automatically in local or network-single-user mode when `MONEYBIRD_ACCESS_TOKEN` is
+  absent. Hosted request mode never reads that store. Full user-facing detail:
+  `docs/oauth.md`.
+  Four things here are load-bearing and easy to undo by accident:
+  1. **A refresh answer's absent field means "unchanged", not "cleared".** Moneybird may
+     return only a new access token; replacing the record wholesale drops the refresh
+     token and the granted scopes, and the next expiry becomes a forced re-login
+     (`OAuthConnection.merged_with_refresh`). A *failed* refresh must raise and leave the
+     store untouched — a network blip is not a reason to discard a grant.
+  2. **The token endpoint is the one endpoint whose responses contain credentials**, so
+     its error bodies are never rendered wholesale. Only RFC 6749 `error` and
+     `error_description` are extracted, mapped to specific guidance
+     (`invalid_client` → the app credentials, `invalid_grant` → single-use/expired code).
+     Neither grant is retried: an authorization code is single-use and a refresh may
+     rotate the refresh token, so the usual retry convention does not apply.
+  3. **The administration is never selected silently.** One reachable administration is
+     taken, several are offered, and skipping stores nothing — a guessed administration
+     sends every later write to the wrong books. It is stored on the connection;
+     `MONEYBIRD_ADMINISTRATION_ID` still overrides it, and `auth status` says which wins.
+  4. **Moneybird documents no revocation endpoint** (`oauth.REVOCATION_SUPPORTED`), so
+     `auth logout` deletes local credentials only and must keep saying so.
 
 ## Running a one-off live query or fix
 
@@ -471,6 +493,13 @@ asset bundled on developer.moneybird.com.
   tests in `tests/test_bank_matching.py`.
 - `moneybird_mcp/reference_cache.py` en `moneybird_mcp/rate_budget.py` — kortstondige
   referentiecache en geobserveerd rate-limitbudget. Tests in `tests/test_reference_cache.py`.
+- `moneybird_mcp/oauth_scopes.py`, `oauth_store.py`, `oauth.py`, `auth_cli.py` — the OAuth
+  stack, layered so only `auth_cli.py` changes for a hosted HTTPS-callback flow. See the
+  OAuth section above for the four rules that must not be undone. Tests in
+  `tests/test_oauth.py` (protocol, store, scopes, redaction, credential precedence) and
+  `tests/test_oauth_cli.py` (the three commands, administration selection, console-script
+  dispatch). `moneybird_mcp/auth.py` is unrelated: it is the MCP transport's shared-secret
+  middleware, not Moneybird authentication.
 - `moneybird_mcp/config.py` — constants, `MoneybirdError`, explicit env-file parsing, and `data_dir()`
   (where approvals DB / audit logs / sync caches live; override with
   `MONEYBIRD_MCP_DATA_DIR`). Approvals are persisted in SQLite and survive restarts.

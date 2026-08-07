@@ -14,11 +14,32 @@ Gebruik Claude, ChatGPT, Cursor of een andere MCP-client om een Moneybird-admini
 
 ## Aan de slag
 
-Je hebt Python 3.11 of nieuwer, een MCP-client en een nieuw [Moneybird API-token](https://developer.moneybird.com/authentication) nodig.
+Je hebt Python 3.11 of nieuwer en een MCP-client nodig. Er zijn twee manieren om een Moneybird-account te koppelen.
 
-### Aanbevolen: uitvoeren met `uvx`
+### Aanbevolen: verbinden via Moneybird OAuth
 
-Voeg deze serverconfiguratie toe aan je MCP-client:
+Registreer een [externe OAuth-applicatie](https://moneybird.com/user/applications/new) met redirect-URI `urn:ietf:wg:oauth:2.0:oob`, zet het client id en secret in een bestand dat je expliciet kiest, en log één keer in:
+
+```bash
+python -m pip install --upgrade moneybird-mcp
+moneybird-mcp auth login --env-file /absolute/path/moneybird-mcp.env
+```
+
+Het commando toont een autorisatie-URL, je keurt die goed in Moneybird en plakt alleen de korte autorisatiecode terug. Daarna verifieert het de verbinding, kiest het de administratie en bewaart het de tokens lokaal. Je typt zelf nooit een Moneybird-token over. Je MCP-client heeft dan helemaal geen inloggegevens meer nodig:
+
+```json
+{
+  "mcpServers": {
+    "moneybird": { "command": "moneybird-mcp" }
+  }
+}
+```
+
+Beheer de verbinding met `moneybird-mcp auth status`, `auth logout` en `auth scopes`. Volledige uitleg: [Connecting through Moneybird OAuth](docs/oauth.md) (Engelstalig).
+
+### Geavanceerd: persoonlijk API-token
+
+Blijft volledig ondersteund. Maak een [Moneybird API-token](https://developer.moneybird.com/authentication) aan en draai met `uvx`:
 
 ```json
 {
@@ -37,7 +58,7 @@ Voeg deze serverconfiguratie toe aan je MCP-client:
 
 Herstart de client en vraag deze om de beschikbare Moneybird-administraties te tonen.
 
-`MONEYBIRD_ADMINISTRATION_ID` is optioneel wanneer het token maar toegang heeft tot één administratie. Plak een echt Moneybird-token nooit in een chat, issue, logbestand of bestand dat je commit.
+`MONEYBIRD_ADMINISTRATION_ID` is optioneel wanneer het token maar toegang heeft tot één administratie. Plak een echt Moneybird-token nooit in een chat, issue, logbestand of bestand dat je commit. Bestaan er zowel een persoonlijk token als een OAuth-verbinding, dan wint het persoonlijke token; `moneybird-mcp auth status` vertelt welke actief is.
 
 Registraties in Claude Code hebben een scope. De standaardscope `local` is alleen beschikbaar in het huidige project; gebruik `--scope user` wanneer Moneybird vanuit elk project beschikbaar moet zijn. Als `claude mcp list` verbonden meldt maar een ander project geen tools toont, controleer dan `claude mcp get moneybird` en voeg de configuratie opnieuw toe met userscope. Gebruik geen projectscope voor een configuratie met een persoonlijk token, omdat projectscope een gedeeld `.mcp.json`-bestand schrijft.
 
@@ -118,8 +139,10 @@ De belangrijkste instellingen zijn:
 
 | Instelling | Standaard | Doel |
 |---|---|---|
-| `MONEYBIRD_ACCESS_TOKEN` | geen | Persoonlijk Moneybird API-token |
-| `MONEYBIRD_ADMINISTRATION_ID` | automatisch wanneer eenduidig | Te gebruiken administratie |
+| `MONEYBIRD_ACCESS_TOKEN` | geen | Persoonlijk Moneybird API-token; gaat voor op een OAuth-verbinding |
+| `MONEYBIRD_ADMINISTRATION_ID` | de bij OAuth-login gekozen administratie, anders automatisch wanneer eenduidig | Te gebruiken administratie |
+| `MONEYBIRD_OAUTH_CLIENT_ID` / `_SECRET` | geen | Geregistreerde OAuth-applicatie, voor `auth login` |
+| `MONEYBIRD_OAUTH_SCOPES` | `full` | Scopeprofiel of expliciete lijst die bij login wordt aangevraagd |
 | `MONEYBIRD_CAPABILITY_MODE` | `read_only` | `read_only` of `write_enabled` |
 | `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` voor geïnstalleerde stdio | Lokale goedkeuringen, auditgegevens, OAuth-gegevens en zoekstatus |
 | `MCP_TOOL_DISCOVERY` | `search` | Compacte ontdekking; gebruik `full` voor oudere clients |
@@ -160,6 +183,7 @@ Deze bestanden worden door dit project niet versleuteld. Beperk de toegang tot d
 ## Documentatie
 
 - [Aan de slag](docs/getting-started.nl.md)
+- [Connecting through Moneybird OAuth](docs/oauth.md)
 - [Tooloverzicht](docs/tool-reference.md)
 - [Deployment and safety](docs/deployment-and-safety.md)
 - [Levenscyclus van lokale gegevens](docs/data-lifecycle.nl.md)

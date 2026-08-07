@@ -128,20 +128,26 @@ Uninstalling the package does not delete `~/.moneybird-mcp`. That directory may 
 
 ## OAuth instead of a personal token
 
-Local and authenticated single-user modes can use Moneybird's OAuth authorization-code flow when `MONEYBIRD_ACCESS_TOKEN` is absent.
+Recommended. Local and authenticated single-user modes can connect through Moneybird's OAuth authorization-code flow, so no Moneybird token is ever copied by hand.
 
-1. Register an application with Moneybird.
-2. Configure `MONEYBIRD_OAUTH_CLIENT_ID` and `MONEYBIRD_OAUTH_CLIENT_SECRET`.
+1. Register an **external application** at <https://moneybird.com/user/applications/new> with redirect URI `urn:ietf:wg:oauth:2.0:oob`.
+2. Put its `MONEYBIRD_OAUTH_CLIENT_ID` and `MONEYBIRD_OAUTH_CLIENT_SECRET` in the environment or an explicitly selected file. These are application credentials, not tokens; treat the secret like a password and never commit it.
 3. Run:
 
 ```bash
-python -m moneybird_mcp.oauth_login --env-file /absolute/path/operator.env
+moneybird-mcp auth login --env-file /absolute/path/operator.env
 ```
 
-This works for an installed package as well as a source checkout; in a checkout
-`python scripts/oauth_login.py` is an equivalent wrapper.
+4. Open the printed authorization URL, approve the application, and paste **only** the short authorization code Moneybird displays.
+5. The command verifies the connection, selects the administration (asking when there is more than one), and stores everything in the Moneybird MCP data directory. Start the MCP client normally.
 
-The helper stores OAuth tokens in the Moneybird MCP data directory. The current local helper requests the scopes documented in the repository; review them before authorising. A production hosted service needs a separate HTTPS callback, user identity, grant store, revocation design, and tenant boundary.
+Manage the connection with `moneybird-mcp auth status` and `moneybird-mcp auth logout`. Neither ever prints a token or the client secret. `logout` deletes local credentials only: Moneybird publishes no revocation endpoint, so access is withdrawn at <https://moneybird.com/user/applications>.
+
+`python -m moneybird_mcp.oauth_login` still works and is the same command; in a source checkout `python scripts/oauth_login.py` is an equivalent wrapper.
+
+Review the requested scopes with `moneybird-mcp auth scopes`, and narrow them with `--scopes` if wanted. Full detail, including the scope rationale and precedence rules, is in [Connecting through Moneybird OAuth](oauth.md).
+
+The out-of-band redirect is a local/development mechanism. A production hosted service needs a separate HTTPS callback, user identity, grant store, revocation design, and tenant boundary.
 
 ## Claude Desktop extension
 
