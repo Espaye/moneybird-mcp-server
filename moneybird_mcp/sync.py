@@ -35,7 +35,7 @@ LEGACY_SYNC_INDEX_PATH = Path(f"{SYNC_INDEX_BASENAME}.json")
 # would otherwise never reach records that did not themselves change. Bump this
 # whenever the search-record builders in ``formatting`` gain or lose a field; the
 # next sync then rebuilds from scratch instead of serving a mixed-shape index.
-RECORD_SCHEMA_VERSION = 2
+RECORD_SCHEMA_VERSION = 3
 
 _SYNC_LOCKS: dict[str, threading.RLock] = {}
 _SYNC_LOCKS_GUARD = threading.Lock()

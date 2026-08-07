@@ -217,6 +217,26 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   niets: koppelen loopt onverminderd via `prepare_link_bank_mutation_booking`. Tegen echte
   reeds-gekoppelde mutaties gevalideerd: top-1 correct in elk beslisbaar geval, de enige
   echte gelijkstand als `ambiguous` gemeld.
+- **`sepa_fields.remi` zegt wát een afschrijving is; `contra_account_name` niet.** De
+  tegenrekeningnaam is alleen de partij ("Interpolis"), terwijl de SEPA-omschrijving het
+  contract én de gedekte periode draagt (`"ZIB polis 350259527 Periode 01.02.2026 -
+  01.05.2026"`). Eén verzekeraar incasseert routineus meerdere polissen — zakelijk per
+  kwartaal, privé per maand — die op naam en soms zelfs op bedrag niet te onderscheiden zijn.
+  `formatting.bank_description` leest `remi` met `message` als terugval;
+  `financial_mutation_search_record` indexeert de volledige tekst plus `eref` en zet een op
+  `MAX_BANK_DESCRIPTION_CHARS` afgekapte kopie als `description` op de hit. `sref` blijft er
+  bewust buiten: een ondoorzichtige scheme-UUID voegt alleen ruis toe. Zoeken op een
+  polisnummer selecteert daardoor precies één reeks, zonder `fetch` per mutatie.
+- **Gearchiveerde contacten vallen standaard buiten de synchronisatiefeed.** Dat hield elke
+  gearchiveerde leverancier uit de zoekindex: zijn facturen waren vindbaar, het contact zelf
+  niet, dus een leveranciersnaam liet zich nooit tot een `contact_id` herleiden. De
+  ongedocumenteerde `include_archived=true` lost dat op en werkt óók op
+  `/contacts/synchronization.json` (live gemeten: 1 id zonder, 7 mét). `filter=archived:true`
+  werkt *niet* — Moneybird negeert het stilzwijgend en geeft gewoon de actieve contacten
+  terug. De gearchiveerde records dragen dezelfde `version`, dus incrementele sync blijft
+  intact. `contact_search_record` markeert ze met `[gearchiveerd]` in de titel en
+  `state: "archived"`, want zo'n contact bezit nog wel zijn historie maar kan niet zonder
+  dearchiveren opnieuw gefactureerd worden.
 - **De playbook is óók een tool, en dat is de enige route die overal werkt.** Een MCP
   *resource* wordt door de client gelezen, niet door het model: Claude Desktop vereist dat de
   gebruiker hem handmatig aanhecht en ChatGPT-connectors lezen geen willekeurige resources.
@@ -458,9 +478,10 @@ asset bundled on developer.moneybird.com.
   durable store stays JSON; the FTS file is a rebuildable cache keyed on
   `content_updated_at`, not a no-change freshness refresh).
   `search` tries FTS (AND then OR prefix match, bm25-ranked), then substring, then live.
-  Zoekresultaten dragen `date`, `amount`, `state` en `contact_id` mee, zodat kiezen tussen
-  hits meestal geen `fetch` per kandidaat meer kost (één verkoopfactuur is ~9,7 KB ruw
-  record). Verander je de vorm van een searchrecord, bump dan **beide** schemaversies:
+  Zoekresultaten dragen `date`, `amount`, `state`, `contact_id` en voor bankmutaties
+  `description` mee, zodat kiezen tussen hits meestal geen `fetch` per kandidaat meer kost
+  (één verkoopfactuur is ~9,7 KB ruw record). Verander je de vorm van een searchrecord,
+  bump dan **beide** schemaversies:
   `sync.RECORD_SCHEMA_VERSION` (incrementele sync herbouwt records alleen bij een gewijzigde
   Moneybird-`version`, dus zonder bump bereikt een veldwijziging ongewijzigde records nooit)
   en `search_fts.FTS_SCHEMA_VERSION` (kolomwijziging; de FTS-file wordt gedropt en opnieuw

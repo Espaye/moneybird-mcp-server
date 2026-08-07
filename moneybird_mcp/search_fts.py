@@ -22,7 +22,7 @@ FTS_INDEX_BASENAME = ".moneybird_search_fts"
 
 # Bump whenever the ``records`` table gains or loses a column. The file is a
 # rebuildable cache, so a mismatch drops and repopulates it.
-FTS_SCHEMA_VERSION = 2
+FTS_SCHEMA_VERSION = 3
 
 SEARCH_BUCKETS = (
     "contacts",
@@ -73,7 +73,7 @@ def _connect(administration_id: str | None) -> sqlite3.Connection | None:
             "CREATE VIRTUAL TABLE IF NOT EXISTS records USING fts5("
             "search_text, title, record_id UNINDEXED, url UNINDEXED, "
             "bucket UNINDEXED, contact_id UNINDEXED, date UNINDEXED, "
-            "amount UNINDEXED, state UNINDEXED, "
+            "amount UNINDEXED, state UNINDEXED, description UNINDEXED, "
             "tokenize='unicode61 remove_diacritics 2')"
         )
     except sqlite3.OperationalError:  # FTS5 not compiled into this sqlite
@@ -108,8 +108,8 @@ def refresh_fts_index(index: dict[str, Any], administration_id: str | None) -> b
                 records = (index.get(bucket) or {}).get("records") or {}
                 connection.executemany(
                     "INSERT INTO records (search_text, title, record_id, url, "
-                    "bucket, contact_id, date, amount, state) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "bucket, contact_id, date, amount, state, description) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         (
                             str(record.get("search_text") or ""),
@@ -121,6 +121,7 @@ def refresh_fts_index(index: dict[str, Any], administration_id: str | None) -> b
                             str(record.get("date") or ""),
                             str(record.get("amount") or ""),
                             str(record.get("state") or ""),
+                            str(record.get("description") or ""),
                         )
                         for record in records.values()
                     ),
@@ -167,8 +168,8 @@ def search_fts(
     try:
         for expression in expressions:
             rows = connection.execute(
-                "SELECT record_id, title, url, contact_id, date, amount, state "
-                "FROM records WHERE records MATCH ? "
+                "SELECT record_id, title, url, contact_id, date, amount, state, "
+                "description FROM records WHERE records MATCH ? "
                 "ORDER BY bm25(records) LIMIT ?",
                 (expression, max(1, limit)),
             ).fetchall()
@@ -184,7 +185,9 @@ def search_fts(
 def _hit(row: tuple[Any, ...]) -> dict[str, Any]:
     """One search result, carrying the facets that avoid a follow-up fetch."""
     hit = {"id": row[0], "title": row[1], "url": row[2]}
-    for key, value in zip(("contact_id", "date", "amount", "state"), row[3:]):
+    for key, value in zip(
+        ("contact_id", "date", "amount", "state", "description"), row[3:]
+    ):
         if value:
             hit[key] = value
     return hit

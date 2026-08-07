@@ -1283,9 +1283,17 @@ class MoneybirdClient:
         return self._request("GET", endpoint, query=query)
 
     def list_contact_versions(self) -> list[dict[str, Any]]:
+        # Moneybird hides archived contacts from this feed by default, which
+        # silently kept every archived supplier out of the sync index: its
+        # historical invoices were searchable while the contact itself was not,
+        # so the supplier could never be resolved to a contact_id from a search
+        # hit. Live-verified against a two-contact administration: the plain feed
+        # returns 1 id, with include_archived it returns all 7. The archived
+        # records carry the same ``version``, so incremental sync is unaffected.
         return self._request(
             "GET",
             f"/{self.administration_id}/contacts/synchronization.json",
+            {"include_archived": "true"},
         )
 
     def fetch_contacts_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
