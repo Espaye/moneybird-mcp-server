@@ -11,8 +11,13 @@ os.environ.setdefault(
     tempfile.mkdtemp(prefix="moneybird_mcp_test_state_"),
 )
 
+from moneybird_mcp.client import MoneybirdClient
 from moneybird_mcp.formatting import (
+    MAX_BANK_DESCRIPTION_CHARS,
+    bank_description,
+    contact_search_record,
     document_search_record,
+    financial_mutation_search_record,
     record_facets,
     sales_invoice_search_record,
     search_hit,
@@ -72,6 +77,96 @@ class FacetTests(unittest.TestCase):
     def test_search_hit_omits_empty_facets(self):
         hit = search_hit({"id": "x", "title": "t", "url": "u", "amount": ""})
         self.assertNotIn("amount", hit)
+
+
+# A quarterly direct debit: contra_account_name names only the insurer, so the
+# SEPA remittance line is the sole field distinguishing this policy from any
+# other debit by the same counterparty.
+MUTATION = {
+    "id": "7001",
+    "date": "2026-02-02",
+    "amount": "-1818.59",
+    "state": "processed",
+    "message": "",
+    "contra_account_name": "Interpolis",
+    "contra_account_number": "NL60RABO0300281390",
+    "sepa_fields": {
+        "eref": "052756910762",
+        "remi": "ZIB polis 350259527 Periode 01.02.2026 - 01.05.2026 Interpolis",
+        "sref": "c469e376-ba32-4b6c-a829-1af7887e1a8f",
+    },
+}
+
+
+class BankDescriptionTests(unittest.TestCase):
+    def test_remittance_line_becomes_the_hit_description(self):
+        record = financial_mutation_search_record(MUTATION, "1")
+        self.assertEqual(
+            record["description"],
+            "ZIB polis 350259527 Periode 01.02.2026 - 01.05.2026 Interpolis",
+        )
+        self.assertIn("description", search_hit(record))
+
+    def test_policy_number_and_period_are_matchable(self):
+        text = financial_mutation_search_record(MUTATION, "1")["search_text"]
+        for token in ("zib", "350259527", "01.05.2026"):
+            self.assertIn(token, text)
+
+    def test_end_to_end_reference_matches_but_scheme_uuid_does_not(self):
+        text = financial_mutation_search_record(MUTATION, "1")["search_text"]
+        self.assertIn("052756910762", text)
+        # sref is opaque scheme plumbing; indexing it would only add noise.
+        self.assertNotIn("c469e376", text)
+
+    def test_message_is_the_fallback_when_a_feed_has_no_sepa_fields(self):
+        self.assertEqual(
+            bank_description({"message": "Kosten zakelijke rekening juli"}),
+            "Kosten zakelijke rekening juli",
+        )
+        self.assertEqual(bank_description({}), "")
+
+    def test_long_narrative_is_capped_for_display_but_matched_in_full(self):
+        needle = "eindwoord"
+        remi = ("x" * MAX_BANK_DESCRIPTION_CHARS) + " " + needle
+        record = financial_mutation_search_record(
+            dict(MUTATION, sepa_fields={"remi": remi}), "1"
+        )
+        self.assertLessEqual(len(record["description"]), MAX_BANK_DESCRIPTION_CHARS)
+        self.assertTrue(record["description"].endswith("…"))
+        # Truncation is a display concern; the match blob keeps the whole line.
+        self.assertIn(needle, record["search_text"])
+
+
+class ArchivedContactTests(unittest.TestCase):
+    """An archived supplier still owns its history, so it must stay findable."""
+
+    def test_versioned_feed_is_asked_for_archived_contacts(self):
+        client = MoneybirdClient(token="t", administration_id="1")
+        with mock.patch.object(
+            MoneybirdClient, "_request", return_value=[]
+        ) as request:
+            client.list_contact_versions()
+        method, path, query = request.call_args.args
+        self.assertEqual(method, "GET")
+        self.assertTrue(path.endswith("/contacts/synchronization.json"))
+        self.assertEqual(query, {"include_archived": "true"})
+
+    def test_archived_contact_is_labelled_and_searchable_as_such(self):
+        record = contact_search_record(
+            {"id": "42", "company_name": "Leverancier Zuid BV", "archived": True}, "1"
+        )
+        self.assertIn("[gearchiveerd]", record["title"])
+        self.assertEqual(record["state"], "archived")
+        self.assertIn("gearchiveerd", record["search_text"])
+        self.assertIn("archived", record["search_text"])
+
+    def test_active_contact_is_not_labelled(self):
+        record = contact_search_record(
+            {"id": "43", "company_name": "Testklant Noord BV"}, "1"
+        )
+        self.assertNotIn("gearchiveerd", record["title"])
+        self.assertEqual(record["state"], "")
+        self.assertNotIn("archived", record["search_text"])
 
 
 class FakeClient:

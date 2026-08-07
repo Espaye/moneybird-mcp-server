@@ -270,7 +270,7 @@ def search_hit(record: dict[str, Any]) -> dict[str, Any]:
         "title": record.get("title"),
         "url": record.get("url"),
     }
-    for key in ("contact_id", "date", "amount", "state"):
+    for key in ("contact_id", "date", "amount", "state", "description"):
         value = record.get(key)
         if value:
             hit[key] = value
@@ -316,8 +316,37 @@ def general_journal_search_record(document: dict[str, Any], administration_id: s
 
 
 
+# A bank narrative is one line on a statement; the cap keeps a pathological one
+# from dominating a search result while leaving room for a policy number plus the
+# period it covers.
+MAX_BANK_DESCRIPTION_CHARS = 200
+
+
+def truncate_text(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def bank_description(mutation: dict[str, Any]) -> str:
+    """The bank's own narrative for a mutation, untruncated.
+
+    Moneybird keeps the SEPA remittance information in ``sepa_fields.remi``: the
+    text the statement shows, e.g. ``"ZIB polis 350259527 Periode 01.02.2026 -
+    01.05.2026"``. For a recurring direct debit that is routinely the *only*
+    field naming the contract and the period it covers — ``contra_account_name``
+    is just the insurer, and two unrelated policies from one insurer are
+    otherwise indistinguishable. ``message`` is the fallback for feeds that carry
+    no SEPA fields.
+    """
+    sepa = mutation.get("sepa_fields")
+    remi = str(sepa.get("remi") or "").strip() if isinstance(sepa, dict) else ""
+    return remi or str(mutation.get("message") or "").strip()
+
+
 def financial_mutation_search_record(mutation: dict[str, Any], administration_id: str | None) -> dict[str, Any]:
     mutation_id = str(mutation.get("id"))
+    sepa = mutation.get("sepa_fields")
+    sepa_reference = str(sepa.get("eref") or "").strip() if isinstance(sepa, dict) else ""
+    description = bank_description(mutation)
     return {
         "id": f"financial_mutation:{mutation_id}",
         "title": financial_mutation_title(mutation),
@@ -327,10 +356,16 @@ def financial_mutation_search_record(mutation: dict[str, Any], administration_id
         "date": str(mutation.get("date") or ""),
         "amount": str(mutation.get("amount") or ""),
         "state": str(mutation.get("state") or ""),
+        "description": truncate_text(description, MAX_BANK_DESCRIPTION_CHARS),
         "search_text": normalize_text(
             mutation.get("date"),
             mutation.get("amount"),
             mutation.get("message"),
+            # Match on the full narrative, not the display-truncated copy.
+            description,
+            # eref is the payer's end-to-end reference and is worth matching;
+            # sref is an opaque scheme UUID that would only add noise.
+            sepa_reference,
             mutation.get("contra_account_name"),
             mutation.get("contra_account_number"),
             *(booking.get("description") for booking in mutation.get("ledger_account_bookings") or []),
@@ -486,16 +521,22 @@ def contact_search_record(
     administration_id: str | None,
 ) -> dict[str, Any]:
     record_id = str(contact.get("id"))
+    archived = bool(contact.get("archived"))
     return {
         "id": f"contact:{record_id}",
         "kind": "contact",
-        "title": contact_title(contact),
+        # Archived contacts are indexed (see MoneybirdClient.list_contact_versions),
+        # so the hit itself must say so: a supplier you stopped using still owns
+        # its historical invoices, but cannot be invoiced again without being
+        # unarchived first. Marking it in the title costs no FTS column and keeps
+        # the distinction visible wherever the hit is rendered.
+        "title": f"{contact_title(contact)} [gearchiveerd]" if archived else contact_title(contact),
         "url": api_url("contacts", record_id, administration_id),
         # A contact is its own counterparty; the remaining facets do not apply.
         "contact_id": record_id,
         "date": "",
         "amount": "",
-        "state": "",
+        "state": "archived" if archived else "",
         "search_text": normalize_text(
             contact.get("company_name"),
             contact.get("firstname"),
@@ -504,6 +545,9 @@ def contact_search_record(
             contact.get("customer_id"),
             contact.get("phone"),
             contact.get("city"),
+            # Both spellings, so "gearchiveerde leveranciers" and "archived"
+            # each reach these records.
+            "gearchiveerd archived" if archived else "",
         ),
     }
 

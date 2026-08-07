@@ -42,6 +42,25 @@ def _index(updated_at: str = "2026-07-11T12:00:00+00:00") -> dict:
             "search_text": "vitens factuur juni water voorschot 12,34",
         }
     }
+    # Two debits to the same counterparty, told apart only by the bank narrative.
+    index["financial_mutations"]["records"] = {
+        "20": {
+            "id": "financial_mutation:20",
+            "title": "Financial mutation Interpolis (2026-02-02, -1818.59)",
+            "url": "https://example/financial_mutations/20",
+            "amount": "-1818.59",
+            "description": "ZIB polis 350259527 Periode 01.02.2026 - 01.05.2026",
+            "search_text": "interpolis zib polis 350259527 periode 01.02.2026 - 01.05.2026",
+        },
+        "21": {
+            "id": "financial_mutation:21",
+            "title": "Financial mutation Interpolis (2026-03-20, -1355.79)",
+            "url": "https://example/financial_mutations/21",
+            "amount": "-1355.79",
+            "description": "Risicoverzekering 00040391362 Overlijdensrisicoverzekering",
+            "search_text": "interpolis risicoverzekering 00040391362 overlijdensrisicoverzekering",
+        },
+    }
     return index
 
 
@@ -53,6 +72,20 @@ class FtsSearchTests(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_policy_number_selects_one_of_two_debits_to_the_same_payee(self) -> None:
+        """The whole point: 'Interpolis' alone cannot tell these two apart."""
+        self.assertTrue(search_fts.refresh_fts_index(_index(), ADMIN))
+        results = search_fts.search_fts(ADMIN, "350259527", limit=5)
+        self.assertEqual([hit["id"] for hit in results], ["financial_mutation:20"])
+
+    def test_hit_carries_the_bank_narrative_so_no_fetch_is_needed(self) -> None:
+        self.assertTrue(search_fts.refresh_fts_index(_index(), ADMIN))
+        results = search_fts.search_fts(ADMIN, "overlijdensrisicoverzekering", limit=5)
+        self.assertEqual(
+            results[0]["description"],
+            "Risicoverzekering 00040391362 Overlijdensrisicoverzekering",
+        )
 
     def test_multi_word_out_of_order_query_matches(self) -> None:
         self.assertTrue(search_fts.refresh_fts_index(_index(), ADMIN))
