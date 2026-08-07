@@ -110,8 +110,7 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   the catalogue, "contact" appears in a dozen tool names — while `prepare_create_contact`
   said only "Use this before creating a Moneybird contact". Lead a tool description with
   the plain phrasings ("add a customer, client, supplier, or vendor"), and note that BM25
-  normalises for length, so a terse `*_from_approval` description can still outrank its
-  own `prepare_*`. Pinned by `tests/test_tool_discovery.py::ToolSearchRankingTests`, which
+  normalises for length, so a terse description can still outrank a longer, better one. Pinned by `tests/test_tool_discovery.py::ToolSearchRankingTests`, which
   ranks in a **subprocess** with `MONEYBIRD_TOOL_DISCOVERY=search` and an explicit
   `cwd`/`PYTHONPATH` on the repo root — the discovery mode is fixed per process at import,
   and a `pip install`ed copy of this package in site-packages otherwise shadows the working
@@ -123,9 +122,9 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   `prepare_meter_usage_sales_invoices` met begin/eindstanden of `usage_kwh`; de tool rekent
   verbruik na, kan lage/uitgesloten meters overslaan, hergebruikt de laatste passende
   meterregel voor tarief/btw/grootboek en kan alles in één batch inplannen. Na akkoord:
-  `meter_usage_sales_invoices_from_approval`; de uitvoering verifieert status, datum en
+  `execute_approved_action`; de uitvoering verifieert status, datum en
   totaal automatisch. Voor bestaande concepten gebruik je
-  `prepare_batch_schedule_sales_invoices` → `batch_schedule_sales_invoices_from_approval`.
+  `prepare_batch_schedule_sales_invoices` → `execute_approved_action`.
 
 - **Suppliers invoice *us*.** A utility or telecom vendor has **0 sales
   invoices**; its documents are **purchase invoices** (or receipts). Look under
@@ -145,7 +144,7 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   `review_purchase_invoices` om afwijkers te vinden (nog `new`, minder regels dan gebruikelijk,
   ontbrekende grootboeken, een afwijkende btw-vlag, of een bekende omschrijving die ineens op een
   ander grootboek/btw-tarief staat) en `prepare_reconcile_purchase_invoice`
-  → `reconcile_purchase_invoice_from_approval` om de vaste boeking van een goede referentiefactuur
+  → `execute_approved_action` om de vaste boeking van een goede referentiefactuur
   te reproduceren. Regelprijzen worden naar het doeltotaal geschaald zodat het documenttotaal tot
   op de cent gelijk blijft; wijken de totalen af, dan is de regel-voor-regel-splitsing een (in de
   preview gemarkeerde) aanname. De echte splitsing lees je van de factuur-PDF met
@@ -205,6 +204,27 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   `"1,5"` instead of guessing — the quantity scales a line total, so a silent wrong reading
   becomes a wrong amount. (Before 2026-08-02 this raised a raw `decimal.InvalidOperation`
   from the reclassify preview.)
+- **Bankmutaties matchen doe je niet met de hand.** `suggest_bank_mutation_matches`
+  (`moneybird_mcp/bank_matching.py`) reproduceert wat Moneybirds eigen transactiescherm
+  voorstelt, maar deterministisch: referentie in de bankomschrijving (op alfanumeriek
+  vergeleken, minimaal 4 tekens zodat een kort factuurnummer niet toevallig matcht), exact
+  openstaand bedrag, IBAN van de tegenpartij, contactnaam. Richting bepaalt de zoekruimte:
+  inkomend kan alleen een verkoopfactuur voldoen, uitgaand alleen een inkoopfactuur of bon.
+  Confidence is een *tier* (`exact`/`strong`/`possible`), geen score — een getal suggereert
+  precisie die er niet is. Een even goede runner-up wordt als `ambiguous` gemeld en nooit
+  weggetiebreakt; dat is precies het geval (vaste maandfactuur van hetzelfde bedrag, betaald
+  zonder referentie) waarin een automatische keuze stilzwijgend fout boekt. De tool schrijft
+  niets: koppelen loopt onverminderd via `prepare_link_bank_mutation_booking`. Tegen echte
+  reeds-gekoppelde mutaties gevalideerd: top-1 correct in elk beslisbaar geval, de enige
+  echte gelijkstand als `ambiguous` gemeld.
+- **De playbook is óók een tool, en dat is de enige route die overal werkt.** Een MCP
+  *resource* wordt door de client gelezen, niet door het model: Claude Desktop vereist dat de
+  gebruiker hem handmatig aanhecht en ChatGPT-connectors lezen geen willekeurige resources.
+  `get_bookkeeping_guide(topic)` (in `tools/catalogue.py`, secties uit
+  `guidance.PLAYBOOK_TOPICS`) maakt dezelfde inhoud per onderwerp modelaanroepbaar. Let op de
+  parser: een *ongenummerde* `###`-kop blijft bij zijn `##`-sectie. Dat is niet cosmetisch —
+  `### Afronding` onder `## 3. BTW` draagt de hele-euro-afrondingsregel, en losknippen zou die
+  stil uit het `btw`-onderwerp laten verdwijnen. `tests/test_bookkeeping_guide.py` pint dat.
 - **Boekingsregels (bank/transaction rules) are not in the API** — see
   `moneybird_mcp/playbooks/boekhoud_playbook.md` and the memory note. Don't try to read them;
   `moneybird_request` answers every spelling (`transaction_rules`, `boekingsregels`, ...)
@@ -234,7 +254,7 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   `prepare_unlink_bank_mutation_booking` (bankmutatie ↔ factuur/document/grootboekcategorie)
   en `prepare_create_credit_invoice`. Voor een reeks bestaande directe bankboekingen die naar
   een ander grootboek moeten, gebruik je `prepare_reclassify_bank_mutation_bookings` →
-  `reclassify_bank_mutation_bookings_from_approval`: volledige preflight op mutatieversie en
+  `execute_approved_action`: volledige preflight op mutatieversie en
   bronboeking, exact bedrag, nacontrole van state/open bedrag, plus herstelpoging bij mislukte
   relink. Moneybird biedt geen transactie over meerdere mutaties, dus partial failures worden
   expliciet als zodanig geaudit. Gebruik deze flows, geen handmatige constructies.
@@ -270,17 +290,44 @@ For a quick sanity sweep of read-only access: `python scripts/healthcheck_readon
   Voor elk los `prepare_*`-resultaat mag eveneens `execute_approved_action(approval_id)` worden
   gebruikt; die kiest uitsluitend de executor van de opgeslagen, nog geldige approval.
 
-## Performance architecture (verified 2026-07-29)
+## Performance architecture (verified 2026-08-07)
 
-- De runnable server gebruikt standaard compacte tool discovery (`search`): zeven
-  kern-tools plus FastMCP's `search_tools`/`call_tool` worden vooraf aangeboden. Dit verlaagt de
-  protocolcatalogus van 77 tools / 68.260 compacte JSON-bytes naar 9 tools / 6.933 bytes
-  (circa 90% kleiner). Start tijdelijk met
-  `--tool-discovery full` of `MCP_TOOL_DISCOVERY=full` voor oude clients die geen Tool Search
-  ondersteunen. Directe package-importen blijven standaard `full` voor compatibiliteit.
+- **Moneybird throttelt per IP-adres: 150 requests per 5 minuten, en slechts 50 per 5
+  minuten voor `/reports/`.** Dat is het echte plafond, niet de latency van een losse call.
+  `moneybird_mcp/rate_budget.py` observeert het budget per bucket; dure scans vragen
+  `affordable_batches()` en stoppen eerlijk in plaats van het budget van de rest van de taak
+  op te maken. Een 429 waarvan het venster de retry-cap overschrijdt faalt meteen mét bucket
+  en wachttijd. **Moneybirds headers volgen de IETF RateLimit-draft níét** (live gemeten
+  2026-08-07): `RateLimit-Remaining` is *seconden tot reset* (gelijk aan `Reset` min nu, en
+  groter dan `Limit`), `RateLimit-Reset` is een absolute Unix-epoch, en het echte
+  requestaantal staat in het ongedocumenteerde `RateLimit-RequestsRemaining`. Een `remaining`
+  boven `limit` wordt daarom weggegooid. Consequentie voor hosting: alle tenants op één IP
+  delen 150/5min — vraag Moneybird om per-administratie-limieten vóór je hosting bouwt.
+- **Toestandsfilters verschillen per documenttype en falen stil.** `state:open` op een
+  inkoopfactuur wordt geaccepteerd en geeft nul rijen: een onbetaalde inkoopfactuur is `late`
+  of `new`, nooit `open`. Alleen een onbekende statusnaam geeft HTTP 400. Moneybird accepteert
+  pipe-gescheiden alternatieven, dus de hele onbetaalde set kost één request; gebruik
+  `config.UNPAID_SALES_INVOICE_STATES` en `config.UNPAID_DOCUMENT_STATES`.
+- **`moneybird_mcp/reference_cache.py`** cachet grootboekrekeningen, btw-tarieven en de
+  administratie-membershipcheck kortstondig in-process, gesleuteld op een gezouten digest van
+  het token plus het administratie-id, en staat uit in `hosted_request_only`. Live gemeten:
+  herhaalde `list_ledger_accounts` van ~390–630 ms (43 KB) naar ~0 ms, herhaalde `search` van
+  ~107 ms naar ~5 ms — die membership-round-trip domineerde, want het lokale indexwerk kost
+  ~6 ms. Faalt een loader, dan wordt er niets gecachet. TTL's via
+  `MONEYBIRD_REFERENCE_CACHE_SECONDS` / `MONEYBIRD_MEMBERSHIP_CACHE_SECONDS` (`0` = uit).
+- De runnable server gebruikt standaard **`full`** tool discovery. Compacte discovery
+  (`search`) verkleint de catalogus van 85 tools / 84.399 bytes naar 9 tools / 7.218 bytes,
+  maar die catalogus staat in de *gecachete* promptprefix van de client, dus die besparing is
+  vrijwel gratis — terwijl elke taak een extra `search_tools`/`call_tool`-ronde kost en elk
+  `search_tools`-antwoord zelf 6–12 KB ongecachete output is. BM25 rangschikt bovendien op
+  Engelstalige beschrijvingen: `meterstanden factureren` gaf nul tools en `betaling boeken op
+  factuur` liet `prepare_register_payment` volledig weg. Zet compacte modus alleen aan met
+  `--tool-discovery search` / `MCP_TOOL_DISCOVERY=search` voor clients die de volledige lijst
+  niet aankunnen. Vergroot de catalogus niet zonder reden: de juiste oplossing voor te veel
+  tools is minder tools, niet een zoeklaag ervoor.
   De legacy entrypoint importeert tools pas na CLI/expliciete env-file-verwerking, zodat ook
-  `python moneybird_mcp_server.py --tool-discovery full` werkelijk naar `full` schakelt.
-  `call_tool` is in deze modus een expliciet read-only proxy: alleen tools met
+  `python moneybird_mcp_server.py --tool-discovery search` werkelijk omschakelt.
+  `call_tool` is in die modus een expliciet read-only proxy: alleen tools met
   `readOnlyHint=true` (ook `prepare_*`) mogen erdoor. Schrijfexecutors staan niet in de
   zoekresultaten, worden door de proxy geweigerd en kunnen evenmin rechtstreeks op naam worden
   aangeroepen via FastMCP's onderliggende catalogus. Elke uitvoering loopt via de altijd
@@ -391,8 +438,19 @@ asset bundled on developer.moneybird.com.
 - `moneybird_mcp/purchase_review.py` — read-only supplier-history retrieval and advisory anomaly
   detection behind `review_purchase_invoices`. Description-similarity checks are optional;
   deterministic state and supplier-pattern checks remain available independently. Tests live in
-  `tests/test_purchase_reconcile.py` and `tests/test_purchase_review.py`. PDF-reading design note:
+  `tests/test_purchase_reconcile.py` en `tests/test_purchase_review.py`. PDF-reading design note:
   `docs/reading_pdf_attachments.md`.
+  Leveranciershistorie komt bij voorkeur uit de lokale sync-index, die per document een
+  `contact_id` bewaart: dat noemt exact de op te halen id's. Moneybird heeft geen
+  contactfilter op inkoopdocumenten, dus het alternatief is elk document in de administratie
+  ophalen en client-side filteren. Die scan bestaat nog als fallback (nieuwste eerst, met
+  budgetstop), maar zijn oude vroege-exit vergeleken tegen de *match*-limiet en ging in de
+  praktijk dus nooit af.
+- `moneybird_mcp/bank_matching.py` — deterministische kandidaatmatching achter
+  `suggest_bank_mutation_matches`. Puur en zonder MCP- of clientkennis, dus volledig testbaar;
+  tests in `tests/test_bank_matching.py`.
+- `moneybird_mcp/reference_cache.py` en `moneybird_mcp/rate_budget.py` — kortstondige
+  referentiecache en geobserveerd rate-limitbudget. Tests in `tests/test_reference_cache.py`.
 - `moneybird_mcp/config.py` — constants, `MoneybirdError`, explicit env-file parsing, and `data_dir()`
   (where approvals DB / audit logs / sync caches live; override with
   `MONEYBIRD_MCP_DATA_DIR`). Approvals are persisted in SQLite and survive restarts.
@@ -400,8 +458,17 @@ asset bundled on developer.moneybird.com.
   durable store stays JSON; the FTS file is a rebuildable cache keyed on
   `content_updated_at`, not a no-change freshness refresh).
   `search` tries FTS (AND then OR prefix match, bm25-ranked), then substring, then live.
+  Zoekresultaten dragen `date`, `amount`, `state` en `contact_id` mee, zodat kiezen tussen
+  hits meestal geen `fetch` per kandidaat meer kost (één verkoopfactuur is ~9,7 KB ruw
+  record). Verander je de vorm van een searchrecord, bump dan **beide** schemaversies:
+  `sync.RECORD_SCHEMA_VERSION` (incrementele sync herbouwt records alleen bij een gewijzigde
+  Moneybird-`version`, dus zonder bump bereikt een veldwijziging ongewijzigde records nooit)
+  en `search_fts.FTS_SCHEMA_VERSION` (kolomwijziging; de FTS-file wordt gedropt en opnieuw
+  gevuld).
 - `moneybird_mcp/playbooks/boekhoud_playbook.md` — btw rules, categorization, consistency
-  checklist, bank-mutation diagnosis. Read it before a bookkeeping task.
+  checklist, bank-mutation diagnosis. Read it before a bookkeeping task. Bereikbaar als
+  resource én per onderwerp via `get_bookkeeping_guide`; onderwerpindeling in
+  `guidance.PLAYBOOK_TOPICS`.
 - `scripts/` — runnable read-only/reclassify scripts (good examples of the patterns above).
 - `docs/releasing.md` — the release checklist. A push or merge never publishes.
   Releases require an explicit default-branch `workflow_dispatch` with the exact

@@ -11,6 +11,7 @@ import unicodedata
 from collections import Counter
 from typing import Any
 
+from . import rate_budget
 from .config import MoneybirdError
 from .formatting import chunked, normalize_document_kind
 
@@ -78,6 +79,61 @@ def _document_order_key(document: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def _indexed_document_ids_for_contact(
+    client: Any,
+    kind: str,
+    *,
+    contact_id: str,
+) -> list[str] | None:
+    """Document ids for one contact from the local sync index, newest first.
+
+    Returns ``None`` — meaning "the index cannot answer this, scan instead" — when
+    the index is absent, belongs to another administration, predates the stored
+    ``contact_id`` facet, or has no record of this contact at all. That last case
+    matters: an empty *list* would wrongly assert the supplier has no history.
+    """
+    from .config import DOCUMENT_KIND_CONFIG
+    from .credentials import (
+        CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
+        get_credential_mode,
+    )
+    from .sync import RECORD_SCHEMA_VERSION, load_sync_index
+
+    if get_credential_mode() == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
+        return None
+    administration_id = getattr(client, "administration_id", None)
+    if not administration_id:
+        return None
+    bucket = (DOCUMENT_KIND_CONFIG.get(kind) or {}).get("collection_name")
+    if not bucket:
+        return None
+    try:
+        index = load_sync_index(administration_id)
+    except (OSError, ValueError):
+        return None
+    if (
+        str(index.get("administration_id") or "") != str(administration_id)
+        or index.get("record_schema_version") != RECORD_SCHEMA_VERSION
+    ):
+        return None
+    records = (index.get(bucket) or {}).get("records") or {}
+    if not records:
+        return None
+    matches = [
+        record
+        for record in records.values()
+        if str(record.get("contact_id") or "") == contact_id
+    ]
+    if not matches:
+        return None
+    matches.sort(key=lambda record: str(record.get("date") or ""), reverse=True)
+    return [
+        str(record.get("id") or "").split(":", 1)[-1]
+        for record in matches
+        if record.get("id")
+    ]
+
+
 def list_documents_for_contact(
     client: Any,
     kind: str,
@@ -89,9 +145,17 @@ def list_documents_for_contact(
     """Return bounded supplier history plus metadata describing its coverage.
 
     Moneybird's purchase-document endpoint has no reliable contact filter and its
-    unfiltered list can default to the current book year. Prefer versioned sync for
-    complete history, with pagination as a compatibility fallback. ``limit`` caps
-    matching documents, not documents examined.
+    unfiltered list can default to the current book year, so finding one
+    supplier's invoices otherwise means fetching every document and filtering
+    client-side. Strategies, cheapest first:
+
+    1. the local sync index, which stores each document's ``contact_id`` and
+       therefore names the exact ids to fetch (one request instead of one per
+       hundred documents in the whole administration);
+    2. the versioned sync feed, scanned newest-first;
+    3. plain pagination, for a client without the sync endpoints.
+
+    ``limit`` caps matching documents, not documents examined.
     """
     wanted_contact_id = str(contact_id or "").strip()
     if not wanted_contact_id:
@@ -102,17 +166,63 @@ def list_documents_for_contact(
         }
 
     result_limit = max(1, min(int(limit), 100))
+
+    indexed_ids = _indexed_document_ids_for_contact(
+        client,
+        kind,
+        contact_id=wanted_contact_id,
+    )
+    if indexed_ids is not None and hasattr(client, "fetch_documents_by_ids"):
+        documents: list[dict[str, Any]] = []
+        for id_batch in chunked(indexed_ids[: result_limit * 2], 100):
+            documents.extend(client.fetch_documents_by_ids(kind, id_batch))
+        # The index is a point-in-time snapshot, so re-filter what came back
+        # rather than trusting it: a document may have been reassigned to another
+        # contact since the last sync.
+        documents = [
+            document
+            for document in documents
+            if str(
+                (document.get("contact") or {}).get("id")
+                or document.get("contact_id")
+                or ""
+            )
+            == wanted_contact_id
+        ]
+        documents.sort(key=_document_order_key, reverse=True)
+        return documents[:result_limit], {
+            "history_source": "sync_index",
+            "pages_scanned": max(1, (len(indexed_ids) + 99) // 100),
+            "documents_examined": len(documents),
+            "history_scan_truncated": len(indexed_ids) > result_limit * 2,
+        }
+
     if hasattr(client, "list_document_versions") and hasattr(
         client, "fetch_documents_by_ids"
     ):
         version_filter = f"period:{period}" if period else ""
         versions = client.list_document_versions(kind, filter=version_filter)
         ids = [str(item.get("id") or "") for item in versions if item.get("id")]
+        # Newest ids last in Moneybird's version feed, and supplier history is
+        # only ever read newest-first. Scanning from the end finds a supplier's
+        # recent invoices in the first batch or two instead of paging through
+        # every document in the administration to reach them.
+        ids.reverse()
         matches: list[dict[str, Any]] = []
         examined = 0
         batches_scanned = 0
         reached_limit = False
+        budget_exhausted = False
         for id_batch in chunked(ids, 100):
+            # Each batch is one request against a 150-per-5-minutes per-IP budget.
+            # An unfiltered scan of a large administration can consume most of it,
+            # so stop and say so rather than starving the rest of the task.
+            if (
+                batches_scanned
+                and rate_budget.affordable_batches("general") == 0
+            ):
+                budget_exhausted = True
+                break
             batch = client.fetch_documents_by_ids(kind, id_batch)
             batches_scanned += 1
             examined += len(batch)
@@ -135,7 +245,10 @@ def list_documents_for_contact(
             "history_source": "synchronization",
             "pages_scanned": batches_scanned,
             "documents_examined": examined,
-            "history_scan_truncated": reached_limit and examined < len(ids),
+            "history_scan_truncated": (
+                budget_exhausted or (reached_limit and examined < len(ids))
+            ),
+            "history_scan_stopped_for_rate_budget": budget_exhausted,
         }
 
     page_size = 100

@@ -8,7 +8,6 @@ from pydantic import Field
 
 from ..config import (
     PREPARE_ANNOTATIONS,
-    WRITE_ANNOTATIONS,
     MoneybirdError,
 )
 from ..formatting import (
@@ -359,7 +358,9 @@ def _execute_register_payment(client, payload: dict[str, Any]) -> dict[str, Any]
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def register_payment_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared payment registration."""
     client = ctx.get_client()

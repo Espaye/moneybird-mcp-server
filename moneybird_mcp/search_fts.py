@@ -20,6 +20,10 @@ from .config import data_dir, harden_private_file
 
 FTS_INDEX_BASENAME = ".moneybird_search_fts"
 
+# Bump whenever the ``records`` table gains or loses a column. The file is a
+# rebuildable cache, so a mismatch drops and repopulates it.
+FTS_SCHEMA_VERSION = 2
+
 SEARCH_BUCKETS = (
     "contacts",
     "sales_invoices",
@@ -36,18 +40,41 @@ def fts_index_path(administration_id: str | None) -> Path:
 
 
 def _connect(administration_id: str | None) -> sqlite3.Connection | None:
-    """A connection with the schema in place, or None when FTS5 is unavailable."""
+    """A connection with the schema in place, or None when FTS5 is unavailable.
+
+    The whole file is a disposable cache, so a schema change simply drops and
+    recreates the table rather than migrating it; the next refresh repopulates
+    from the durable JSON index.
+    """
     path = fts_index_path(administration_id)
     connection = sqlite3.connect(path)
     harden_private_file(path)
     try:
         connection.execute(
+            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        row = connection.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
+        if row is None or row[0] != str(FTS_SCHEMA_VERSION):
+            with connection:
+                connection.execute("DROP TABLE IF EXISTS records")
+                # Force a repopulate: the freshness marker belongs to the rows
+                # that were just dropped.
+                connection.execute(
+                    "DELETE FROM meta WHERE key = 'sync_index_updated_at'"
+                )
+                connection.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) "
+                    "VALUES ('schema_version', ?)",
+                    (str(FTS_SCHEMA_VERSION),),
+                )
+        connection.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS records USING fts5("
             "search_text, title, record_id UNINDEXED, url UNINDEXED, "
-            "bucket UNINDEXED, tokenize='unicode61 remove_diacritics 2')"
-        )
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"
+            "bucket UNINDEXED, contact_id UNINDEXED, date UNINDEXED, "
+            "amount UNINDEXED, state UNINDEXED, "
+            "tokenize='unicode61 remove_diacritics 2')"
         )
     except sqlite3.OperationalError:  # FTS5 not compiled into this sqlite
         connection.close()
@@ -80,8 +107,9 @@ def refresh_fts_index(index: dict[str, Any], administration_id: str | None) -> b
             for bucket in SEARCH_BUCKETS:
                 records = (index.get(bucket) or {}).get("records") or {}
                 connection.executemany(
-                    "INSERT INTO records (search_text, title, record_id, url, bucket) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO records (search_text, title, record_id, url, "
+                    "bucket, contact_id, date, amount, state) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         (
                             str(record.get("search_text") or ""),
@@ -89,6 +117,10 @@ def refresh_fts_index(index: dict[str, Any], administration_id: str | None) -> b
                             str(record.get("id") or ""),
                             str(record.get("url") or ""),
                             bucket,
+                            str(record.get("contact_id") or ""),
+                            str(record.get("date") or ""),
+                            str(record.get("amount") or ""),
+                            str(record.get("state") or ""),
                         )
                         for record in records.values()
                     ),
@@ -135,14 +167,24 @@ def search_fts(
     try:
         for expression in expressions:
             rows = connection.execute(
-                "SELECT record_id, title, url FROM records WHERE records MATCH ? "
+                "SELECT record_id, title, url, contact_id, date, amount, state "
+                "FROM records WHERE records MATCH ? "
                 "ORDER BY bm25(records) LIMIT ?",
                 (expression, max(1, limit)),
             ).fetchall()
             if rows:
-                return [{"id": row[0], "title": row[1], "url": row[2]} for row in rows]
+                return [_hit(row) for row in rows]
     except sqlite3.OperationalError:
         return None
     finally:
         connection.close()
     return []
+
+
+def _hit(row: tuple[Any, ...]) -> dict[str, Any]:
+    """One search result, carrying the facets that avoid a follow-up fetch."""
+    hit = {"id": row[0], "title": row[1], "url": row[2]}
+    for key, value in zip(("contact_id", "date", "amount", "state"), row[3:]):
+        if value:
+            hit[key] = value
+    return hit

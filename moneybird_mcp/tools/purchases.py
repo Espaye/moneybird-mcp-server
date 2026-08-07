@@ -9,7 +9,6 @@ from pydantic import Field
 from ..config import (
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
-    WRITE_ANNOTATIONS,
     MoneybirdError,
 )
 from ..credentials import (
@@ -19,8 +18,10 @@ from ..credentials import (
 from ..formatting import (
     compact_document_summary,
     compact_general_journal_summary,
+    document_kind_config,
     duplicate_fingerprint,
     money_decimal,
+    normalize_document_kind,
 )
 from ..invoicing import details_attributes_payload
 from ..purchase_reconcile import (
@@ -29,7 +30,15 @@ from ..purchase_reconcile import (
 )
 from ..purchase_review import scan_purchase_invoices_for_attention
 from . import _context as ctx
-from ._params import ApprovalId, FilterString, Limit, MoneybirdId, Page, Period
+from ._params import (
+    ApprovalId,
+    DocumentListKind,
+    FilterString,
+    Limit,
+    MoneybirdId,
+    Page,
+    Period,
+)
 from ._registry import mcp
 from ._writes import (
     mark_write_dispatch_started,
@@ -40,26 +49,42 @@ from ._writes import (
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def list_purchase_invoices(
+def list_purchase_documents(
+    kind: DocumentListKind = "purchase_invoice",
     limit: Limit = 10,
     page: Page = 1,
     filter: FilterString = "",
     period: Period = "",
 ) -> dict[str, Any]:
-    """Use this when you need a compact list of Moneybird purchase invoices."""
+    """List inkoopfacturen (purchase invoices, the invoices your suppliers/leveranciers send
+    you), bonnen/bonnetjes (receipts, cash-account expense documents), or
+    memoriaalboekingen (general journal documents). Pick one with `kind`.
+
+    A supplier has no sales invoices; its documents live here. To find unpaid ones, filter
+    on state — note that an unpaid purchase invoice is 'late' or 'new', never 'open'
+    (filter='state:late|new')."""
+    normalized = normalize_document_kind(kind)
     client = ctx.get_client()
     documents = client.list_documents(
-        "purchase_invoice",
+        normalized,
         limit=limit,
         page=page,
         filter=filter,
         period=period,
     )
+    summarize = (
+        (lambda item: compact_general_journal_summary(item, client.administration_id))
+        if normalized == "general_journal_document"
+        else (
+            lambda item: compact_document_summary(
+                normalized, item, client.administration_id
+            )
+        )
+    )
+    collection = document_kind_config(normalized)["collection_name"]
     return {
-        "purchase_invoices": [
-            compact_document_summary("purchase_invoice", item, client.administration_id)
-            for item in documents
-        ],
+        collection: [summarize(item) for item in documents],
+        "kind": normalized,
         "page": page,
         "count": len(documents),
     }
@@ -141,58 +166,6 @@ def _purchase_detail_with_account_names(
         "tax_rate_id": tax_id,
         "tax_rate_name": tax.get("name"),
         "tax_percentage": tax.get("percentage"),
-    }
-
-
-@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def list_receipts(
-    limit: Limit = 10,
-    page: Page = 1,
-    filter: FilterString = "",
-    period: Period = "",
-) -> dict[str, Any]:
-    """Use this when you need a compact list of Moneybird receipts and cash/other-account expense documents."""
-    client = ctx.get_client()
-    documents = client.list_documents(
-        "receipt",
-        limit=limit,
-        page=page,
-        filter=filter,
-        period=period,
-    )
-    return {
-        "receipts": [
-            compact_document_summary("receipt", item, client.administration_id)
-            for item in documents
-        ],
-        "page": page,
-        "count": len(documents),
-    }
-
-
-@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def list_general_journal_documents(
-    limit: Limit = 10,
-    page: Page = 1,
-    filter: FilterString = "",
-    period: Period = "",
-) -> dict[str, Any]:
-    """Use this when you need a compact list of Moneybird general journal documents."""
-    client = ctx.get_client()
-    documents = client.list_documents(
-        "general_journal_document",
-        limit=limit,
-        page=page,
-        filter=filter,
-        period=period,
-    )
-    return {
-        "general_journal_documents": [
-            compact_general_journal_summary(item, client.administration_id)
-            for item in documents
-        ],
-        "page": page,
-        "count": len(documents),
     }
 
 
@@ -573,7 +546,9 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def reconcile_purchase_invoice_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed a prepared purchase-invoice
     reconcile. It applies the new line structure, re-fetches the document, and verifies the total

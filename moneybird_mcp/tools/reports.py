@@ -50,62 +50,26 @@ def _report_with_ledger_labels(client: Any, report: dict[str, Any]) -> dict[str,
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def get_profit_loss(period: Period = "this_year") -> dict[str, Any]:
-    """Get the Moneybird profit and loss report, defaulting to this year. Dutch: winst-en-verliesrekening, winst en verlies rekening."""
-    client = ctx.get_client()
-    report = _report_with_ledger_labels(
-        client,
-        client.get_report("profit_loss", period=period),
-    )
-    return {
-        "title": report_title("profit_loss", period),
-        "period": period,
-        "report": report,
-    }
-
-
-@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def get_balance_sheet(period: Period = "this_year") -> dict[str, Any]:
-    """Get the Moneybird balance sheet, defaulting to this year. Dutch: balans opvragen."""
-    client = ctx.get_client()
-    report = _report_with_ledger_labels(
-        client,
-        client.get_report("balance_sheet", period=period),
-    )
-    return {
-        "title": report_title("balance_sheet", period),
-        "period": period,
-        "report": report,
-    }
-
-
-@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def get_general_ledger(period: Period = "this_year") -> dict[str, Any]:
-    """Get the Moneybird general ledger report, defaulting to this year. Dutch: grootboek opvragen."""
-    client = ctx.get_client()
-    report = client.get_report("general_ledger", period=period)
-    return {
-        "title": report_title("general_ledger", period),
-        "period": period,
-        "report": report,
-    }
-
-
-@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def get_financial_report(
     report_name: ReportName,
     period: Period = "this_month",
     page: ReportPage = 0,
 ) -> dict[str, Any]:
-    """Use this for any Moneybird report: profit_loss, balance_sheet, general_ledger, cash_flow,
-    tax (btw), debtors (openstaande verkoopfacturen), creditors (openstaande inkoopfacturen),
-    debtors_aging / creditors_aging, revenue_by_contact, revenue_by_project,
-    expenses_by_contact, expenses_by_project, journal_entries, subscriptions, or assets.
+    """Any Moneybird report: profit_loss (winst-en-verliesrekening), balance_sheet (balans),
+    general_ledger (grootboek), cash_flow, tax (btw), debtors (openstaande verkoopfacturen),
+    creditors (openstaande inkoopfacturen), debtors_aging / creditors_aging,
+    revenue_by_contact, revenue_by_project, expenses_by_contact, expenses_by_project,
+    journal_entries (memoriaalboekingen), subscriptions, or assets.
+
     period accepts e.g. this_year, prev_month, 202601..202603 — BUT cash_flow, tax, debtors,
     and creditors accept at most one month (use this_month or 202606); asking those for a
     longer period is refused with the exact per-month calls to make instead. The aging
     reports take a whole month as reference (202606). Set page only for the paginated
-    per-contact/per-project, debtor/creditor, and journal_entries reports."""
+    per-contact/per-project, debtor/creditor, and journal_entries reports.
+
+    Reports are throttled separately by Moneybird at 50 requests per 5 minutes, three times
+    tighter than the rest of the API, so a per-month sweep over a year is a quarter of that
+    budget."""
     name = str(report_name).strip()
     if name not in REPORT_ENDPOINTS:
         supported = ", ".join(sorted(REPORT_ENDPOINTS))

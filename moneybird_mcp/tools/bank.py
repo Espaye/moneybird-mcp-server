@@ -1,18 +1,21 @@
 """Bank/cash mutations: reads plus guarded link/unlink of bookings (manual reconciliation)."""
 from __future__ import annotations
 
+from collections import Counter
 from decimal import Decimal
 from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..bank_matching import match_mutation
 from ..config import (
     FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
     FINANCIAL_MUTATION_UNLINK_BOOKING_TYPES,
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
+    UNPAID_DOCUMENT_STATES,
+    UNPAID_SALES_INVOICE_STATES,
     VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
-    WRITE_ANNOTATIONS,
     MoneybirdError,
 )
 from ..formatting import (
@@ -56,7 +59,9 @@ def list_financial_mutations(
     filter: FilterString = "",
     period: Period = "",
 ) -> dict[str, Any]:
-    """Use this when you need a compact list of Moneybird bank or cash mutations."""
+    """List bankmutaties (bank or cash transactions, banktransacties, afschriftregels).
+    Filter state:unprocessed for the onverwerkte transacties that still need booking.
+    To find which invoice each one pays, use suggest_bank_mutation_matches."""
     client = ctx.get_client()
     mutations = client.list_financial_mutations(
         limit=limit,
@@ -80,6 +85,131 @@ def list_financial_mutations(
         "page": page,
         "count": len(mutations),
     }
+
+
+@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
+def suggest_bank_mutation_matches(
+    limit: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=50,
+            description="How many unprocessed mutations to analyse (1-50).",
+        ),
+    ] = 10,
+    period: Period = "",
+    financial_mutation_id: Annotated[
+        str,
+        Field(description="Optional single bank mutation id to analyse instead of a period scan."),
+    ] = "",
+) -> dict[str, Any]:
+    """Welke factuur hoort bij deze bankmutatie? Match unprocessed bank transactions to
+    the open invoices they pay: for each bankmutatie or banktransactie, find which open
+    sales invoice, purchase invoice, or receipt it most likely settles, with the evidence.
+
+    This is the read step of processing your bank feed — the same job Moneybird's
+    own transaction screen does when it suggests a match. Money in is matched
+    against open sales invoices, money out against open purchase invoices and
+    receipts, using the invoice reference in the bank description, an exact open
+    amount, the counterparty IBAN, and the contact name. Each candidate says which
+    of those fired, so nothing is matched on a hunch.
+
+    It changes nothing. Take a candidate you and the user agree on to
+    prepare_link_bank_mutation_booking, which is where confirmation and
+    verification happen. When suggestion is 'ambiguous' or 'none', ask the user
+    rather than picking one.
+    """
+    client = ctx.get_client()
+
+    if financial_mutation_id:
+        mutations = [client.get_financial_mutation(financial_mutation_id)]
+    else:
+        mutations = client.list_financial_mutations(
+            limit=limit,
+            page=1,
+            filter="state:unprocessed",
+            period=period,
+        )
+    if not mutations:
+        return {
+            "matches": [],
+            "count": 0,
+            "note": (
+                "No unprocessed bank mutations found for this period. "
+                "list_financial_mutations rejects a wide period; query one month "
+                "at a time (period:'JJJJMM01..JJJJMMnn')."
+            ),
+        }
+
+    # Which sides actually need loading. An all-incoming batch never has to fetch
+    # purchase invoices at all, which halves the cost of the common case.
+    amounts = [_signed_amount(item) for item in mutations]
+    needs_sales = any(amount is not None and amount > 0 for amount in amounts)
+    needs_purchases = any(amount is not None and amount < 0 for amount in amounts)
+
+    sales_invoices: list[dict[str, Any]] = []
+    purchase_documents: list[tuple[str, dict[str, Any]]] = []
+    warnings: list[str] = []
+    if needs_sales:
+        try:
+            sales_invoices = client.list_sales_invoices(
+                limit=100, page=1, state=UNPAID_SALES_INVOICE_STATES
+            )
+        except MoneybirdError as exc:
+            warnings.append(f"open sales invoices could not be listed: {exc}")
+    if needs_purchases:
+        for kind in ("purchase_invoice", "receipt"):
+            try:
+                purchase_documents.extend(
+                    (kind, document)
+                    for document in client.list_documents(
+                        kind,
+                        limit=100,
+                        page=1,
+                        filter=f"state:{UNPAID_DOCUMENT_STATES}",
+                    )
+                )
+            except MoneybirdError as exc:
+                warnings.append(f"open {kind}s could not be listed: {exc}")
+
+    matches = [
+        match_mutation(
+            mutation,
+            sales_invoices=sales_invoices,
+            purchase_documents=purchase_documents,
+        )
+        for mutation in mutations
+    ]
+    summary = Counter(match["suggestion"] for match in matches)
+    result: dict[str, Any] = {
+        "matches": matches,
+        "count": len(matches),
+        "summary": dict(summary),
+        "candidate_pool": {
+            "open_sales_invoices": len(sales_invoices),
+            "open_purchase_documents": len(purchase_documents),
+        },
+        "next_step": (
+            "Show these to the user, then use prepare_link_bank_mutation_booking "
+            "for each agreed match and execute_approved_action after their "
+            "explicit yes. Mutations with suggestion 'none' usually belong on a "
+            "ledger account rather than an invoice."
+        ),
+    }
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
+def _signed_amount(mutation: dict[str, Any]) -> Decimal | None:
+    for key in ("amount_open", "amount"):
+        value = mutation.get(key)
+        if value not in (None, ""):
+            try:
+                return money_decimal(value)
+            except (ArithmeticError, ValueError, TypeError):
+                continue
+    return None
 
 
 def _link_target_contract(
@@ -823,7 +953,9 @@ def _execute_reclassify_bank_mutation_bookings(
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def reclassify_bank_mutation_bookings_from_approval(
     approval_id: ApprovalId,
 ) -> dict[str, Any]:
@@ -1078,7 +1210,9 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def link_bank_mutation_booking_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared bank mutation link."""
     client = ctx.get_client()
@@ -1242,7 +1376,9 @@ def _execute_unlink_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def unlink_bank_mutation_booking_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared bank mutation unlink."""
     client = ctx.get_client()

@@ -21,7 +21,7 @@ dit document geeft de verdieping.
 1. **Nooit schrijven zonder expliciete bevestiging.** Als schrijven door de beheerder is
    aangezet, loopt elke wijziging via een
    `prepare_*`-tool → toon de preview aan de gebruiker → wacht op een duidelijk "ja" →
-   pas dán de bijbehorende `*_from_approval`-tool toe. Eén goedkeuring geldt voor één
+   pas dán `execute_approved_action` met dat approval_id. Eén goedkeuring geldt voor één
    voorbereide actie, niet voor de volgende. Een `approval_id` bindt de voorbereide
    payload, maar bewijst op zichzelf niet dat een mens buiten het model heeft bevestigd;
    het MCP-clientkanaal moet die bevestiging betrouwbaar organiseren.
@@ -88,7 +88,7 @@ Deze sectie geldt alleen als een beheerder schrijven expliciet heeft aangezet in
    het totaal (moet gelijk blijven bij herclassificatie).
 5. **Bevestigen** — wacht op een expliciet "ja" van de gebruiker.
 6. **Uitvoeren** — roep `execute_approved_action` aan met het `approval_id` (de
-   actie-specifieke `*_from_approval`-tool blijft ook geldig).
+   uitvoering loopt via die ene, destructief geannoteerde tool).
 7. **Verifiëren** — haal het bijgewerkte document op, controleer totaal en versie, en meld het
    resultaat eerlijk (ook als er iets misging).
 
@@ -281,7 +281,7 @@ Twee technische randvoorwaarden:
    ```
 
    Optioneel per regel: `tax_rate_id`, `description`. Toon de preview, wacht op akkoord, en
-   rond af met `reclassify_document_lines_from_approval`.
+   rond af met `execute_approved_action`.
 
 ---
 
@@ -304,12 +304,12 @@ vergelijkbare facturen (bijv. één leverancier, één heel jaar):
 ## 7. Scenario-recepten
 
 ### A. Achterstallige boekhouding wegwerken
-1. Inventariseer: `list_purchase_invoices` / `list_receipts` (en `moneybird_request` voor
+1. Inventariseer: `list_purchase_documents` (kind purchase_invoice of receipt; en `moneybird_request` voor
    andere bronnen) over de periode; identificeer ongecategoriseerde of inconsistente regels.
 2. Groepeer per leverancier/soort.
 3. Stel per groep een categorisering voor (grootboek + btw + omschrijving) mét onderbouwing.
 4. Toon als tabel, vraag akkoord, voer batchgewijs door via `prepare_reclassify_document_lines`
-   → approval → `*_from_approval`.
+   → approval → `execute_approved_action`.
 5. Verifieer totalen en rapporteer wat is verwerkt en wat is overgeslagen (en waarom).
 
 ### B. Een heel jaar categoriseren
@@ -319,7 +319,8 @@ vergelijkbare facturen (bijv. één leverancier, één heel jaar):
   (zie §6). Lever aan het eind een samenvatting per grootboek.
 
 ### C. De cijfers uitleggen
-- Haal `get_profit_loss` en `get_balance_sheet` (en zo nodig `get_general_ledger`) voor de
+- Haal `get_financial_report("profit_loss")` en `("balance_sheet")` (en zo nodig
+  `("general_ledger")`) voor de
   periode op.
 - Vat samen in mensentaal: omzet, grootste kostenposten, resultaat, opvallende verschuivingen.
 - Noem de paar cijfers die er echt toe doen; vermijd een muur van getallen. Wijs op posten die
@@ -333,7 +334,22 @@ vergelijkbare facturen (bijv. één leverancier, één heel jaar):
 
 ### E. "Waarom is deze bankmutatie niet automatisch verwerkt?"
 Een veelgestelde vraag. Een bankmutatie is "verwerkt" als hij gekoppeld is aan een **document**
-(factuur/bon) of aan een **grootboekcategorie**. Werk zo:
+(factuur/bon) of aan een **grootboekcategorie**.
+
+> **Eerst matchen, dan diagnosticeren.** Wil je onverwerkte mutaties *wegwerken* (niet
+> uitzoeken waarom er één blijft hangen), gebruik dan `suggest_bank_mutation_matches`. Die
+> doet dezelfde koppeling die Moneybirds eigen transactiescherm voorstelt, maar dan
+> deterministisch: referentie in de omschrijving, exact openstaand bedrag, IBAN van de
+> tegenpartij, contactnaam — met per kandidaat de reden die is afgegaan. Reconstrueer dat
+> niet met de hand uit `debtors`/`creditors` en factuurlijsten: dat kost veel meer calls
+> tegen een limiet van 150 per 5 minuten, en gokken op bedrag alleen is precies hoe een
+> verkeerde koppeling ontstaat.
+>
+> Let op de uitkomst `ambiguous`: die betekent dat meerdere facturen even goed passen —
+> typisch een vaste maandfactuur van hetzelfde bedrag zonder factuurnummer in de
+> omschrijving. Dat is niet op te lossen door de eerste te kiezen; vraag het de gebruiker.
+
+Voor de diagnose van één blijvend onverwerkte mutatie werk je zo:
 
 1. **Haal de mutatie op** en lees de sleutelvelden:
    - `state`: `processed` of `unprocessed`.
@@ -405,7 +421,7 @@ mutatie weer `processed` is.
    duplicaatcontrole.
 5. Plan nieuwe facturen direct in dezelfde voorbereide batch. Bestaan de concepten al,
    gebruik `prepare_batch_schedule_sales_invoices`.
-6. Na akkoord voert de matching `*_from_approval`-tool uit én verifieert per factuur:
+6. Na akkoord voert `execute_approved_action` uit én verifieert per factuur:
    totaal, status, factuurdatum en dat `sent_at` nog leeg is bij toekomstige verzending.
 
 ---

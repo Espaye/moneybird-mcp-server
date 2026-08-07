@@ -75,7 +75,7 @@ MoneybirdId = Annotated[
 ]
 ContactId = Annotated[
     MoneybirdId,
-    Field(description="Moneybird contact id (long numeric string), e.g. from search_contacts."),
+    Field(description="Moneybird contact id (long numeric string), e.g. from list_contacts."),
 ]
 CustomerId = Annotated[
     str,
@@ -183,3 +183,14 @@ LinkBookingType = Literal[
 UnlinkBookingType = Literal["Payment", "LedgerAccountBooking"]
 
 PayableDocumentType = Literal["sales_invoice", "purchase_invoice", "receipt"]
+
+DocumentListKind = Annotated[
+    Literal["purchase_invoice", "receipt", "general_journal_document"],
+    Field(
+        description=(
+            "Which purchase-side document collection to list: 'purchase_invoice' "
+            "(inkoopfacturen from suppliers), 'receipt' (bonnen/bonnetjes), or "
+            "'general_journal_document' (memoriaalboekingen)."
+        )
+    ),
+]

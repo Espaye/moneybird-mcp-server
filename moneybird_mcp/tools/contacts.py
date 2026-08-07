@@ -9,7 +9,6 @@ from ..capabilities import require_write_capability
 from ..config import (
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
-    WRITE_ANNOTATIONS,
     MoneybirdError,
 )
 from ..formatting import (
@@ -24,6 +23,7 @@ from ..formatting import (
 )
 from ..invoicing import (
     build_invoice_delivery_audit,
+    find_contact_matches,
 )
 from ..safety import (
     approval_execution_state,
@@ -34,7 +34,7 @@ from ..safety import (
     record_approval_phase,
 )
 from . import _context as ctx
-from ._params import ApprovalId, ContactId, CustomerId, Limit, Page
+from ._params import ApprovalId, ContactId, Limit, Page
 from ._registry import mcp
 from ._writes import (
     mark_write_dispatch_started,
@@ -45,9 +45,55 @@ from ._writes import (
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def list_contacts(limit: Limit = 10, page: Page = 1) -> dict[str, Any]:
-    """Use this when you need a compact list of Moneybird contacts without opening each record."""
+def list_contacts(
+    query: Annotated[
+        str,
+        Field(
+            description=(
+                "Optional partial name, e-mail, phone, city, or customer id to search "
+                "for. Leave empty to page through all contacts."
+            )
+        ),
+    ] = "",
+    customer_id: Annotated[
+        str,
+        Field(
+            description=(
+                "Optional exact external customer id (klantnummer) for a single "
+                "contact. Returns the full record."
+            )
+        ),
+    ] = "",
+    limit: Limit = 10,
+    page: Page = 1,
+) -> dict[str, Any]:
+    """Find contacten: customers (klanten), suppliers (leveranciers), and other relaties.
+
+    Give `customer_id` for an exact lookup by your own klantnummer, `query` to search on
+    part of a name, e-mail, phone, city, or customer id, or neither to page through all
+    contacts."""
     client = ctx.get_client()
+
+    if customer_id.strip():
+        record = client.get_contact_by_customer_id(customer_id.strip())
+        record_id = str(record.get("id"))
+        return {
+            "id": f"contact:{record_id}",
+            "title": contact_title(record),
+            "text": stringify_record(record),
+            "url": api_url("contacts", record_id, client.administration_id),
+            "metadata": {
+                "kind": "contact",
+                "moneybird_id": record_id,
+                "customer_id": record.get("customer_id"),
+                "administration_id": client.administration_id,
+            },
+        }
+
+    if query.strip():
+        matches = find_contact_matches(client, query=query.strip(), limit=limit)
+        return {"contacts": matches, "query": query.strip(), "count": len(matches)}
+
     contacts = client.list_contacts(limit=limit, page=page)
     return {
         "contacts": [
@@ -78,26 +124,6 @@ def audit_invoice_delivery_settings(
         include_archived_contacts=include_archived_contacts,
         include_inactive_recurring=include_inactive_recurring,
     )
-
-
-@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def get_contact_by_customer_id(customer_id: CustomerId) -> dict[str, Any]:
-    """Use this when you have your own external customer id and need the matching Moneybird contact."""
-    client = ctx.get_client()
-    record = client.get_contact_by_customer_id(customer_id)
-    record_id = str(record.get("id"))
-    return {
-        "id": f"contact:{record_id}",
-        "title": contact_title(record),
-        "text": stringify_record(record),
-        "url": api_url("contacts", record_id, client.administration_id),
-        "metadata": {
-            "kind": "contact",
-            "moneybird_id": record_id,
-            "customer_id": record.get("customer_id"),
-            "administration_id": client.administration_id,
-        },
-    }
 
 
 @mcp.tool(annotations=PREPARE_ANNOTATIONS)
@@ -211,7 +237,9 @@ def _execute_create_contact(client, payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def create_contact_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared contact creation."""
     client = ctx.get_client()
@@ -280,7 +308,9 @@ def prepare_set_contacts_delivery_method_email(
     return approval
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def set_contacts_delivery_method_email_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed bulk-updating contact invoice delivery methods to Email."""
     client = ctx.get_client()
@@ -567,7 +597,9 @@ def _execute_update_contact(client, payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def update_contact_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared contact update."""
     client = ctx.get_client()
@@ -648,7 +680,9 @@ def _execute_archive_contact(client, payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def archive_contact_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared contact archive."""
     client = ctx.get_client()

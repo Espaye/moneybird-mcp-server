@@ -57,8 +57,9 @@ check("moneybird_request('estimates')", lambda: T.moneybird_request("estimates",
 check("moneybird_request('administrations')", lambda: T.moneybird_request("administrations"))
 
 # --- Documents & search ---
-pis = check("list_purchase_invoices(limit=5)", lambda: T.list_purchase_invoices(limit=5))
-check("list_receipts(limit=5)", lambda: T.list_receipts(limit=5))
+pis = check("list_purchase_documents(purchase_invoice)", lambda: T.list_purchase_documents("purchase_invoice", limit=5))
+check("list_purchase_documents(receipt)", lambda: T.list_purchase_documents("receipt", limit=5))
+check("suggest_bank_mutation_matches", lambda: T.suggest_bank_mutation_matches(limit=5))
 check("search('KPN')", lambda: T.search("KPN", limit=5))
 
 # fetch one real record discovered above (read-only)
@@ -70,11 +71,12 @@ def _fetch_first_contact():
 check("fetch(contact:<first>)", _fetch_first_contact)
 
 # --- Reports (read-only) ---
-check("get_profit_loss(this_year)", lambda: T.get_profit_loss("this_year"))
-check("get_balance_sheet(this_year)", lambda: T.get_balance_sheet("this_year"))
+check("get_financial_report(profit_loss)", lambda: T.get_financial_report("profit_loss", "this_year"))
+check("get_financial_report(balance_sheet)", lambda: T.get_financial_report("balance_sheet", "this_year"))
 
 # --- Guidance layer (skill) ---
 check("playbook resource loads", lambda: {"count": len(G.load_playbook())})
+check("get_bookkeeping_guide(btw)", lambda: T.get_bookkeeping_guide("btw"))
 check("prompt verwerk_achterstand renders", lambda: {"count": len(G.prompt_verwerk_achterstand())})
 check("prompt categoriseer_heel_jaar renders", lambda: {"count": len(G.prompt_categoriseer_heel_jaar())})
 check("prompt leg_cijfers_uit renders", lambda: {"count": len(G.prompt_leg_cijfers_uit())})

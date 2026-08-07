@@ -13,6 +13,7 @@ to import the ``mcp`` instance (avoiding a circular import with ``tools``).
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 PLAYBOOK_PATH = Path(__file__).with_name("playbooks") / "boekhoud_playbook.md"
@@ -24,7 +25,7 @@ GUARDRAILS = """\
 Werk volgens deze vaste regels:
 1. Schrijf NOOIT zonder expliciete bevestiging: gebruik een prepare_*-tool, toon de
    preview, wacht op een duidelijk "ja", en voer dan het teruggegeven approval_id uit met
-   execute_approved_action (de bijbehorende *_from_approval-tool blijft ook geldig).
+   execute_approved_action.
 2. Verzin NOOIT gegevens (factuurnummers, referenties, bedragen, data, tegenpartijen).
    Ontbreekt iets, vraag het of laat het leeg.
 3. Verifieer na elke wijziging dat het documenttotaal ongewijzigd is (tot op de cent) en
@@ -44,6 +45,159 @@ def load_playbook() -> str:
             f"Verwacht bestand niet gevonden: {PLAYBOOK_PATH}.\n"
             "Val terug op de gouden regels in de server-instructie."
         )
+
+
+# --------------------------------------------------------------------------- #
+# Topic-addressable playbook
+#
+# The playbook is also published as an MCP *resource*, but a resource is read by
+# the client, not by the model: Claude Desktop requires the user to attach one by
+# hand and ChatGPT connectors do not read arbitrary resources at all. In those
+# clients the deepest bookkeeping knowledge in this server is unreachable exactly
+# when it is needed. A tool is always model-callable, so the same document is
+# addressable per topic below — per topic rather than whole, because a 434-line
+# dump for a single VAT question is its own kind of unusable.
+# --------------------------------------------------------------------------- #
+
+_HEADING = re.compile(r"^(#{2,3})\s+(.*)$")
+_SECTION_KEY = re.compile(r"^([0-9]+[a-z]?|[A-Z])\.")
+
+# topic -> (section keys in playbook order, one-line summary for the tool result)
+PLAYBOOK_TOPICS: dict[str, tuple[tuple[str, ...], str]] = {
+    "gouden_regels": (
+        ("1", "2"),
+        "Niet-onderhandelbare regels en de standaard-werkwijze voor elke schrijfactie.",
+    ),
+    "sync_index": (
+        ("1b",),
+        "Wanneer je de lokale zoekindex bouwt of ververst, en waarom search zonder index onvolledig is.",
+    ),
+    "btw": (
+        ("3",),
+        "BTW-beslismodel (NL): tarieven, privé/onttrekking, incl/excl-consistentie en de afrondingsregel.",
+    ),
+    "btw_afwikkeling": (
+        ("3b",),
+        "De aangifteperiode schoonboeken met een memoriaal: verlegde btw, bruto vs. gerapporteerd, afrondingsverschil.",
+    ),
+    "prive_zakelijk": (
+        ("4",),
+        "Privé versus zakelijk en onttrekkingen.",
+    ),
+    "categoriseren": (
+        ("5",),
+        "Hoe je een grootboekrekening kiest.",
+    ),
+    "consistentie": (
+        ("6",),
+        "Consistentie-checklist om een reeks documenten uniform te verwerken.",
+    ),
+    "bankmutaties": (
+        ("7E",),
+        "Waarom een bankmutatie niet automatisch is verwerkt, en wat je wel en niet kunt zien.",
+    ),
+    "achterstand": (
+        ("7A", "7B"),
+        "Achterstallige boekhouding wegwerken en een heel jaar categoriseren.",
+    ),
+    "cijfers_uitleggen": (
+        ("7C", "7D"),
+        "De cijfers uitleggen en een maand of kwartaal afsluiten inclusief btw-check.",
+    ),
+    "meterverbruik": (
+        ("7F",),
+        "Meterverbruik factureren.",
+    ),
+    "grenzen": (
+        ("8",),
+        "Bij twijfel: waar dit hulpmiddel ophoudt en de boekhouder begint.",
+    ),
+}
+
+
+def _playbook_sections() -> dict[str, tuple[str, str]]:
+    """Map a section key to ``(heading, body)``.
+
+    Keys come from the heading's own numbering, so they survive rewording:
+    ``## 3b. Btw-afwikkeling`` becomes ``3b`` and the recipe ``### E. ...`` under
+    ``## 7. Scenario-recepten`` becomes ``7E``.
+
+    An *unnumbered* ``###`` heading stays part of its parent section rather than
+    becoming addressable on its own. That is not cosmetic: ``### Afronding`` under
+    ``## 3. BTW`` carries the whole-euro rounding rule, and splitting it out would
+    silently drop it from the ``btw`` topic — the exact gotcha the topic exists for.
+    """
+    sections: dict[str, tuple[str, str]] = {}
+    current_key: str | None = None
+    parent_key = ""
+    lines: list[str] = []
+    heading = ""
+
+    def flush() -> None:
+        if current_key:
+            sections[current_key] = (heading, "\n".join(lines).strip())
+
+    for line in load_playbook().splitlines():
+        match = _HEADING.match(line)
+        if not match:
+            lines.append(line)
+            continue
+        level, title = len(match.group(1)), match.group(2).strip()
+        key_match = _SECTION_KEY.match(title)
+        if level == 3 and key_match is None:
+            # Unnumbered subsection: keep it with its parent, heading and all.
+            lines.append(line)
+            continue
+        flush()
+        raw_key = key_match.group(1) if key_match else title[:12]
+        if level == 2:
+            parent_key = raw_key
+            current_key = raw_key
+        else:
+            current_key = f"{parent_key}{raw_key}"
+        heading = title
+        lines = []
+    flush()
+    return sections
+
+
+def playbook_topic(topic: str) -> dict[str, object]:
+    """Return one topic's playbook sections, or the list of valid topics."""
+    slug = str(topic or "").strip().lower().replace("-", "_")
+    if slug not in PLAYBOOK_TOPICS:
+        return {
+            "error": (
+                f"Unknown topic {topic!r}."
+                if slug
+                else "No topic given."
+            ),
+            "topics": {
+                name: summary for name, (_, summary) in PLAYBOOK_TOPICS.items()
+            },
+        }
+    keys, summary = PLAYBOOK_TOPICS[slug]
+    sections = _playbook_sections()
+    parts = [
+        f"## {sections[key][0]}\n\n{sections[key][1]}"
+        for key in keys
+        if key in sections
+    ]
+    if not parts:
+        # The playbook is edited by hand; a topic that no longer resolves must say
+        # so rather than silently returning nothing.
+        return {
+            "topic": slug,
+            "error": (
+                f"The playbook has no section(s) {', '.join(keys)} any more. "
+                f"Read the full document via the {PLAYBOOK_URI} resource."
+            ),
+        }
+    return {
+        "topic": slug,
+        "summary": summary,
+        "guidance": "\n\n---\n\n".join(parts),
+        "other_topics": [name for name in PLAYBOOK_TOPICS if name != slug],
+    }
 
 
 def prompt_aan_de_slag() -> str:
@@ -84,23 +238,26 @@ Help me de onverwerkte banktransacties wegwerken voor periode "{wanneer}"
 {GUARDRAILS}
 
 Werkwijze:
-1. Haal de onverwerkte mutaties op met list_financial_mutations
-   (filter state:unprocessed; per maand — period:"JJJJMM01..JJJJMMnn" — want een te ruime
-   periode geeft HTTP 400).
-2. Zoek per mutatie de logische tegenhanger:
-   - inkomend: een openstaande verkoopfactuur (get_financial_report("debtors", "this_month")
-     of list_sales_invoices state:open) met passend bedrag/kenmerk;
-   - uitgaand: een openstaande inkoopfactuur of bon (get_financial_report("creditors",
-     "this_month"), list_purchase_invoices), of anders een grootboekcategorie zoals bij eerdere, vergelijkbare
-     mutaties van dezelfde tegenpartij (kijk naar de historie op contra_account_number).
+1. Draai suggest_bank_mutation_matches (eventueel met period per maand —
+   period:"JJJJMM01..JJJJMMnn" — want een te ruime periode geeft HTTP 400). Die tool haalt de
+   onverwerkte mutaties op én zoekt er deterministisch de passende openstaande factuur bij:
+   referentie in de omschrijving, exact openstaand bedrag, IBAN van de tegenpartij en
+   contactnaam. Doe dat matchwerk niet zelf opnieuw met rapporten en factuurlijsten.
+2. Neem per mutatie de uitkomst over:
+   - suggestion "exact" of "strong": één voorstel met de meegeleverde evidence als onderbouwing;
+   - suggestion "ambiguous": meerdere kandidaten passen even goed (bijvoorbeeld dezelfde
+     klant met twee openstaande facturen van hetzelfde bedrag). Leg beide voor en vraag welke;
+     kies er nooit zelf één;
+   - suggestion "none": geen openstaande factuur past. Kijk hoe deze tegenpartij eerder is
+     geboekt (zelfde contra_account_number) en stel een grootboekcategorie voor.
 3. Presenteer per mutatie één voorstel met onderbouwing: koppelen aan factuur/document
    (booking_type SalesInvoice of Document) of direct aan een categorie (LedgerAccount).
    Twijfelgevallen zet je apart met wat er mist; die koppel je niet.
 4. Na akkoord per mutatie (of per expliciet goedgekeurd groepje):
-   prepare_link_bank_mutation_booking → link_bank_mutation_booking_from_approval.
+   prepare_link_bank_mutation_booking → execute_approved_action.
    Rapporteer per koppeling de verificatie (payments/ledger_account_bookings na afloop).
 5. Fout gekoppeld? Herstel met prepare_unlink_bank_mutation_booking →
-   unlink_bank_mutation_booking_from_approval.
+   execute_approved_action.
 6. Staat een reeks mutaties rechtstreeks op het verkeerde grootboek? Gebruik
    prepare_reclassify_bank_mutation_bookings met de exacte
    ledger_account_booking_id per mutatie. Die flow preflight de volledige batch,
@@ -131,7 +288,7 @@ Werkwijze:
    telkens met korte onderbouwing.
 4. Toon het voorstel als tabel (van → naar, effect op totaal = ongewijzigd).
 5. Voer na mijn akkoord batchgewijs door via prepare_reclassify_document_lines →
-   reclassify_document_lines_from_approval.
+   execute_approved_action.
 6. Verifieer de totalen en geef een eerlijke samenvatting: wat is verwerkt, wat is
    overgeslagen en waarom."""
 
@@ -153,7 +310,7 @@ Werkwijze:
    consistentie-checklist uit het playbook (grootboek, btw, incl/excl, omschrijving,
    aantal-notatie, periode, referentie).
 4. Stel per kwartaal de wijzigingen voor, wacht op akkoord en voer ze door via de
-   prepare_*/​*_from_approval-flow.
+   prepare_* → execute_approved_action-flow.
 5. Lever aan het eind een samenvatting per grootboek en een lijst van posten die nog
    menselijke/boekhouderscontrole verdienen."""
 
@@ -200,7 +357,8 @@ Leg mijn cijfers voor periode "{period}" uit in begrijpelijke taal.
 Dit is een leesopdracht — wijzig niets.
 
 Werkwijze:
-1. Haal get_profit_loss en get_balance_sheet op (en zo nodig get_general_ledger) voor deze
+1. Haal get_financial_report("profit_loss") en get_financial_report("balance_sheet") op
+   (en zo nodig "general_ledger") voor deze
    periode.
 2. Vat samen in mensentaal: omzet, de grootste kostenposten, het resultaat en opvallende
    verschuivingen. Noem de paar cijfers die er echt toe doen; vermijd een muur van getallen.
@@ -234,8 +392,7 @@ Werkwijze:
    administratie geen eerdere passende regel heeft.
 4. Toon de volledige preview: standen, kWh, tariefbron, bedragen, actie, verzenddatum,
    duplicaten en merge-waarschuwingen.
-5. Wacht op expliciet akkoord en voer daarna uit met
-   meter_usage_sales_invoices_from_approval.
+5. Wacht op expliciet akkoord en voer daarna uit met execute_approved_action.
 6. Rapporteer de automatische verificatie: totaal, status, factuurdatum en sent_at per klant."""
 
 

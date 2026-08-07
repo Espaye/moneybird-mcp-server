@@ -30,6 +30,13 @@ from .formatting import (
 SYNC_INDEX_BASENAME = ".moneybird_sync_index"
 LEGACY_SYNC_INDEX_PATH = Path(f"{SYNC_INDEX_BASENAME}.json")
 
+# Shape of the stored per-record documents. Incremental sync only rebuilds records
+# whose Moneybird ``version`` changed, so a change to what a record *contains*
+# would otherwise never reach records that did not themselves change. Bump this
+# whenever the search-record builders in ``formatting`` gain or lose a field; the
+# next sync then rebuilds from scratch instead of serving a mixed-shape index.
+RECORD_SCHEMA_VERSION = 2
+
 _SYNC_LOCKS: dict[str, threading.RLock] = {}
 _SYNC_LOCKS_GUARD = threading.Lock()
 
@@ -61,6 +68,7 @@ def _legacy_sync_index_candidates(administration_id: str | None) -> list[Path]:
 def ensure_sync_index_shape(index: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(index)
     normalized.setdefault("administration_id", None)
+    normalized.setdefault("record_schema_version", 1)
     normalized.setdefault("updated_at", None)
     normalized.setdefault("content_updated_at", normalized.get("updated_at"))
     normalized.setdefault("invoice_filter", "")
@@ -336,8 +344,14 @@ def _sync_search_index_data_locked(
     force_full: bool,
 ) -> dict[str, Any]:
     index = load_sync_index(client.administration_id)
-    if force_full or index.get("administration_id") != client.administration_id:
+    stale_schema = index.get("record_schema_version") != RECORD_SCHEMA_VERSION
+    if (
+        force_full
+        or stale_schema
+        or index.get("administration_id") != client.administration_id
+    ):
         index = ensure_sync_index_shape({"administration_id": client.administration_id})
+    index["record_schema_version"] = RECORD_SCHEMA_VERSION
 
     jobs = {
         "contacts": lambda: update_contact_sync_index(index, client),

@@ -46,8 +46,14 @@ class BuildConfigTests(unittest.TestCase):
     def test_console_script_defaults_to_stdio(self) -> None:
         config = build_config([])
         self.assertEqual(config.transport, "stdio")
-        self.assertEqual(config.tool_discovery, "search")
+        # Full catalogue by default: compact discovery only shrinks a prompt-cached
+        # tool list, while adding a search_tools/call_tool round trip to every task.
+        self.assertEqual(config.tool_discovery, "full")
         self.assertEqual(config.credential_mode, "local")
+
+    def test_compact_discovery_remains_selectable(self) -> None:
+        config = build_config(["--tool-discovery", "search"])
+        self.assertEqual(config.tool_discovery, "search")
 
     def test_legacy_entrypoint_transport_default_is_preserved(self) -> None:
         os.environ["MCP_AUTH_TOKEN"] = "sekrit"

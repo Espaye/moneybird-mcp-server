@@ -35,6 +35,19 @@ MAX_RETRY_DELAY_SECONDS = 60.0
 RETRYABLE_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 
+# Every state in which money is still owed, as one filter value. Moneybird
+# accepts pipe-separated state alternatives (verified live 2026-08-07:
+# `state:open|late` returns exactly the union of `state:open` and `state:late`),
+# so the whole unpaid set costs one request instead of one per state.
+#
+# The two vocabularies differ, and getting that wrong fails silently rather than
+# loudly: `state:open` on a purchase invoice is accepted and returns zero rows,
+# because an unpaid purchase invoice is `late` or `new`, never `open`. Only an
+# unknown state name is rejected outright (HTTP 400).
+UNPAID_SALES_INVOICE_STATES = "open|late|reminded|pending_payment"
+UNPAID_DOCUMENT_STATES = "open|late|new|pending_payment"
+
+
 # Statuses where Moneybird answered that it refused the request outright, so the
 # request it refused cannot have changed anything. A write that fails this way is
 # closed as failed rather than left unresolved.

@@ -1,16 +1,22 @@
 # Tool reference
 
-Moneybird MCP defaults to compact Tool Search. The client receives a small core surface and discovers additional tools only when needed.
+Moneybird MCP advertises its full tool catalogue by default. Tool definitions live in the
+client's cached prompt prefix, so listing them costs little per turn, while discovering them
+on demand costs an extra model round trip on every task.
 
-Use full discovery only for older clients:
+Compact Tool Search remains available for clients that cannot take the full list:
 
 ```bash
-moneybird-mcp --tool-discovery full
+moneybird-mcp --tool-discovery search
 ```
+
+In that mode the client receives a small core surface and finds the rest through
+`search_tools`. Note that its BM25 ranking indexes tool descriptions, which are largely
+English: Dutch phrasings rank poorly or not at all.
 
 ## Core discovery tools
 
-These stay visible without a search step:
+In compact mode these stay visible without a search step:
 
 - `get_server_status`
 - `list_administrations`
@@ -29,7 +35,6 @@ These stay visible without a search step:
 ### Contacts and reference data
 
 - `list_contacts`
-- `get_contact_by_customer_id`
 - `get_invoice_defaults_for_contact`
 - `list_products`
 - `list_tax_rates`
@@ -56,27 +61,49 @@ These stay visible without a search step:
 
 ### Purchases and documents
 
-- `list_purchase_invoices`
+- `list_purchase_documents` (kind: purchase_invoice, receipt, general_journal_document)
 - `get_purchase_invoice_by_reference`
-- `list_receipts`
-- `list_general_journal_documents`
 - `read_document_attachment`
 - `review_purchase_invoices`
 
 ### Banking and reports
 
 - `list_financial_mutations`
-- `get_profit_loss`
-- `get_balance_sheet`
-- `get_general_ledger`
+- `suggest_bank_mutation_matches` — for each unprocessed mutation, which open invoice it
+  most likely settles, with the evidence (reference in the bank description, exact open
+  amount, counterparty IBAN, contact name). Read-only; linking still goes through
+  `prepare_link_bank_mutation_booking`. A tie is reported as `ambiguous` rather than
+  resolved.
 - `get_financial_report`
 
 ### Search and API coverage
 
 - `sync_search_index`
-- `search_contacts`
 - `moneybird_request`
 - `list_administrations`
+
+### Guidance
+
+- `get_bookkeeping_guide(topic)` — the Dutch bookkeeping playbook, per topic (`btw`,
+  `btw_afwikkeling`, `bankmutaties`, `categoriseren`, `consistentie`, `achterstand`,
+  `prive_zakelijk`, `meterverbruik`, `sync_index`, `gouden_regels`, `cijfers_uitleggen`,
+  `grenzen`).
+- `list_bookkeeping_guide_topics`
+
+The same document is also the `moneybird://playbook/bookkeeping` resource. The tool exists
+because a resource is read by the client, not the model: Claude Desktop needs the user to
+attach it and ChatGPT connectors do not read arbitrary resources.
+
+## Rate limits
+
+Moneybird throttles **per IP address**: 150 requests per 5 minutes, and 50 per 5 minutes for
+`/reports/` endpoints. `get_server_status` reports the observed remaining budget per bucket.
+A 429 whose window outlasts the retry cap fails immediately, naming the bucket and when it
+frees up, rather than retrying into an exhausted window.
+
+Note that Moneybird's rate-limit headers do not follow the IETF RateLimit draft:
+`RateLimit-Remaining` is seconds until reset, `RateLimit-Reset` is an absolute Unix epoch,
+and the request count is in the undocumented `RateLimit-RequestsRemaining`.
 
 `moneybird_request` is a read-only JSON GET escape hatch over a finite allowlist generated from the vendored Moneybird OpenAPI routes. It does not permit arbitrary hosts, methods, binary downloads, or write requests.
 
@@ -100,7 +127,7 @@ The normal flow is:
 4. the server performs the action;
 5. action-specific checks record success, failure, partial progress, ambiguity, or verification failure.
 
-The generic executor delegates only to the exact action stored in the approval. Action-specific executors remain available in full discovery mode for compatibility, but compact discovery omits them from search results and never routes them through `call_tool`.
+The generic executor delegates only to the exact action stored in the approval. The former action-specific `*_from_approval` tools are no longer registered as MCP tools: every approved action now runs through the single `execute_approved_action` entry point, which is the one tool carrying the destructive annotation an MCP client actually acts on.
 
 Draft-invoice previews need a verifiable VAT rate to show exact totals. Each line may provide `tax_rate_id`; otherwise the server uses the selected product's tax and ledger defaults, then a previous invoice default for that contact. When none exists, preparation asks for `tax_rate_id` instead of guessing an accounting identifier.
 
