@@ -9,11 +9,19 @@ The checked-in `moneybird_api_paths.json` strips the optional `{format}` suffix 
 > through the generic `moneybird_request` escape hatch, **163** not exposed by this server.
 
 Legend: ✅ dedicated tool/flow · 🔎 reachable read-only via `moneybird_request` (no dedicated
-tool) · — not exposed (writes are only ever exposed through explicit `prepare_*` /
-`*_from_approval` pairs; unexposed writes cannot be triggered through this server at all).
+tool) · — not exposed (writes are only ever exposed as an explicit `prepare_*` preview
+followed by `execute_approved_action`; unexposed writes cannot be triggered through this
+server at all).
 
 Known API blind spot: **boekingsregels (bank/transaction rules) are not in the API at all** —
-they appear nowhere below because Moneybird does not publish endpoints for them.
+they appear nowhere below because Moneybird does not publish endpoints for them. The
+match *suggestions* Moneybird's own transaction screen shows are equally absent;
+`suggest_bank_mutation_matches` reconstructs them from open invoices instead.
+
+Rate limits apply to every endpoint below and are enforced **per IP address**: 150
+requests per 5 minutes, and 50 per 5 minutes for everything under `/reports/`. That
+per-IP scope is the reason a multi-tenant deployment cannot simply add tenants — see
+`docs/hosted_gateway_design.md`.
 
 ## Administrations
 
@@ -65,8 +73,8 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 | GET | `/contacts/{id}/additional_charges` | Get additional charges | 🔎 moneybird_request (generic GET) |
 | POST | `/contacts/{id}/additional_charges` | Create an additional charge to be invoiced at start of next period | — |
 | PATCH | `/contacts/{id}/archive` | Archive a contact | ✅ `prepare_archive_contact` |
-| GET | `/contacts/customer_id/{customer_id}` | Get contact by customer id | ✅ `get_contact_by_customer_id` |
-| GET | `/contacts/filter` | Filter contacts | ✅ `search_contacts (via local index)` |
+| GET | `/contacts/customer_id/{customer_id}` | Get contact by customer id | ✅ `list_contacts` (`customer_id`) |
+| GET | `/contacts/filter` | Filter contacts | ✅ `list_contacts` (`query`, via local index) |
 | GET | `/contacts/synchronization` | List all ids and versions | ✅ `sync_search_index` |
 | POST | `/contacts/synchronization` | Fetch contacts with given ids | ✅ `sync_search_index` |
 
@@ -111,7 +119,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 
 | Method | Endpoint | Summary | Server coverage |
 |---|---|---|---|
-| GET | `/documents/general_journal_documents` | Get general journal documents | ✅ `list_general_journal_documents` |
+| GET | `/documents/general_journal_documents` | Get general journal documents | ✅ `list_purchase_documents` (`kind=general_journal_document`) |
 | POST | `/documents/general_journal_documents` | Create a new general journal document | ✅ `prepare_create_general_journal_document` |
 | POST | `/documents/general_journal_documents/{general_journal_document_id}/notes` | Adds note to entity | — |
 | DELETE | `/documents/general_journal_documents/{general_journal_document_id}/notes/{id}` | Destroys note from entity | — |
@@ -128,7 +136,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 
 | Method | Endpoint | Summary | Server coverage |
 |---|---|---|---|
-| GET | `/documents/purchase_invoices` | Get purchase invoices | ✅ `list_purchase_invoices`, `get_purchase_invoice_by_reference` (`reference:` filter) |
+| GET | `/documents/purchase_invoices` | Get purchase invoices | ✅ `list_purchase_documents`, `get_purchase_invoice_by_reference` (`reference:` filter) |
 | POST | `/documents/purchase_invoices` | Create a new purchase invoice | — |
 | DELETE | `/documents/purchase_invoices/{id}` | Delete a purchase invoices | — |
 | GET | `/documents/purchase_invoices/{id}` | Get purchase invoice | ✅ `fetch("purchase_invoice:<id>")` |
@@ -148,7 +156,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 
 | Method | Endpoint | Summary | Server coverage |
 |---|---|---|---|
-| GET | `/documents/receipts` | List receipts | ✅ `list_receipts` |
+| GET | `/documents/receipts` | List receipts | ✅ `list_purchase_documents` (`kind=receipt`) |
 | POST | `/documents/receipts` | Create a new receipt | — |
 | DELETE | `/documents/receipts/{id}` | Delete a receipts | — |
 | GET | `/documents/receipts/{id}` | Get a receipt | ✅ `fetch("receipt:<id>")` |
@@ -239,7 +247,7 @@ they appear nowhere below because Moneybird does not publish endpoints for them.
 
 | Method | Endpoint | Summary | Server coverage |
 |---|---|---|---|
-| GET | `/financial_mutations` | List all financial mutations | ✅ `list_financial_mutations` |
+| GET | `/financial_mutations` | List all financial mutations | ✅ `list_financial_mutations`, `suggest_bank_mutation_matches` (unprocessed + candidate matching) |
 | GET | `/financial_mutations/{id}` | Get a financial mutation by id | ✅ `fetch("financial_mutation:<id>")` |
 | PATCH | `/financial_mutations/{id}/link_booking` | Links a financial mutation to a booking | ✅ `prepare_link_bank_mutation_booking` |
 | DELETE | `/financial_mutations/{id}/unlink_booking` | Unlinks a booking from a financial mutation | ✅ `prepare_unlink_bank_mutation_booking` |

@@ -5,11 +5,11 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
+from .. import reference_cache
 from ..capabilities import require_write_capability
 from ..config import (
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
-    WRITE_ANNOTATIONS,
     MoneybirdError,
 )
 from ..formatting import (
@@ -123,6 +123,13 @@ def _execute_create_ledger_account(client, payload: dict[str, Any]) -> dict[str,
         payload["ledger_account"],
         rgs_code=payload.get("rgs_code", ""),
     )
+    # The new account must be visible to the very next read, so drop the cached
+    # reference list immediately rather than waiting out its TTL. Verification
+    # below re-reads the record itself, not the cached collection. This is an
+    # optimisation, so it never depends on the client exposing an id.
+    reference_cache.invalidate_administration(
+        getattr(client, "administration_id", None)
+    )
     record_id = str(created.get("id") or "")
     if not record_id:
         raise MoneybirdError(
@@ -168,7 +175,9 @@ def _execute_create_ledger_account(client, payload: dict[str, Any]) -> dict[str,
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def create_ledger_account_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared ledger account creation."""
     client = ctx.get_client()
@@ -273,7 +282,9 @@ def _execute_create_general_journal(client, payload: dict[str, Any]) -> dict[str
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def create_general_journal_document_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared general journal creation."""
     client = ctx.get_client()
@@ -305,7 +316,9 @@ def prepare_reclassify_document_lines(
     return approval
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def reclassify_document_lines_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared document line reclassification."""
     client = ctx.get_client()
@@ -983,7 +996,9 @@ def _execute_vat_settlement(client, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def vat_settlement_journal_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared VAT settlement."""
     client = ctx.get_client()

@@ -10,7 +10,6 @@ from ..client import validate_moneybird_id
 from ..config import (
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
-    WRITE_ANNOTATIONS,
     MoneybirdError,
     MoneybirdHTTPError,
 )
@@ -831,10 +830,9 @@ def _completed_price_result(
     }
 
 
-@mcp.tool(
-    annotations=WRITE_ANNOTATIONS,
-    tags={"domain:products", "capability:execute", f"workflow:{WORKFLOW_ID}"},
-)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def bulk_update_product_prices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Execute and independently verify the exact product price batch only after explicit preview approval."""
     client = ctx.get_client()

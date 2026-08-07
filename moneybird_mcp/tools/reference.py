@@ -19,7 +19,7 @@ from ._registry import mcp
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_products(limit: Limit = 25, page: Page = 1) -> dict[str, Any]:
-    """Use this when you need Moneybird product defaults such as tax_rate_id and ledger_account_id."""
+    """List producten with their defaults (tax_rate_id, ledger_account_id, prijs)."""
     client = ctx.get_client()
     products = client.list_products(limit=limit, page=page)
     return {
@@ -42,7 +42,7 @@ def list_products(limit: Limit = 25, page: Page = 1) -> dict[str, Any]:
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_tax_rates() -> dict[str, Any]:
-    """Use this when you need valid Moneybird tax_rate_id values for invoice lines."""
+    """List btw-tarieven (tax rates) with the valid tax_rate_id values for invoice lines."""
     client = ctx.get_client()
     tax_rates = client.list_tax_rates()
     return {
@@ -71,7 +71,7 @@ def list_ledger_accounts() -> dict[str, Any]:
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_financial_accounts(limit: Limit = 25, page: Page = 1) -> dict[str, Any]:
-    """Use this when you need the available Moneybird bank, cash, or intermediary accounts."""
+    """List bankrekeningen, kasrekeningen and intermediary accounts (financiële rekeningen)."""
     client = ctx.get_client()
     financial_accounts = client.list_financial_accounts(limit=limit, page=page)
     return {

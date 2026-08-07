@@ -547,7 +547,11 @@ class GuidanceTests(unittest.TestCase):
             self.assertIn(guidance.PLAYBOOK_URI, text)
         for text in [renderers[0], renderers[1], renderers[3], renderers[4], renderers[5]]:
             self.assertIn("prepare_", text)
-            self.assertIn("_from_approval", text)
+            # Prompts must name the single annotated executor, not an
+            # action-specific *_from_approval tool: those are no longer
+            # registered, so naming one would send the model at a missing tool.
+            self.assertIn("execute_approved_action", text)
+            self.assertNotIn("_from_approval", text)
             self.assertIn("Verzin NOOIT", text)
 
     def test_register_guidance_registers_prompts_and_resource(self) -> None:
@@ -1682,12 +1686,12 @@ class ReportToolPresentationTests(unittest.TestCase):
                 }
             ]
 
-    def test_profit_loss_defaults_to_this_year_and_labels_ledger_rows(self):
+    def test_profit_loss_labels_ledger_rows(self):
         from moneybird_mcp.tools import reports
 
         client = self.FakeClient()
         with mock.patch.object(reports.ctx, "get_client", return_value=client):
-            result = reports.get_profit_loss()
+            result = reports.get_financial_report("profit_loss", period="this_year")
 
         row = result["report"]["sections"][0]["rows"][0]
         self.assertEqual(client.report_calls, [("profit_loss", "this_year")])
@@ -1700,10 +1704,23 @@ class ReportToolPresentationTests(unittest.TestCase):
 
         client = self.FakeClient()
         with mock.patch.object(reports.ctx, "get_client", return_value=client):
-            result = reports.get_balance_sheet(period="20260101..20260630")
+            result = reports.get_financial_report(
+                "balance_sheet", period="20260101..20260630"
+            )
 
         row = result["report"]["sections"][0]["rows"][0]
         self.assertEqual(row["ledger_account_name"], "Algemene kosten")
+
+    def test_general_ledger_is_not_ledger_joined(self):
+        # Only profit_loss and balance_sheet carry ledger_account_id rows worth
+        # labelling; joining the rest would fetch 43 KB of accounts for nothing.
+        from moneybird_mcp.tools import reports
+
+        client = self.FakeClient()
+        with mock.patch.object(reports.ctx, "get_client", return_value=client):
+            reports.get_financial_report("general_ledger", period="this_year")
+
+        self.assertEqual(client.report_calls, [("general_ledger", "this_year")])
 
 
 class ContactArchivePreviewTests(unittest.TestCase):

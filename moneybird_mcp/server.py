@@ -89,8 +89,9 @@ def build_config(
         choices=TOOL_DISCOVERY_MODES,
         default=None,
         help=(
-            "search (default: expose compact search_tools/call_tool discovery) "
-            "or full (expose every Moneybird tool up front). Overrides "
+            "full (default: expose every Moneybird tool up front) or search "
+            "(compact search_tools/call_tool discovery, for clients that cannot "
+            "take the full list; costs an extra round trip per task). Overrides "
             "MCP_TOOL_DISCOVERY."
         ),
     )
@@ -136,10 +137,18 @@ def build_config(
     host = args.host or os.environ.get("MCP_HOST", "127.0.0.1")
     port = args.port if args.port is not None else int(os.environ.get("MCP_PORT", "8000"))
     auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
+    # Default to the full catalogue. Compact discovery shrinks the tool list from
+    # ~84 KB to ~7 KB, but that list sits in the client's *cached* prompt prefix,
+    # so the saving is close to free anyway — while every task then pays an extra
+    # search_tools/call_tool round trip, and each search_tools answer is itself
+    # 6-12 KB of uncached output. BM25 ranking is also English-biased: Dutch
+    # phrasings like "meterstanden factureren" return nothing, and "betaling
+    # boeken op factuur" omits prepare_register_payment entirely. Compact mode
+    # stays available for clients that genuinely cannot take the full list.
     tool_discovery = (
         args.tool_discovery
         or os.environ.get("MCP_TOOL_DISCOVERY", "").strip().lower()
-        or "search"
+        or "full"
     )
     if tool_discovery not in TOOL_DISCOVERY_MODES:
         logger.error(

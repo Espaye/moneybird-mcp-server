@@ -1,12 +1,14 @@
 """Administration selection, generic GET escape hatch, and the local search index."""
 from __future__ import annotations
 
+import contextvars
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, Any
 
 from pydantic import Field
 
-from .. import __version__
+from .. import __version__, rate_budget, reference_cache
 from ..capabilities import capability_mode
 from ..client import normalize_generic_get_path, validate_moneybird_id
 from ..config import (
@@ -21,6 +23,7 @@ from ..credentials import (
 )
 from ..formatting import (
     api_url,
+    contact_search_record,
     contact_title,
     document_search_record,
     document_url,
@@ -30,12 +33,10 @@ from ..formatting import (
     general_journal_title,
     invoice_title,
     matches_query,
-    normalize_text,
     purchase_document_title,
+    sales_invoice_search_record,
+    search_hit,
     stringify_record,
-)
-from ..invoicing import (
-    find_contact_matches,
 )
 from ..search_fts import refresh_fts_index, search_fts
 from ..sync import (
@@ -107,6 +108,10 @@ def get_server_status(
             recent_tools=recent_tools,
             tenant_scope=tenant_scope_for_token(client.token),
         ),
+        # Moneybird throttles per IP address, so a task that suddenly slows down
+        # or fails is usually budget, not the server. Both views are counts only.
+        "rate_budget": rate_budget.snapshot(),
+        "reference_cache": reference_cache.cache_stats(),
     }
 
 
@@ -138,7 +143,11 @@ def search(
     query: Annotated[str, Field(description="Free-text search over the synced index: contacts, invoices, documents, and bank mutations.")],
     limit: Limit = 8,
 ) -> dict[str, Any]:
-    """Use this when you want ChatGPT to search Moneybird records in a connector-friendly way."""
+    """Zoek in de administratie: search contacts (contacten, klanten, leveranciers), sales
+    invoices (verkoopfacturen), purchase invoices (inkoopfacturen), receipts (bonnen),
+    memoriaalboekingen, and bank mutations (bankmutaties) by name, number, or amount.
+    Hits carry date, amount, state, and contact_id, so a follow-up fetch is usually
+    unnecessary."""
     client = ctx.get_client()
     # Administration-keyed files are not an authorization boundary. Revalidate
     # the active token/grant before touching JSON or FTS cache state.
@@ -185,13 +194,7 @@ def search(
             cached_records.extend(index[bucket]["records"].values())
         for record in cached_records:
             if matches_query(record.get("search_text", ""), query):
-                results.append(
-                    {
-                        "id": record["id"],
-                        "title": record["title"],
-                        "url": record["url"],
-                    }
-                )
+                results.append(search_hit(record))
         if results:
             return {
                 "results": results[:capped_limit],
@@ -206,103 +209,95 @@ def search(
     # break the whole search. Notably financial_mutations returns HTTP 400
     # ("too many ... use sync API") once an administration has many bank mutations;
     # in that case we skip it and tell the caller to build the sync index.
+    # These six scans are independent, so run them concurrently: serially they
+    # cost six full round trips (~2s), which is the entire latency of a search
+    # whenever no index is present. Bounded the same way as the sync feeds, and
+    # each scan still fails independently so one bad endpoint cannot break the
+    # whole search.
     scan_warnings: list[str] = []
+    scans = {
+        "contacts": lambda: client.list_contacts(limit=100, page=1),
+        "sales_invoices": lambda: client.list_sales_invoices(
+            limit=100, page=1, state="all"
+        ),
+        "purchase_invoices": lambda: client.list_documents(
+            "purchase_invoice", limit=100, page=1, period="this_year"
+        ),
+        "receipts": lambda: client.list_documents(
+            "receipt", limit=100, page=1, period="this_year"
+        ),
+        "general_journal_documents": lambda: client.list_documents(
+            "general_journal_document", limit=100, page=1, period="this_year"
+        ),
+        "financial_mutations": lambda: client.list_financial_mutations(
+            limit=100, page=1, period="this_year"
+        ),
+    }
 
-    def _safe_scan(label: str, fetch) -> list[dict[str, Any]]:
+    def _safe_scan(label: str, fetch) -> tuple[list[dict[str, Any]], str]:
+        # Returns its own warning rather than appending to shared state, so
+        # nothing is mutated across threads.
         try:
-            return fetch()
+            return fetch(), ""
         except MoneybirdError as exc:
-            scan_warnings.append(f"{label} skipped: {exc}")
-            return []
+            return [], f"{label} skipped: {exc}"
 
-    contacts = _safe_scan("contacts", lambda: client.list_contacts(limit=100, page=1))
-    invoices = _safe_scan(
-        "sales_invoices",
-        lambda: client.list_sales_invoices(limit=100, page=1, state="all"),
+    scanned: dict[str, list[dict[str, Any]]] = {}
+    with ThreadPoolExecutor(
+        max_workers=3,
+        thread_name_prefix="moneybird-search",
+    ) as executor:
+        futures = {
+            label: executor.submit(
+                contextvars.copy_context().run,
+                _safe_scan,
+                label,
+                fetch,
+            )
+            for label, fetch in scans.items()
+        }
+        for label, future in futures.items():
+            scanned[label], warning = future.result()
+            if warning:
+                scan_warnings.append(warning)
+
+    contacts = scanned["contacts"]
+    invoices = scanned["sales_invoices"]
+    purchase_invoices = scanned["purchase_invoices"]
+    receipts = scanned["receipts"]
+    journal_documents = scanned["general_journal_documents"]
+    financial_mutations = scanned["financial_mutations"]
+
+    # Build the same search records the sync index stores, so a live-fallback hit
+    # is shaped and matched exactly like an indexed one.
+    live_records = (
+        [contact_search_record(item, client.administration_id) for item in contacts]
+        + [
+            sales_invoice_search_record(item, client.administration_id)
+            for item in invoices
+        ]
+        + [
+            document_search_record("purchase_invoice", item, client.administration_id)
+            for item in purchase_invoices
+        ]
+        + [
+            document_search_record("receipt", item, client.administration_id)
+            for item in receipts
+        ]
+        + [
+            general_journal_search_record(item, client.administration_id)
+            for item in journal_documents
+        ]
+        + [
+            financial_mutation_search_record(item, client.administration_id)
+            for item in financial_mutations
+        ]
     )
-    purchase_invoices = _safe_scan(
-        "purchase_invoices",
-        lambda: client.list_documents("purchase_invoice", limit=100, page=1, period="this_year"),
+    results.extend(
+        search_hit(record)
+        for record in live_records
+        if matches_query(record.get("search_text", ""), query)
     )
-    receipts = _safe_scan(
-        "receipts",
-        lambda: client.list_documents("receipt", limit=100, page=1, period="this_year"),
-    )
-    journal_documents = _safe_scan(
-        "general_journal_documents",
-        lambda: client.list_documents("general_journal_document", limit=100, page=1, period="this_year"),
-    )
-    financial_mutations = _safe_scan(
-        "financial_mutations",
-        lambda: client.list_financial_mutations(limit=100, page=1, period="this_year"),
-    )
-
-    for contact in contacts:
-        text = normalize_text(
-            contact.get("company_name"),
-            contact.get("firstname"),
-            contact.get("lastname"),
-            contact.get("email"),
-            contact.get("customer_id"),
-        )
-        if matches_query(text, query):
-            results.append(
-                {
-                    "id": f'contact:{contact.get("id")}',
-                    "title": contact_title(contact),
-                    "url": api_url("contacts", str(contact.get("id")), client.administration_id),
-                }
-            )
-
-    for invoice in invoices:
-        text = normalize_text(
-            invoice.get("invoice_id"),
-            invoice.get("reference"),
-            invoice.get("state"),
-            invoice.get("contact", {}).get("company_name"),
-            invoice.get("contact", {}).get("firstname"),
-            invoice.get("contact", {}).get("lastname"),
-        )
-        if matches_query(text, query):
-            results.append(
-                {
-                    "id": f'sales_invoice:{invoice.get("id")}',
-                    "title": invoice_title(invoice),
-                    "url": api_url(
-                        "sales_invoices",
-                        str(invoice.get("id")),
-                        client.administration_id,
-                    ),
-                }
-            )
-
-    for document in purchase_invoices:
-        record = document_search_record("purchase_invoice", document, client.administration_id)
-        if matches_query(record.get("search_text", ""), query):
-            results.append(
-                {"id": record["id"], "title": record["title"], "url": record["url"]}
-            )
-
-    for document in receipts:
-        record = document_search_record("receipt", document, client.administration_id)
-        if matches_query(record.get("search_text", ""), query):
-            results.append(
-                {"id": record["id"], "title": record["title"], "url": record["url"]}
-            )
-
-    for document in journal_documents:
-        record = general_journal_search_record(document, client.administration_id)
-        if matches_query(record.get("search_text", ""), query):
-            results.append(
-                {"id": record["id"], "title": record["title"], "url": record["url"]}
-            )
-
-    for mutation in financial_mutations:
-        record = financial_mutation_search_record(mutation, client.administration_id)
-        if matches_query(record.get("search_text", ""), query):
-            results.append(
-                {"id": record["id"], "title": record["title"], "url": record["url"]}
-            )
 
     response: dict[str, Any] = {
         "results": results[: max(1, min(limit, 20))],
@@ -493,15 +488,5 @@ def sync_search_index(
         financial_mutation_filter=financial_mutation_filter,
         force_full=force_full,
     )
-
-
-@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
-def search_contacts(
-    query: Annotated[str, Field(description="Partial customer id, email, phone, city, or company/person name.")],
-    limit: Limit = 10,
-) -> dict[str, Any]:
-    """Use this when you need a contact lookup by partial customer id, email, phone, city, or company/person name."""
-    client = ctx.get_client()
-    return {"contacts": find_contact_matches(client, query=query, limit=limit)}
 
 

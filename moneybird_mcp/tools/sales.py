@@ -8,7 +8,6 @@ from pydantic import Field
 from ..config import (
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
-    WRITE_ANNOTATIONS,
     MoneybirdError,
 )
 from ..formatting import (
@@ -364,7 +363,9 @@ def _execute_create_sales_invoice_draft(client, payload: dict[str, Any]) -> dict
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def create_sales_invoice_draft_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared draft invoice creation."""
     client = ctx.get_client()
@@ -561,7 +562,9 @@ def _execute_send_sales_invoice(client, payload: dict[str, Any]) -> dict[str, An
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def send_sales_invoice_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared invoice send action."""
     client = ctx.get_client()
@@ -682,7 +685,9 @@ def _execute_workflow_state_change(
     )
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def pause_sales_invoice_workflow_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed pausing the invoice workflow."""
     client = ctx.get_client()
@@ -714,7 +719,9 @@ def prepare_resume_sales_invoice_workflow(sales_invoice_id: SalesInvoiceId) -> d
     )
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def resume_sales_invoice_workflow_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed resuming the invoice workflow."""
     client = ctx.get_client()
@@ -880,7 +887,9 @@ def _execute_create_credit_invoice(client, payload: dict[str, Any]) -> dict[str,
     }
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def create_credit_invoice_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared credit invoice."""
     client = ctx.get_client()

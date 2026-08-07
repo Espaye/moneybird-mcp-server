@@ -5,6 +5,102 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+### Added
+
+- `suggest_bank_mutation_matches`: for each unprocessed bank mutation, the open sales
+  invoice, purchase invoice, or receipt it most likely settles. Moneybird's own
+  transaction screen suggests matches and auto-links at full certainty, but nothing
+  in the API exposes that, so this reproduces it deterministically — invoice reference
+  found in the bank description, exact open amount, counterparty IBAN, contact name —
+  and returns every candidate with the reasons that fired. Confidence is a tier
+  (`exact`/`strong`/`possible`), never a score, and an equally-good runner-up is
+  reported as `ambiguous` rather than broken by an arbitrary tie-break. It writes
+  nothing: linking still goes through `prepare_link_bank_mutation_booking` and explicit
+  approval. Replayed against real already-linked mutations it picked the correct invoice
+  top-1 in every decidable case and flagged the one genuine tie (a repeating monthly
+  invoice of identical amount, paid without a reference) instead of guessing.
+- `get_bookkeeping_guide(topic)` and `list_bookkeeping_guide_topics`, making the Dutch
+  bookkeeping playbook model-callable per topic. It was published only as an MCP
+  resource, which is read by the *client*: Claude Desktop requires the user to attach it
+  by hand and ChatGPT connectors do not read arbitrary resources at all, so the deepest
+  domain knowledge in this server was unreachable in the two clients that matter most.
+  The resource remains for clients that do use resources.
+- `get_server_status` now reports the observed Moneybird rate-limit budget per bucket and
+  the reference-cache state, so a task that slows down or fails can be attributed to the
+  per-IP throttle rather than to the server.
+
+### Removed
+
+**Breaking.** The advertised tool catalogue goes from 85 tools / 84,399 bytes to
+**57 tools / 69,436 bytes**, so the full list is comfortably shippable to every client
+and no discovery layer is needed in front of it.
+
+- **The 24 action-specific `*_from_approval` tools are no longer registered as MCP
+  tools.** `execute_approved_action` already dispatched all of them, and it is the one
+  tool carrying the destructive annotation an MCP client actually enforces its
+  confirmation policy on. The Python functions remain — `tools/approvals.py` dispatches
+  to them and scripts and tests call them directly — so only the MCP surface changed.
+  Callers naming one of these tools must switch to
+  `execute_approved_action(approval_id)`.
+- `get_profit_loss`, `get_balance_sheet`, and `get_general_ledger` — strict subsets of
+  `get_financial_report(report_name, period)`.
+- `list_receipts` and `list_general_journal_documents` — folded into
+  `list_purchase_documents(kind=...)`, which replaces `list_purchase_invoices` and takes
+  `purchase_invoice`, `receipt`, or `general_journal_document`.
+- `search_contacts` and `get_contact_by_customer_id` — folded into `list_contacts`,
+  which now takes an optional `query` (partial name, e-mail, phone, city, customer id)
+  or an exact `customer_id`, and still pages through everything when given neither.
+
+### Changed
+
+- **The runnable server now defaults to `--tool-discovery full` instead of `search`.**
+  Compact discovery shrinks the advertised catalogue to ~7 KB, but that catalogue lives
+  in the client's *cached* prompt prefix, so the saving is nearly free anyway — while
+  every task pays an extra `search_tools`/`call_tool` round trip, and each `search_tools`
+  answer is itself 6–12 KB of uncached output. With the catalogue now at 57 tools the
+  full list is small enough that the trade never pays off. BM25 ranking is also
+  English-biased: `meterstanden factureren` returned no tools at all, and `betaling boeken
+  op factuur` omitted `prepare_register_payment` entirely. Compact mode remains available
+  via `--tool-discovery search` / `MCP_TOOL_DISCOVERY=search` for clients that cannot take
+  the full list.
+- Ledger accounts, tax rates, and the administration-membership revalidation are cached
+  in-process for a short TTL, keyed on a salted digest of the access token plus the
+  administration id, and disabled entirely in `hosted_request_only` mode. Measured on a
+  live administration: a repeat `list_ledger_accounts` went from ~390–630 ms (43 KB on the
+  wire) to ~0 ms, and a repeat `search` from ~107 ms to ~5 ms, because the membership
+  round trip — not the local index, which costs ~6 ms — was dominating it. Tune with
+  `MONEYBIRD_REFERENCE_CACHE_SECONDS` / `MONEYBIRD_MEMBERSHIP_CACHE_SECONDS`; `0` disables.
+- `search` hits now carry `date`, `amount`, `state`, and `contact_id`, so choosing between
+  results usually no longer needs a `fetch` per candidate (a single sales invoice returns
+  ~9.7 KB of raw record). The sync index and its FTS cache gained matching schema versions
+  and rebuild themselves when the record shape changes.
+- `review_purchase_invoices` and reference-based reconciliation resolve a supplier's
+  history from the local sync index, which now stores each document's `contact_id`. The
+  previous path fetched every purchase document in the administration in batches of 100
+  and filtered client-side; its early exit compared against the *match* limit, so on any
+  normal administration it never fired. The scan remains as a fallback, now reading
+  newest-first and stopping honestly when the rate budget runs out.
+- The live-fallback `search` runs its six source scans concurrently (bounded at three
+  workers, each still failing independently) instead of serially.
+- A `429` whose window outlasts the retry cap now fails immediately with the bucket, the
+  documented limit, and when it frees up, instead of silently burning the remaining
+  retries against a five-minute window and spending more of an exhausted budget.
+
+### Fixed
+
+- `suggest_bank_mutation_matches` reads Moneybird's rate-limit headers correctly.
+  They do not follow the IETF RateLimit draft: `RateLimit-Remaining` is *seconds until
+  reset* (it tracks `RateLimit-Reset` minus now, and exceeds `RateLimit-Limit`, which a
+  request count cannot), `RateLimit-Reset` is an absolute Unix epoch rather than a delay,
+  and the actual request count is in the undocumented `RateLimit-RequestsRemaining`.
+  A `remaining` value above `limit` is now discarded rather than believed.
+- Unpaid documents are selected with the correct per-type state vocabulary.
+  `state:open` is accepted on a purchase invoice and returns zero rows, because an unpaid
+  purchase invoice is `late` or `new`, never `open` — a silent empty result. Moneybird
+  accepts pipe-separated alternatives, so the whole unpaid set is now one request
+  (`state:open|late|reminded|pending_payment` for sales invoices,
+  `state:open|late|new|pending_payment` for documents).
+
 ## 0.6.1 — 2026-08-05
 
 ### Added

@@ -83,14 +83,16 @@ moneybird-mcp --help
 ## Wat de server kan
 
 - Contacten, verkoopfacturen, inkoopfacturen, bonnen, memoriaalboekingen en bankmutaties doorzoeken.
+- Onverwerkte banktransacties koppelen aan de openstaande facturen die ze betalen, met per kandidaat de onderbouwing, en het eerlijk melden wanneer twee kandidaten even goed passen.
 - Moneybird-rapporten lezen, waaronder winst-en-verliesrekening, balans, grootboek, btw-, debiteuren- en crediteurenrapporten.
 - Inkoopfacturen, factuurverzendinstellingen, bankmutaties en boekhoudkundige inconsistenties controleren.
 - Productgegevens controleren en beveiligde bulkprijswijzigingen met exacte decimale voorbeelden berekenen.
 - PDF-bijlagen lokaal lezen wanneer de optionele PDF-afhankelijkheid is geïnstalleerd.
 - Een lokale zoekindex bouwen voor snellere gerangschikte zoekresultaten.
+- Het boekhoud-playbook per onderwerp lezen (btw, btw-afwikkeling, bankmutaties, categoriseren, consistentie) als tool, niet alleen als MCP-resource.
 - Beveiligde voorbeelden van schrijfacties voorbereiden wanneer schrijfacties expliciet zijn ingeschakeld.
 
-De server gebruikt standaard compacte Tool Search. Daardoor hoeft een MCP-client niet bij het starten elk toolschema te laden. Bekijk het [tooloverzicht](docs/tool-reference.md) en de [dekking van de Moneybird API](docs/moneybird_api_coverage.md).
+De server biedt standaard de volledige toolcatalogus aan: toolschema's staan in de gecachete promptprefix van de client, dus ze opsommen is goedkoop, terwijl ze pas op aanvraag ontdekken elke taak een extra modelronde kost. Clients die de volledige lijst niet aankunnen draaien `--tool-discovery search` voor compacte Tool Search. Bekijk het [tooloverzicht](docs/tool-reference.md) en de [dekking van de Moneybird API](docs/moneybird_api_coverage.md).
 
 Gebruik `list_supported_workflows` om de kleine set uitkomsten te vinden die van begin tot eind geïntegreerd en getest zijn. De gegenereerde [workflowcatalogus](docs/workflow-catalogue.md) vermeldt risico, modus, versie, voorwaarden, verificatie en beperkingen. De producttools voeren zelf hun concrete administratie- en recordpreflight uit.
 

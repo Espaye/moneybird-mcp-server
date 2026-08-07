@@ -37,13 +37,17 @@ class LiteralSyncTests(unittest.TestCase):
         )
 
 
+def mcp_module():
+    from moneybird_mcp.tools import mcp
+
+    return mcp
+
+
 class ToolSchemaTests(unittest.TestCase):
     """The annotations must actually surface in the generated MCP schemas."""
 
     def _tool_schema(self, name: str) -> dict:
-        from moneybird_mcp.tools import mcp
-
-        return asyncio.run(mcp.get_tool(name)).parameters
+        return asyncio.run(mcp_module().get_tool(name)).parameters
 
     def test_report_tool_exposes_enum_and_descriptions(self) -> None:
         schema = self._tool_schema("get_financial_report")["properties"]
@@ -51,17 +55,37 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertIn("this_month", schema["period"]["description"])
         self.assertEqual(schema["page"]["minimum"], 0)
 
-    def test_report_periods_have_safe_defaults(self) -> None:
-        profit_loss = self._tool_schema("get_profit_loss")
-        balance_sheet = self._tool_schema("get_balance_sheet")
-        general_ledger = self._tool_schema("get_general_ledger")
+    def test_report_period_has_a_safe_default(self) -> None:
         generic = self._tool_schema("get_financial_report")
-
-        for schema in (profit_loss, balance_sheet, general_ledger):
-            self.assertNotIn("period", schema.get("required", []))
-            self.assertEqual(schema["properties"]["period"]["default"], "this_year")
         self.assertNotIn("period", generic.get("required", []))
         self.assertEqual(generic["properties"]["period"]["default"], "this_month")
+
+    def test_superseded_report_tools_are_gone(self) -> None:
+        # get_profit_loss / get_balance_sheet / get_general_ledger were strict
+        # subsets of get_financial_report and cost catalogue bytes for nothing.
+        for name in ("get_profit_loss", "get_balance_sheet", "get_general_ledger"):
+            self.assertIsNone(asyncio.run(mcp_module().get_tool(name)), name)
+
+    def test_superseded_lookup_tools_are_gone(self) -> None:
+        for name in ("list_receipts", "list_general_journal_documents",
+                     "search_contacts", "get_contact_by_customer_id"):
+            self.assertIsNone(asyncio.run(mcp_module().get_tool(name)), name)
+
+    def test_no_action_specific_executor_is_registered(self) -> None:
+        # Every approved action runs through execute_approved_action, which is the
+        # one tool carrying the destructive annotation the client acts on.
+        tools = asyncio.run(mcp_module().list_tools())
+        self.assertEqual(
+            [tool.name for tool in tools if tool.name.endswith("_from_approval")], []
+        )
+        self.assertIsNotNone(asyncio.run(mcp_module().get_tool("execute_approved_action")))
+
+    def test_document_list_tool_exposes_its_kind_enum(self) -> None:
+        schema = self._tool_schema("list_purchase_documents")["properties"]
+        self.assertEqual(
+            set(schema["kind"]["enum"]),
+            {"purchase_invoice", "receipt", "general_journal_document"},
+        )
 
     def test_register_payment_exposes_document_type_enum(self) -> None:
         schema = self._tool_schema("prepare_register_payment")["properties"]
@@ -122,7 +146,10 @@ class ToolSchemaTests(unittest.TestCase):
         from moneybird_mcp.tools import mcp
 
         tools = asyncio.run(mcp.list_tools())
-        self.assertGreater(len(tools), 60)
+        # Deliberately bounded: the catalogue lives in the client's prompt, and the
+        # fix for "too many tools" is fewer tools, not a search layer in front.
+        self.assertGreater(len(tools), 45)
+        self.assertLess(len(tools), 70)
 
 
 if __name__ == "__main__":

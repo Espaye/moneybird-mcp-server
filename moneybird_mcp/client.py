@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 
+from . import rate_budget, reference_cache
 from .attachments import DEFAULT_MAX_ATTACHMENT_BYTES
 from .config import (
     BASE_URL,
@@ -729,6 +730,7 @@ class MoneybirdClient:
                 )
                 response_status = response.status_code
                 payload = response.text
+                rate_budget.record_response_headers(operation, response.headers)
                 record_api_call(
                     method=method,
                     operation=operation,
@@ -746,6 +748,29 @@ class MoneybirdClient:
                         # execution as a whole applied nothing.
                         record_applied_write()
                     return json.loads(payload) if payload else None
+                if response_status == 429:
+                    # Moneybird's window is 5 minutes, but a single retry sleep is
+                    # capped at 60s. Silently burning the remaining attempts
+                    # against a window that cannot have reset yet just delays an
+                    # error by minutes and spends more of the exhausted budget.
+                    # Say what is exhausted and when it frees up instead.
+                    wait = _parse_retry_after(
+                        response.headers.get("Retry-After") or ""
+                    )
+                    if wait is None:
+                        wait = rate_budget.reset_seconds(operation)
+                    if wait is not None and wait > MAX_RETRY_DELAY_SECONDS:
+                        bucket = rate_budget.bucket_for_operation(operation)
+                        documented = rate_budget.DOCUMENTED_LIMITS[bucket]
+                        raise MoneybirdHTTPError(
+                            f"Moneybird rate limit reached for {bucket} requests "
+                            f"({documented['requests']} per "
+                            f"{documented['window_seconds'] // 60} minutes, per IP "
+                            f"address). Retry in about {int(wait)} seconds; the "
+                            "request was not processed.",
+                            status_code=response_status,
+                            reported=parse_reported_error(payload),
+                        )
                 if (
                     retry_safe
                     and attempt < DEFAULT_RETRY_ATTEMPTS
@@ -831,14 +856,30 @@ class MoneybirdClient:
         """Revalidate token membership before reading administration-scoped cache.
 
         A caller-selected administration id is not proof that this token may access
-        it. This deliberately performs a live root request each time a durable
-        financial cache is about to be used, bounding revocation/membership removal
-        to the availability of Moneybird's administration listing.
+        it, so this checks membership against Moneybird's administration listing
+        before a durable financial cache is opened.
+
+        The positive result is held for ``membership_ttl_seconds`` (60s by default,
+        0 to disable, never in hosted request mode). That bounds revocation
+        latency to a minute instead of to a single call, and removes a measured
+        ~50 ms round trip from every repeat ``search`` — where it otherwise
+        dominated: the local index lookup itself costs ~6 ms. A refusal is never
+        cached, so a genuinely lost membership fails closed on the next call.
         """
         if self.administration_id is None:
             raise MoneybirdError(
                 "An administration id is required before accessing cached data."
             )
+        administration = reference_cache.cached_read(
+            token=self.token,
+            administration_id=self.administration_id,
+            resource="administration_membership",
+            ttl_seconds=reference_cache.membership_ttl_seconds(),
+            loader=self._resolve_current_administration_access,
+        )
+        return administration
+
+    def _resolve_current_administration_access(self) -> dict[str, Any]:
         administrations = self.list_administrations()
         for administration in administrations:
             candidate = administration.get("id")
@@ -1110,15 +1151,39 @@ class MoneybirdClient:
         )
 
     def list_tax_rates(self) -> list[dict[str, Any]]:
-        return self._request(
-            "GET",
-            f"/{self.administration_id}/tax_rates.json",
+        """Tax rates, cached per token/administration for a short TTL.
+
+        Read by nearly every preview and reclassification, and changed a handful
+        of times a year. See :mod:`moneybird_mcp.reference_cache` for the key and
+        the modes in which caching is disabled.
+        """
+        return reference_cache.cached_read(
+            token=self.token,
+            administration_id=self.administration_id,
+            resource="tax_rates",
+            ttl_seconds=reference_cache.reference_ttl_seconds(),
+            loader=lambda: self._request(
+                "GET",
+                f"/{self.administration_id}/tax_rates.json",
+            ),
         )
 
     def list_ledger_accounts(self) -> list[dict[str, Any]]:
-        return self._request(
-            "GET",
-            f"/{self.administration_id}/ledger_accounts.json",
+        """Ledger accounts, cached per token/administration for a short TTL.
+
+        The heaviest of the repeat reference reads: measured at ~390 ms and 43 KB
+        for 75 accounts, and resolved by every ``prepare_*``, every categorisation
+        and both ledger-labelled reports.
+        """
+        return reference_cache.cached_read(
+            token=self.token,
+            administration_id=self.administration_id,
+            resource="ledger_accounts",
+            ttl_seconds=reference_cache.reference_ttl_seconds(),
+            loader=lambda: self._request(
+                "GET",
+                f"/{self.administration_id}/ledger_accounts.json",
+            ),
         )
 
     def get_ledger_account(self, ledger_account_id: str) -> dict[str, Any]:

@@ -233,6 +233,50 @@ def monetary_text(value: Any) -> str:
 
 
 
+def record_contact_id(record: dict[str, Any]) -> str:
+    """The contact a document or invoice belongs to, however it is nested."""
+    return str(
+        (record.get("contact") or {}).get("id")
+        or record.get("contact_id")
+        or ""
+    )
+
+
+def record_facets(record: dict[str, Any]) -> dict[str, str]:
+    """The few fields a caller almost always needs next after a search hit.
+
+    A bare id/title/url hit forces a follow-up ``fetch`` per result just to learn
+    the amount or the state, and ``fetch`` returns the whole raw record (~9.7 KB
+    for one sales invoice). Carrying these four cheap fields on the hit itself
+    removes that round trip for the common "which of these is the one?" question.
+    They are also what makes the index answerable by contact without a scan.
+    """
+    return {
+        "contact_id": record_contact_id(record),
+        "date": str(record.get("invoice_date") or record.get("date") or ""),
+        "amount": str(record.get("total_price_incl_tax") or ""),
+        "state": str(record.get("state") or ""),
+    }
+
+
+def search_hit(record: dict[str, Any]) -> dict[str, Any]:
+    """Project a stored search record onto the result shape returned to callers.
+
+    Carries the facets (see :func:`record_facets`) but never ``search_text``,
+    which is a normalised match blob and not useful to a reader.
+    """
+    hit = {
+        "id": record.get("id"),
+        "title": record.get("title"),
+        "url": record.get("url"),
+    }
+    for key in ("contact_id", "date", "amount", "state"):
+        value = record.get(key)
+        if value:
+            hit[key] = value
+    return hit
+
+
 def document_search_record(kind: str, document: dict[str, Any], administration_id: str | None) -> dict[str, Any]:
     config = document_kind_config(kind)
     document_id = str(document.get("id"))
@@ -240,6 +284,7 @@ def document_search_record(kind: str, document: dict[str, Any], administration_i
         "id": f"{config['id_prefix']}:{document_id}",
         "title": purchase_document_title(kind, document),
         "url": document_url(kind, document_id, administration_id),
+        **record_facets(document),
         "search_text": normalize_text(
             document.get("reference"),
             document.get("entry_number"),
@@ -260,6 +305,7 @@ def general_journal_search_record(document: dict[str, Any], administration_id: s
         "id": f"general_journal_document:{document_id}",
         "title": general_journal_title(document),
         "url": document_url("general_journal_document", document_id, administration_id),
+        **record_facets(document),
         "search_text": normalize_text(
             document.get("reference"),
             document.get("date"),
@@ -276,6 +322,11 @@ def financial_mutation_search_record(mutation: dict[str, Any], administration_id
         "id": f"financial_mutation:{mutation_id}",
         "title": financial_mutation_title(mutation),
         "url": api_url("financial_mutations", mutation_id, administration_id),
+        # A mutation has no contact; amount is its own field rather than a total.
+        "contact_id": "",
+        "date": str(mutation.get("date") or ""),
+        "amount": str(mutation.get("amount") or ""),
+        "state": str(mutation.get("state") or ""),
         "search_text": normalize_text(
             mutation.get("date"),
             mutation.get("amount"),
@@ -440,6 +491,11 @@ def contact_search_record(
         "kind": "contact",
         "title": contact_title(contact),
         "url": api_url("contacts", record_id, administration_id),
+        # A contact is its own counterparty; the remaining facets do not apply.
+        "contact_id": record_id,
+        "date": "",
+        "amount": "",
+        "state": "",
         "search_text": normalize_text(
             contact.get("company_name"),
             contact.get("firstname"),
@@ -465,6 +521,7 @@ def sales_invoice_search_record(
         "kind": "sales_invoice",
         "title": invoice_title(invoice),
         "url": api_url("sales_invoices", record_id, administration_id),
+        **record_facets(invoice),
         "search_text": normalize_text(
             invoice.get("invoice_id"),
             invoice.get("reference"),

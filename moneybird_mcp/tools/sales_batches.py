@@ -8,7 +8,6 @@ from pydantic import Field
 from ..capabilities import require_write_capability
 from ..config import (
     PREPARE_ANNOTATIONS,
-    WRITE_ANNOTATIONS,
     MoneybirdError,
 )
 from ..formatting import (
@@ -140,7 +139,9 @@ def prepare_batch_create_sales_invoices(
     )
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared batch invoice creation."""
     client = ctx.get_client()
@@ -507,7 +508,9 @@ def prepare_batch_update_sales_invoices(
     return approval
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def batch_update_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Use this only after the user has explicitly confirmed the prepared batch invoice update."""
     client = ctx.get_client()
@@ -771,7 +774,9 @@ def prepare_batch_schedule_sales_invoices(
     return approval
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def batch_schedule_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Schedule a prepared invoice batch and verify every resulting invoice."""
     client = ctx.get_client()
@@ -1021,7 +1026,9 @@ def prepare_meter_usage_sales_invoices(
     return approval
 
 
-@mcp.tool(annotations=WRITE_ANNOTATIONS)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def meter_usage_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
     """Execute an approved metered-usage run and return automatic verification."""
     return batch_create_sales_invoices_from_approval(approval_id)

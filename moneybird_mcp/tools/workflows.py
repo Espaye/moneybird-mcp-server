@@ -9,7 +9,6 @@ from pydantic import Field
 from ..capabilities import require_write_capability
 from ..config import (
     PREPARE_ANNOTATIONS,
-    WRITE_ANNOTATIONS,
     MoneybirdError,
 )
 from ..formatting import duplicate_fingerprint, iso_now
@@ -253,10 +252,9 @@ def _preflight_workflow_children(
             )
 
 
-@mcp.tool(
-    annotations=WRITE_ANNOTATIONS,
-    tags={"domain:workflow", "capability:execute"},
-)
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point. Kept as a Python function because
+# tools/approvals.py dispatches to it and scripts/tests call it directly.
 def bookkeeping_correction_batch_from_approval(
     approval_id: ApprovalId,
 ) -> dict[str, Any]:
