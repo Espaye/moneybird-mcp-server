@@ -4,6 +4,10 @@ Status: **the repository contains an M1 loopback demo, not a production hosted
 service.** Do not expose `gateway/` to the internet or treat it as a supported
 multi-user deployment.
 
+The accepted M2 production boundary and first vertical slice are recorded in
+[M2 architecture decisions](m2_architecture_decisions.md). That decision does not
+promote or modify this demo.
+
 The local PyPI and `.mcpb` distributions remain the supported path. A future hosted
 product would need a separate identity, authorization, storage, and operations layer.
 
@@ -99,10 +103,14 @@ approval token as cross-tenant authorization.
    administration choice, revocation/deletion, TLS/proxy policy, abuse controls, and
    operational recovery. An invite-only read-only alpha is acceptable only after
    those controls are implemented and reviewed.
-4. **M3 (not designed):** public product concerns such as billing and support. Hosted
-   writes remain out of scope until a separate authorization and trusted human
-   confirmation design exists.
+4. **M3 (not designed):** an AI-agent transport may be layered only through the
+   proven M2 tenant/credential boundary. A generic hosted MCP endpoint would need
+   its own OAuth resource-server release gate. Hosted writes remain out of scope.
+5. **M4 (not designed):** polished customer product concerns such as public
+   onboarding, billing, subscriptions, and support.
 
-Brand, domain, billing, provider, data residency, and whether to offer an embedded
-chat remain product decisions. Deploying the M1 demo behind TLS does not by itself
+The M2 ADR settles the auth/runtime/database direction and a stable domain pattern;
+the owner must still confirm the actual apex, regions, accounts, and live provider
+configuration. Brand, billing, model choice, and whether to offer an embedded chat
+remain later product decisions. Deploying the M1 demo behind TLS does not by itself
 satisfy M2.
