@@ -56,6 +56,28 @@ scripts that import the package directly (see below).
      `MONEYBIRD_ADMINISTRATION_ID` still overrides it, and `auth status` says which wins.
   4. **Moneybird documents no revocation endpoint** (`oauth.REVOCATION_SUPPORTED`), so
      `auth logout` deletes local credentials only and must keep saying so.
+  5. **Local OAuth is for development and self-hosters with their own registered
+     application — never present it as the default public setup.** A Client Secret
+     authenticates the *application*, so it cannot ship inside a source-available
+     package; the personal API token stays the simple public path. Do not add a bundled
+     application credential, and do not reword the docs to imply a PyPI user receives
+     one. The hosted service is where OAuth becomes the normal path: backend holds the
+     secret, user presses Connect Moneybird over an HTTPS callback, tokens stored
+     server-side.
+- **Scopes come from Moneybird's per-endpoint reference, not the Authentication page.**
+  `docs/moneybird_api_scopes.json` is the checked-in snapshot (regenerate with
+  `scripts/render_api_scopes.py`, which needs PyYAML and a downloaded `openapi.yml`).
+  Parse the `Required scope(s)` *description text*, never the `security` array: the array
+  is the same flat list whether scopes are needed together (`documents` **and**
+  `sales_invoices` for profit_loss) or any one suffices (`Any of:` for contacts, ledger
+  account reads, tax rate reads). Three groupings are counter-intuitive and were wrong
+  here before 2026-08-08: **no report requires `settings`** (balance_sheet/cash_flow/
+  general_ledger → `bank`; profit_loss/tax/journal_entries → `documents` + `sales_invoices`;
+  debtors/revenue/subscriptions → `sales_invoices`; creditors/expenses/assets →
+  `documents`), financial **accounts** are `settings` while financial **mutations** are
+  `bank`, and `/administrations` needs no scope at all (which is why `auth login` can
+  verify any new connection). `tests/test_oauth_scopes.py` joins every claim against the
+  snapshot and proves the six requested scopes are minimal, so this cannot silently rot.
 
 ## Running a one-off live query or fix
 

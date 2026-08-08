@@ -1,27 +1,64 @@
-# Connecting through Moneybird OAuth
+# Moneybird OAuth (bring your own application)
 
 **Language:** **English** · [Nederlands](getting-started.nl.md)
 
-This is the recommended way to connect Moneybird MCP to a Moneybird account. No
-Moneybird token is ever copied by hand.
-
 > This is an unofficial community integration and is not developed, endorsed, supported, or audited by Moneybird B.V.
 
-## Two authentication choices
+## Who this is for
 
-| | Recommended: OAuth | Advanced: personal API token |
+This page describes connecting Moneybird MCP through OAuth using **an OAuth
+application you registered yourself**. That is the right path for two audiences:
+
+- **Development and testing**, against the project's own registered application;
+- **Self-hosters** who want OAuth semantics — a refresh token, scoped access,
+  revocation from the Moneybird UI — and are willing to register an application
+  and hold its Client Secret themselves.
+
+**If you just want to use Moneybird MCP locally, use a personal API token
+instead.** See [Getting started](getting-started.md). It is one environment
+variable and no application registration.
+
+### Why OAuth is not the default public setup
+
+An OAuth Client Secret authenticates *the application*, not the user. It cannot
+be shipped inside a source-available package installed from PyPI: anything
+distributed to every user is not a secret, and a leaked application credential
+affects every installation at once, not just one.
+
+So this project does not, and will not, embed an application Client Secret in
+the package. There is no shared "Moneybird MCP" application credential that
+`pip install` hands you. Running the OAuth flow locally means using **your own**
+registered application.
+
+That is also why the personal API token remains the simple, supported public
+path for local use: it is a per-user credential the user already controls, with
+no application secret involved.
+
+### Where this is heading
+
+The hosted product solves this properly, and it is the reason the OAuth code
+exists now:
+
+| | Local OAuth (this page) | Future hosted service |
 |---|---|---|
-| What you configure | An application's client id and secret, once | A token string |
-| Where tokens live | `moneybird_oauth_tokens.json` in the state directory, written by the CLI | Wherever you put `MONEYBIRD_ACCESS_TOKEN` |
-| Renewal | A refresh token is stored and used automatically | Manual |
-| Administration | Chosen during login and remembered | `MONEYBIRD_ADMINISTRATION_ID` |
+| Who registers the application | You | Us, once |
+| Where the Client Secret lives | Your machine, in a file you select | Our backend, never on a client |
+| How a user connects | CLI: paste an out-of-band code | Press **Connect Moneybird**, approve, done |
+| Redirect URI | `urn:ietf:wg:oauth:2.0:oob` | An HTTPS callback |
+| Where user tokens live | `~/.moneybird-mcp/moneybird_oauth_tokens.json` | Server-side, one token set per connection |
 
-Both remain fully supported. If both are configured, the personal token in
-`MONEYBIRD_ACCESS_TOKEN` wins — see [Precedence](#precedence).
+The out-of-band redirect is a development and local-integration mechanism; it
+exists because a local CLI has no reachable callback endpoint. The hosted flow
+will not use it.
+
+The code is deliberately layered so the hosted implementation replaces only the
+top of it — see [Reusable pieces](#reusable-pieces-for-the-hosted-flow) below.
+Nothing about the hosted design requires a user to ever see a Client Secret,
+an authorization code, or a token.
 
 ## Set-up
 
-### 1. Register an external OAuth application
+### 1. Register your own external OAuth application
 
 Open <https://moneybird.com/user/applications/new> and register an **external
 application** (not a personal API token). Set the redirect URI to exactly:
@@ -125,26 +162,63 @@ Hosted request mode never reads the local OAuth store.
 
 ## Scopes
 
-Moneybird documents six scopes. This server requests all six by default,
-because it is a general bookkeeping assistant and a connection that cannot see
-the bank feed or purchase invoices is broken rather than safer.
+Moneybird documents six scopes and assigns them **per endpoint**. The grouping
+is not the intuitive one, so the table below follows Moneybird's own endpoint
+reference rather than the generic Authentication page. The machine-readable
+source is `docs/moneybird_api_scopes.json`, generated from the official OpenAPI
+spec by `scripts/render_api_scopes.py`; `tests/test_oauth_scopes.py` checks
+every claim here against it.
 
-| Scope | Covers | Example tools |
+| Tool area | Required | Notes |
 |---|---|---|
-| `sales_invoices` | Sales invoices, recurring invoices, credit invoices, sending, payments on sales invoices | `list_sales_invoices`, `prepare_create_sales_invoice_draft`, `prepare_send_sales_invoice` |
-| `documents` | Purchase invoices, receipts, general journal documents, attachments | `list_purchase_documents`, `prepare_reconcile_purchase_invoice`, `prepare_vat_settlement_journal` |
-| `estimates` | Quotations | `list_estimates` |
-| `bank` | Financial accounts, mutations, bank bookings | `list_financial_mutations`, `suggest_bank_mutation_matches`, `prepare_link_bank_mutation_booking` |
-| `time_entries` | Time registration | `list_time_entries` |
-| `settings` | Ledger accounts, tax rates, workflows, document styles, custom fields — and, by inference, products, projects and reports | `list_ledger_accounts`, `list_tax_rates`, `get_financial_report` |
+| Sales invoicing | `sales_invoices` | Invoices, recurring invoices, credit invoices, sending, payments |
+| Purchase administration | `documents` | Purchase invoices, receipts, general journal documents, attachments |
+| Estimates | `estimates` | `list_estimates` only |
+| Bank mutations | `bank` | Mutations and their bookings |
+| Time registration | `time_entries` | `list_time_entries` only |
+| Settings and reference data | `settings` | Financial **accounts**, products, projects, creating a ledger account |
+| Reports: balance sheet, cash flow, general ledger | `bank` | Filed under bank, not settings |
+| Reports: profit and loss, tax, journal entries | `documents` **and** `sales_invoices` | Both together; backs `analyze_vat_settlement` |
+| Reports: debtors, revenue, subscriptions | `sales_invoices` | Debtors, debtors aging, revenue by contact/project, subscriptions |
+| Reports: creditors, expenses, assets | `documents` | Creditors, creditors aging, expenses by contact/project, assets |
 
-Contacts need no scope of their own: Moneybird grants contact access with any
-of `sales_invoices`, `documents`, `estimates`, `bank` or `settings`.
+Three of these are easy to get wrong:
 
-The mapping for `/products`, `/projects` and `/reports` is an inference —
-Moneybird does not document which scope covers them. `moneybird-mcp auth scopes`
-marks those rows, and `moneybird_mcp/oauth_scopes.py` is the machine-readable
-source.
+- **Reports do not share one scope.** Each report carries its own requirement,
+  and **no report requires `settings`**. A connection with only `settings` can
+  read none of them.
+- **Financial accounts are `settings`; financial mutations are `bank`.** The two
+  read as one feature and are scoped differently.
+- **Products and projects are `settings`**, documented explicitly as such.
+
+### Reachable without a scope of their own
+
+| Area | Requirement |
+|---|---|
+| Contacts | Any one of `estimates`, `sales_invoices`, `documents`, `bank`, `settings` |
+| Reading ledger accounts and tax rates | Any one of `settings`, `sales_invoices`, `documents`, `estimates` |
+| Listing administrations | No scope required — which is why `auth login` can verify any new connection |
+
+Because contacts are granted by any resource scope, a bookkeeping integration
+never has to widen its request to reach them.
+
+### Why all six are requested by default
+
+Each of the six is required by at least one currently exposed tool, by an
+endpoint that accepts no substitute:
+
+| Scope | Only-justification |
+|---|---|
+| `sales_invoices` | `/sales_invoices` |
+| `documents` | `/documents/*` |
+| `estimates` | `/estimates` |
+| `bank` | `/financial_mutations` |
+| `time_entries` | `/time_entries` |
+| `settings` | `/financial_accounts`, `/products`, `/projects`, `POST /ledger_accounts` |
+
+`tests/test_oauth_scopes.py` proves that minimality from the snapshot: removing
+any one scope must break a client endpoint, so if a tool removal ever makes a
+scope unnecessary, the test fails and the request should shrink.
 
 ### Scopes are not a write policy
 
@@ -164,16 +238,17 @@ moneybird-mcp auth login --scopes "sales_invoices settings"
 
 or set `MONEYBIRD_OAUTH_SCOPES`. Named profiles:
 
-| Profile | Scopes |
-|---|---|
-| `full` (default) | all six |
-| `bookkeeping` | `sales_invoices documents bank settings` |
-| `invoicing` | `sales_invoices settings` |
+| Profile | Scopes | Unavailable |
+|---|---|---|
+| `full` (default) | all six | nothing |
+| `bookkeeping` | `sales_invoices documents bank settings` | estimates, time registration (every report still works) |
+| `invoicing` | `sales_invoices settings` | purchases, bank, estimates, time registration, and every report except the debtor/revenue/subscription group |
 
-An unknown scope or profile is rejected before the browser opens. If Moneybird
-grants less than was asked for, `auth login` says which scopes are missing,
-because the affected tools would otherwise fail with a bare authorization error
-in the middle of a later task.
+`moneybird-mcp auth scopes` prints the same breakdown, computed from the code
+rather than copied. An unknown scope or profile is rejected before the browser
+opens. If Moneybird grants less than was asked for, `auth login` says which
+scopes are missing, because the affected tools would otherwise fail with a bare
+authorization error in the middle of a later task.
 
 ## Token expiry and refresh
 
@@ -191,21 +266,23 @@ server does both:
 - neither grant is retried automatically: an authorization code is single-use,
   and a refresh may rotate the refresh token.
 
-## The out-of-band redirect is a local mechanism
+## Reusable pieces for the hosted flow
 
-`urn:ietf:wg:oauth:2.0:oob` suppresses the redirect and makes Moneybird display
-the code in the browser, which is what lets a local CLI complete the flow with
-no reachable callback endpoint. It is a development and local-integration
-mechanism.
+Only the presentation layer is specific to the local out-of-band CLI:
 
-A future hosted product will register an HTTPS callback instead. The code is
-already split so that only the first step changes: URL construction, the code
-exchange, the refresh, the token model, credential storage, administration
-selection and API authentication live below the CLI, and credential storage is
-an interface (`moneybird_mcp/oauth_store.py`) that a per-tenant database
-implementation can replace. See
-[hosted gateway design](hosted_gateway_design.md) for what production would
-additionally require.
+| Concern | Module | Hosted reuse |
+|---|---|---|
+| Scope catalogue and rationale | `oauth_scopes.py` | Unchanged |
+| Token model and storage interface | `oauth_store.py` | Implement `TokenStore` over per-tenant encrypted rows; every method already takes the connection's profile explicitly, so there is no global-connection assumption to unpick |
+| URL construction, both grants, refresh | `oauth.py` | Unchanged. `generate_state` / `parse_authorization_callback(expected_state=…)` already implement the CSRF handling a redirect flow needs, which the OOB flow does not use |
+| Administration selection | `oauth.py` + connection record | Unchanged |
+| API authentication | `credentials.py`, `client.py` | Unchanged |
+| Out-of-band prompt | `auth_cli.py` | Replaced by an HTTPS callback route |
+
+What the hosted product still needs beyond this — user identity, grant
+ownership, authorization, durable artifact ownership, trusted write
+confirmation, and a per-IP rate-limit story — is in
+[hosted gateway design](hosted_gateway_design.md).
 
 ## Troubleshooting
 

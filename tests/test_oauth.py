@@ -137,16 +137,32 @@ class ScopeTests(unittest.TestCase):
         )
 
     def test_every_capability_maps_to_a_documented_scope(self) -> None:
+        # Whether each area names the *right* scope is checked against
+        # Moneybird's published per-endpoint requirement in test_oauth_scopes.py.
+        # This only guards the shape of the entries themselves.
         for entry in oauth_scopes.CAPABILITY_SCOPES:
             with self.subTest(area=entry.area):
-                self.assertIn(entry.scope, oauth_scopes.KNOWN_SCOPES)
+                self.assertTrue(entry.scopes)
+                for scope in entry.scopes:
+                    self.assertIn(scope, oauth_scopes.KNOWN_SCOPES)
                 self.assertTrue(entry.reason)
                 self.assertTrue(entry.examples)
+                self.assertTrue(entry.endpoints)
 
     def test_capability_map_covers_every_scope_the_full_profile_requests(self) -> None:
         """A scope nobody can justify must not be in the default request."""
-        justified = {entry.scope for entry in oauth_scopes.CAPABILITY_SCOPES}
+        justified = {
+            scope
+            for entry in oauth_scopes.CAPABILITY_SCOPES
+            for scope in entry.scopes
+        }
         self.assertEqual(justified, set(oauth_scopes.scopes_for_profile("full")))
+
+    def test_unavailable_areas_names_what_a_narrowed_scope_set_loses(self) -> None:
+        self.assertEqual(oauth_scopes.unavailable_areas(oauth_scopes.KNOWN_SCOPES), ())
+        lost = oauth_scopes.unavailable_areas(("sales_invoices",))
+        self.assertIn("Purchase administration", lost)
+        self.assertNotIn("Sales invoicing", lost)
 
     def test_narrow_profiles_are_subsets_of_full(self) -> None:
         for name, scopes in oauth_scopes.SCOPE_PROFILES.items():

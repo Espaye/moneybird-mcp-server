@@ -126,11 +126,15 @@ python -m pip uninstall moneybird-mcp
 
 Het verwijderen van het pakket verwijdert `~/.moneybird-mcp` niet. Die map kan OAuth-inloggegevens, goedkeuringen, auditgeschiedenis en zoekstatus bevatten. Bekijk [Levenscyclus van lokale gegevens](data-lifecycle.nl.md).
 
-## OAuth in plaats van een persoonlijk token
+## OAuth met je eigen geregistreerde applicatie
 
-Aanbevolen. Lokale en geauthenticeerde modi voor één gebruiker kunnen verbinden via de OAuth-autorisatiecodeflow van Moneybird, zodat je nooit zelf een Moneybird-token hoeft over te typen.
+Het persoonlijke API-token hierboven is de eenvoudige, ondersteunde manier om dit lokaal te draaien. OAuth is een optie voor **ontwikkeling** en voor **self-hosters die hun eigen OAuth-applicatie registreren** — het is niet de standaardopstelling voor publiek gebruik.
 
-1. Registreer een **externe applicatie** op <https://moneybird.com/user/applications/new> met redirect-URI `urn:ietf:wg:oauth:2.0:oob`.
+Dat is geen voorkeur maar een noodzaak. Een OAuth Client Secret authenticeert de *applicatie*, niet de gebruiker, en kan dus niet in een installeerbaar pakket worden meegeleverd: wat aan iedereen wordt gedistribueerd is geen geheim, en een uitgelekte applicatiegegeven raakt in één keer elke installatie. Dit project bevat daarom geen applicatiegegevens, en er bestaat geen gedeeld "Moneybird MCP"-Client Secret dat je met `pip install` meekrijgt.
+
+Wil je toch lokaal OAuth gebruiken:
+
+1. Registreer je eigen **externe applicatie** op <https://moneybird.com/user/applications/new> met redirect-URI `urn:ietf:wg:oauth:2.0:oob`.
 2. Zet `MONEYBIRD_OAUTH_CLIENT_ID` en `MONEYBIRD_OAUTH_CLIENT_SECRET` in de omgeving of in een expliciet gekozen bestand. Dit zijn applicatiegegevens, geen tokens; behandel het secret als een wachtwoord en commit het nooit.
 3. Voer het volgende uit:
 
@@ -145,9 +149,9 @@ Beheer de verbinding met `moneybird-mcp auth status` en `moneybird-mcp auth logo
 
 `python -m moneybird_mcp.oauth_login` blijft werken en is hetzelfde commando; in een clone is `python scripts/oauth_login.py` een gelijkwaardige wrapper.
 
-Bekijk de aangevraagde scopes met `moneybird-mcp auth scopes` en beperk ze zo nodig met `--scopes`. De volledige uitleg, inclusief de onderbouwing per scope en de voorrangsregels, staat in [Connecting through Moneybird OAuth](oauth.md) (Engelstalig).
+Bekijk de aangevraagde scopes met `moneybird-mcp auth scopes` en beperk ze zo nodig met `--scopes`. De volledige uitleg, inclusief de vereiste scopes per endpoint en de voorrangsregels, staat in [Moneybird OAuth](oauth.md) (Engelstalig).
 
-De out-of-band-redirect is een lokaal/ontwikkelmechanisme. Een gehoste productiedienst vereist een afzonderlijke HTTPS-callback, gebruikersidentiteit, opslag voor toestemmingen, een intrekkingsontwerp en een scheiding tussen administraties.
+De out-of-band-redirect is een lokaal/ontwikkelmechanisme. Een toekomstige gehoste dienst bewaart het Client Secret van de applicatie in de backend, laat een gebruiker verbinden via **Connect Moneybird** met een HTTPS-callback, en bewaart de tokens per gebruiker server-side. Zo'n dienst vereist daarnaast gebruikersidentiteit, opslag voor toestemmingen, een intrekkingsontwerp en een scheiding tussen administraties; niets daarvan is gebouwd.
 
 ## Claude Desktop-extensie
 

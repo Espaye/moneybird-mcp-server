@@ -31,11 +31,13 @@ from . import oauth
 from .config import MoneybirdError, load_env_file
 from .oauth_scopes import (
     CAPABILITY_SCOPES,
+    INCIDENTAL_ACCESS,
     SCOPE_PROFILES,
     SCOPES_ENV,
     format_scopes,
     missing_scopes,
     parse_scopes,
+    unavailable_areas,
 )
 from .oauth_store import DEFAULT_PROFILE
 
@@ -386,20 +388,35 @@ def command_scopes(_: argparse.Namespace) -> int:
     """Print the scope rationale, so a user can review before authorizing."""
     _out("Moneybird OAuth scopes requested by this server\n")
     _out(
-        "Moneybird scopes are per resource family and have no read-only "
-        "variant.\nThey do not control whether this server may write: that is "
-        "MONEYBIRD_CAPABILITY_MODE\nand the prepare/approve/execute flow, "
+        "Moneybird assigns scopes per endpoint, and the grouping is not the\n"
+        "intuitive one: reports are scoped individually rather than sharing a\n"
+        "single scope, and financial accounts are settings while financial\n"
+        "mutations are bank. Each line below names what Moneybird's own endpoint\n"
+        "reference requires.\n"
+    )
+    _out(
+        "Scopes are per resource family and have no read-only variant. They do\n"
+        "not control whether this server may write: that is\n"
+        "MONEYBIRD_CAPABILITY_MODE and the prepare/approve/execute flow,\n"
         "enforced locally.\n"
     )
     for entry in CAPABILITY_SCOPES:
-        marker = "" if entry.documented else "  [inferred, not documented by Moneybird]"
-        _out(f"{entry.scope:<15} {entry.area}{marker}")
-        _out(f"{'':<15} {entry.reason}")
-        _out(f"{'':<15} e.g. {', '.join(entry.examples[:4])}")
+        needs = " + ".join(entry.scopes)
+        _out(f"{needs:<28} {entry.area}")
+        _out(f"{'':<28} {entry.reason}")
+        _out(f"{'':<28} e.g. {', '.join(entry.examples[:4])}")
         _out("")
-    _out("Named profiles (--scopes NAME, or " + SCOPES_ENV + "):")
+
+    _out("Reachable without a scope of their own:")
+    for area, scopes, _endpoints in INCIDENTAL_ACCESS:
+        allowed = f"any of: {', '.join(scopes)}" if scopes else "no scope required"
+        _out(f"  {area} ({allowed})")
+
+    _out("\nNamed profiles (--scopes NAME, or " + SCOPES_ENV + "):")
     for name, scopes in sorted(SCOPE_PROFILES.items()):
         _out(f"  {name:<12} {format_scopes(scopes)}")
+        lost = unavailable_areas(scopes)
+        _out(f"  {'':<12} unavailable: {', '.join(lost) if lost else 'nothing'}")
     return 0
 
 

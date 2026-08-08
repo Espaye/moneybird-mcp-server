@@ -126,11 +126,15 @@ python -m pip uninstall moneybird-mcp
 
 Uninstalling the package does not delete `~/.moneybird-mcp`. That directory may contain OAuth credentials, approvals, audit history, and search state. See [Local data lifecycle](data-lifecycle.md).
 
-## OAuth instead of a personal token
+## OAuth with your own registered application
 
-Recommended. Local and authenticated single-user modes can connect through Moneybird's OAuth authorization-code flow, so no Moneybird token is ever copied by hand.
+The personal API token above is the simple, supported way to run this locally. OAuth is an option for **development** and for **self-hosters who register their own OAuth application** — it is not the default public setup.
 
-1. Register an **external application** at <https://moneybird.com/user/applications/new> with redirect URI `urn:ietf:wg:oauth:2.0:oob`.
+The reason is not preference. An OAuth Client Secret authenticates the *application*, not the user, so it cannot be shipped inside an installable package: anything distributed to every user is not a secret, and a leaked application credential would affect every installation at once. This project therefore embeds no application credential, and there is no shared "Moneybird MCP" Client Secret that `pip install` gives you.
+
+If you do want OAuth locally:
+
+1. Register your own **external application** at <https://moneybird.com/user/applications/new> with redirect URI `urn:ietf:wg:oauth:2.0:oob`.
 2. Put its `MONEYBIRD_OAUTH_CLIENT_ID` and `MONEYBIRD_OAUTH_CLIENT_SECRET` in the environment or an explicitly selected file. These are application credentials, not tokens; treat the secret like a password and never commit it.
 3. Run:
 
@@ -145,9 +149,9 @@ Manage the connection with `moneybird-mcp auth status` and `moneybird-mcp auth l
 
 `python -m moneybird_mcp.oauth_login` still works and is the same command; in a source checkout `python scripts/oauth_login.py` is an equivalent wrapper.
 
-Review the requested scopes with `moneybird-mcp auth scopes`, and narrow them with `--scopes` if wanted. Full detail, including the scope rationale and precedence rules, is in [Connecting through Moneybird OAuth](oauth.md).
+Review the requested scopes with `moneybird-mcp auth scopes`, and narrow them with `--scopes` if wanted. Full detail, including the per-endpoint scope requirements and precedence rules, is in [Moneybird OAuth](oauth.md).
 
-The out-of-band redirect is a local/development mechanism. A production hosted service needs a separate HTTPS callback, user identity, grant store, revocation design, and tenant boundary.
+The out-of-band redirect is a local/development mechanism. A future hosted service will hold the application's Client Secret in its backend, let a user connect by pressing **Connect Moneybird** over an HTTPS callback, and store per-user tokens server-side. That service additionally needs user identity, a grant store, a revocation design, and a tenant boundary; none of it is built.
 
 ## Claude Desktop extension
 

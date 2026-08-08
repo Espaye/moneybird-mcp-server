@@ -7,17 +7,22 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Added
 
-- **`moneybird-mcp auth login | status | logout | scopes`** — first-class local OAuth.
-  A user registers an external Moneybird application once, supplies its client id and
-  secret, and runs `auth login`; the command prints (and optionally opens) the
-  authorization URL, takes the short out-of-band code Moneybird displays, exchanges it,
-  verifies the result, selects the administration, and stores the connection. No
-  Moneybird access or refresh token is ever copied by hand, and the MCP client
-  configuration needs no credentials at all. `auth status` reports which identity is
-  active and from where; `auth logout` deletes local credentials and says plainly that
-  Moneybird publishes no revocation endpoint, so access is withdrawn at
-  <https://moneybird.com/user/applications>. `python -m moneybird_mcp.oauth_login` and
-  `python scripts/oauth_login.py` remain as aliases for `auth login`.
+- **`moneybird-mcp auth login | status | logout | scopes`** — first-class local OAuth,
+  for development and for self-hosters who register their **own** OAuth application.
+  Supply that application's client id and secret and run `auth login`; the command
+  prints (and optionally opens) the authorization URL, takes the short out-of-band code
+  Moneybird displays, exchanges it, verifies the result, selects the administration, and
+  stores the connection. No Moneybird access or refresh token is ever copied by hand.
+  `auth status` reports which identity is active and from where; `auth logout` deletes
+  local credentials and says plainly that Moneybird publishes no revocation endpoint, so
+  access is withdrawn at <https://moneybird.com/user/applications>.
+  `python -m moneybird_mcp.oauth_login` and `python scripts/oauth_login.py` remain as
+  aliases for `auth login`.
+  This is deliberately **not** the default public setup, and the package ships no
+  application credential: a Client Secret authenticates the application rather than the
+  user, so it cannot live inside a distributed package. The personal API token remains
+  the simple, supported local path. The abstractions exist because a future hosted
+  service will hold the secret in its backend and connect users over an HTTPS callback.
 - **Administration selection at login.** A connection reaching exactly one
   administration selects it; several are listed and offered interactively, or chosen
   with `--administration ID`. Nothing is picked silently, because a guessed
@@ -25,13 +30,27 @@ versioning while allowing pre-1.0 breaking changes.
   the connection, so `MONEYBIRD_ADMINISTRATION_ID` is no longer needed after an OAuth
   login — an explicit environment value still overrides it, and `auth status` flags the
   override.
-- **`moneybird_mcp/oauth_scopes.py`** — the requested scopes with a documented rationale
-  per tool area, named profiles (`full`, `bookkeeping`, `invoicing`), and validation that
-  rejects an unknown scope before the browser opens. Selectable with `--scopes` or
+- **`moneybird_mcp/oauth_scopes.py`** — the requested scopes with a rationale per tool
+  area, named profiles (`full`, `bookkeeping`, `invoicing`), and validation that rejects
+  an unknown scope before the browser opens. Selectable with `--scopes` or
   `MONEYBIRD_OAUTH_SCOPES`. Moneybird scopes have no read-only variant and are *not* a
   write policy: that remains `MONEYBIRD_CAPABILITY_MODE` plus the
-  prepare/approve/execute flow. Rows the mapping infers (products, projects, reports)
-  are marked as inferred rather than presented as documented.
+  prepare/approve/execute flow.
+  The mapping follows Moneybird's **per-endpoint** reference, not the generic
+  Authentication page, because the grouping is not the intuitive one: reports are scoped
+  individually and **no report requires `settings`** (balance sheet, cash flow and
+  general ledger need `bank`; profit and loss, tax and journal entries need `documents`
+  *and* `sales_invoices`), while financial *accounts* are `settings` even though
+  financial *mutations* are `bank`. Products and projects are documented as `settings`.
+  All six scopes remain requested by default because each is required by at least one
+  currently exposed tool with no substitute available.
+- **`docs/moneybird_api_scopes.json`** — a checked-in snapshot of the required scopes for
+  all 296 documented operations, generated from the official OpenAPI spec by
+  `scripts/render_api_scopes.py`. It parses the `Required scope(s)` description text
+  rather than the `security` array, because the array carries the same flat list whether
+  the scopes are required *together* or any one suffices. `tests/test_oauth_scopes.py`
+  joins the scope map, the docs and every endpoint the client calls against it, and also
+  proves the request is minimal: dropping any one scope must break a real endpoint.
 - **`moneybird_mcp/oauth_store.py`** — a typed `OAuthConnection` and a `TokenStore`
   interface with a local owner-only, atomically written JSON implementation. Every
   method takes the profile explicitly, so a hosted backend can swap in per-tenant

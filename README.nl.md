@@ -14,32 +14,11 @@ Gebruik Claude, ChatGPT, Cursor of een andere MCP-client om een Moneybird-admini
 
 ## Aan de slag
 
-Je hebt Python 3.11 of nieuwer en een MCP-client nodig. Er zijn twee manieren om een Moneybird-account te koppelen.
+Je hebt Python 3.11 of nieuwer, een MCP-client en een nieuw [Moneybird API-token](https://developer.moneybird.com/authentication) nodig.
 
-### Aanbevolen: verbinden via Moneybird OAuth
+### Aanbevolen: uitvoeren met `uvx`
 
-Registreer een [externe OAuth-applicatie](https://moneybird.com/user/applications/new) met redirect-URI `urn:ietf:wg:oauth:2.0:oob`, zet het client id en secret in een bestand dat je expliciet kiest, en log één keer in:
-
-```bash
-python -m pip install --upgrade moneybird-mcp
-moneybird-mcp auth login --env-file /absolute/path/moneybird-mcp.env
-```
-
-Het commando toont een autorisatie-URL, je keurt die goed in Moneybird en plakt alleen de korte autorisatiecode terug. Daarna verifieert het de verbinding, kiest het de administratie en bewaart het de tokens lokaal. Je typt zelf nooit een Moneybird-token over. Je MCP-client heeft dan helemaal geen inloggegevens meer nodig:
-
-```json
-{
-  "mcpServers": {
-    "moneybird": { "command": "moneybird-mcp" }
-  }
-}
-```
-
-Beheer de verbinding met `moneybird-mcp auth status`, `auth logout` en `auth scopes`. Volledige uitleg: [Connecting through Moneybird OAuth](docs/oauth.md) (Engelstalig).
-
-### Geavanceerd: persoonlijk API-token
-
-Blijft volledig ondersteund. Maak een [Moneybird API-token](https://developer.moneybird.com/authentication) aan en draai met `uvx`:
+Voeg deze serverconfiguratie toe aan je MCP-client:
 
 ```json
 {
@@ -58,7 +37,25 @@ Blijft volledig ondersteund. Maak een [Moneybird API-token](https://developer.mo
 
 Herstart de client en vraag deze om de beschikbare Moneybird-administraties te tonen.
 
-`MONEYBIRD_ADMINISTRATION_ID` is optioneel wanneer het token maar toegang heeft tot één administratie. Plak een echt Moneybird-token nooit in een chat, issue, logbestand of bestand dat je commit. Bestaan er zowel een persoonlijk token als een OAuth-verbinding, dan wint het persoonlijke token; `moneybird-mcp auth status` vertelt welke actief is.
+`MONEYBIRD_ADMINISTRATION_ID` is optioneel wanneer het token maar toegang heeft tot één administratie. Plak een echt Moneybird-token nooit in een chat, issue, logbestand of bestand dat je commit.
+
+Een persoonlijk API-token is de eenvoudige, ondersteunde manier om dit lokaal te draaien: één inloggegeven dat je zelf al beheert, zonder applicatieregistratie.
+
+### Optioneel: OAuth met je eigen geregistreerde applicatie
+
+Voor ontwikkeling, of voor self-hosters die refresh-tokens en scoped toegang willen, kan de server verbinden via de OAuth-flow van Moneybird met **een OAuth-applicatie die je zelf registreert**:
+
+```bash
+moneybird-mcp auth login --env-file /absolute/path/moneybird-mcp.env
+moneybird-mcp auth status
+moneybird-mcp auth logout
+```
+
+Dit is niet de standaardopstelling voor publiek gebruik, en het pakket bevat geen gedeelde applicatiegegevens. Een OAuth Client Secret authenticeert de *applicatie*, niet de gebruiker, en kan dus niet worden meegeleverd in een installeerbaar pakket — wat aan iedereen wordt gedistribueerd is geen geheim. Lokale OAuth betekent daarom je eigen Client ID en Client Secret meebrengen.
+
+Bestaan er zowel een persoonlijk token als een OAuth-verbinding, dan wint het persoonlijke token; `moneybird-mcp auth status` vertelt welke actief is. Volledige uitleg: [Moneybird OAuth](docs/oauth.md) (Engelstalig).
+
+Een toekomstige gehoste dienst neemt deze afweging helemaal weg: de backend bewaart het Client Secret, een gebruiker drukt op **Connect Moneybird** en keurt goed in Moneybird via een HTTPS-callback, en zijn tokens staan server-side. Die dienst is nog niet gebouwd.
 
 Registraties in Claude Code hebben een scope. De standaardscope `local` is alleen beschikbaar in het huidige project; gebruik `--scope user` wanneer Moneybird vanuit elk project beschikbaar moet zijn. Als `claude mcp list` verbonden meldt maar een ander project geen tools toont, controleer dan `claude mcp get moneybird` en voeg de configuratie opnieuw toe met userscope. Gebruik geen projectscope voor een configuratie met een persoonlijk token, omdat projectscope een gedeeld `.mcp.json`-bestand schrijft.
 
@@ -141,7 +138,7 @@ De belangrijkste instellingen zijn:
 |---|---|---|
 | `MONEYBIRD_ACCESS_TOKEN` | geen | Persoonlijk Moneybird API-token; gaat voor op een OAuth-verbinding |
 | `MONEYBIRD_ADMINISTRATION_ID` | de bij OAuth-login gekozen administratie, anders automatisch wanneer eenduidig | Te gebruiken administratie |
-| `MONEYBIRD_OAUTH_CLIENT_ID` / `_SECRET` | geen | Geregistreerde OAuth-applicatie, voor `auth login` |
+| `MONEYBIRD_OAUTH_CLIENT_ID` / `_SECRET` | geen | Je eigen geregistreerde OAuth-applicatie, voor `auth login` |
 | `MONEYBIRD_OAUTH_SCOPES` | `full` | Scopeprofiel of expliciete lijst die bij login wordt aangevraagd |
 | `MONEYBIRD_CAPABILITY_MODE` | `read_only` | `read_only` of `write_enabled` |
 | `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` voor geïnstalleerde stdio | Lokale goedkeuringen, auditgegevens, OAuth-gegevens en zoekstatus |

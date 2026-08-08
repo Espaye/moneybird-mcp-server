@@ -1,28 +1,45 @@
 """Which Moneybird OAuth scopes this server's tools actually need.
 
-Moneybird documents exactly six scopes (https://developer.moneybird.com/authentication):
-``sales_invoices``, ``documents``, ``estimates``, ``bank``, ``time_entries`` and
-``settings``. The default when a scope parameter is omitted is ``sales_invoices``
-alone, which is far too narrow for this tool surface.
+Moneybird documents exactly six scopes: ``sales_invoices``, ``documents``,
+``estimates``, ``bank``, ``time_entries`` and ``settings``. The default when the
+scope parameter is omitted is ``sales_invoices`` alone, which is far too narrow
+for this tool surface.
 
-Two properties of Moneybird's scope model shape everything below.
+**The per-endpoint reference is the source of truth, not the Authentication
+page.** Each operation on developer.moneybird.com carries its own
+``Required scope(s)`` line, and the grouping is not the intuitive one:
 
-**Scopes are per resource family, not per verb.** There is no read-only variant of
-any scope: ``documents`` grants both reading and rewriting purchase invoices. Scopes
-therefore cannot express this server's read-first posture. That is the job of
-:mod:`moneybird_mcp.capabilities` (``MONEYBIRD_CAPABILITY_MODE``) and the
+- ``/products``, ``/projects`` and ``/financial_accounts`` require ``settings``
+  — financial *accounts* are settings, while financial *mutations* are ``bank``.
+- Reports do **not** share one scope. ``balance_sheet``, ``cash_flow`` and
+  ``general_ledger`` require ``bank``; ``profit_loss``, ``tax`` and
+  ``journal_entries`` require ``documents`` *and* ``sales_invoices`` together;
+  the debtor/revenue reports require ``sales_invoices`` and the
+  creditor/expense/asset reports require ``documents``. No report requires
+  ``settings``.
+- Contacts, ledger-account reads and tax-rate reads are satisfied by **any one**
+  of several scopes, so they never need a scope of their own.
+
+:data:`CAPABILITY_SCOPES` records that per tool area, and
+``tests/test_oauth_scopes.py`` checks every claim here against the vendored
+``docs/moneybird_api_scopes.json`` snapshot, so a wrong entry fails CI instead of
+becoming a 401 in the middle of someone's task.
+
+Two properties of the scope model shape the rest of this module.
+
+**Scopes are per resource family, not per verb.** There is no read-only variant
+of any scope: ``documents`` grants both reading and rewriting purchase invoices.
+Scopes therefore cannot express this server's read-first posture. That is the job
+of :mod:`moneybird_mcp.capabilities` (``MONEYBIRD_CAPABILITY_MODE``) and the
 prepare/approve/execute flow, which are enforced locally and are a different
 concept entirely. Requesting fewer scopes does not make a connection safer to
 write with, and enabling writes does not require broader scopes.
 
-**Contacts are covered incidentally.** Moneybird documents that any one of
-``sales_invoices``, ``documents``, ``estimates``, ``bank`` or ``settings`` grants
-access to contacts, so contacts never need a scope of their own.
-
-:data:`CAPABILITY_SCOPES` records the rationale per tool area so the request stays
-reviewable instead of being "all six because it works". Where Moneybird does not
-document which scope an endpoint family sits under, the entry says so rather than
-implying a verified fact.
+**All six are genuinely required by the currently exposed tools**, each by at
+least one endpoint that accepts no substitute — which is why the default profile
+asks for all six rather than out of convenience. ``tests/test_oauth_scopes.py``
+proves that minimality from the snapshot too, so dropping a tool that turns out
+to be a scope's only justification will surface here.
 """
 from __future__ import annotations
 
@@ -45,22 +62,27 @@ KNOWN_SCOPES: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class CapabilityScope:
-    """One area of the tool surface and the scope it needs."""
+    """One area of the tool surface and the scope(s) its endpoints require.
+
+    ``scopes`` lists what the area needs *together*; an area whose endpoints each
+    need a single scope is split into separate entries rather than merged, so the
+    reason attached to a scope stays true for every endpoint it covers.
+    """
 
     area: str
-    scope: str
+    scopes: tuple[str, ...]
     reason: str
     examples: tuple[str, ...]
-    # False where Moneybird does not document the endpoint family's scope and the
-    # mapping is this project's inference. Kept explicit so a future live check
-    # can correct it without having to guess which rows were ever verified.
-    documented: bool = True
+    # Endpoints backing this area, normalised as "METHOD /path" exactly as in
+    # docs/moneybird_api_scopes.json. The test suite joins on these, so a claim
+    # here cannot drift from Moneybird's published requirement.
+    endpoints: tuple[str, ...]
 
 
 CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
     CapabilityScope(
         area="Sales invoicing",
-        scope="sales_invoices",
+        scopes=("sales_invoices",),
         reason=(
             "Sales invoices, recurring sales invoices, credit invoices, invoice "
             "sending and payments registered against a sales invoice."
@@ -73,10 +95,17 @@ CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
             "prepare_send_sales_invoice",
             "list_recurring_sales_invoices",
         ),
+        endpoints=(
+            "GET /sales_invoices",
+            "POST /sales_invoices",
+            "PATCH /sales_invoices/*/send_invoice",
+            "PATCH /sales_invoices/*/register_payment",
+            "GET /recurring_sales_invoices",
+        ),
     ),
     CapabilityScope(
         area="Purchase administration",
-        scope="documents",
+        scopes=("documents",),
         reason=(
             "Purchase invoices, receipts and general journal documents live under "
             "/documents, together with their attachments. The VAT settlement "
@@ -84,95 +113,172 @@ CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
         ),
         examples=(
             "list_purchase_documents",
-            "get_purchase_invoice_by_reference",
             "review_purchase_invoices",
             "prepare_reconcile_purchase_invoice",
             "prepare_create_general_journal_document",
             "prepare_vat_settlement_journal",
             "read_document_attachment",
         ),
+        endpoints=(
+            "GET /documents/purchase_invoices",
+            "PATCH /documents/purchase_invoices/*",
+            "GET /documents/receipts",
+            "POST /documents/general_journal_documents",
+            "GET /documents/purchase_invoices/*/attachments/*/download",
+        ),
     ),
     CapabilityScope(
         area="Estimates",
-        scope="estimates",
+        scopes=("estimates",),
         reason="Quotations. Only list_estimates reads them today.",
         examples=("list_estimates",),
+        endpoints=("GET /estimates", "GET /estimates/*"),
     ),
     CapabilityScope(
-        area="Banking",
-        scope="bank",
+        area="Bank mutations",
+        scopes=("bank",),
         reason=(
-            "Financial accounts, financial mutations and the bookings linking a "
-            "mutation to an invoice, document or ledger account."
+            "Financial mutations and the bookings linking a mutation to an "
+            "invoice, document or ledger account. Note that the financial "
+            "*accounts* they belong to are settings, not bank."
         ),
         examples=(
-            "list_financial_accounts",
             "list_financial_mutations",
             "suggest_bank_mutation_matches",
             "prepare_link_bank_mutation_booking",
+            "prepare_unlink_bank_mutation_booking",
             "prepare_reclassify_bank_mutation_bookings",
+        ),
+        endpoints=(
+            "GET /financial_mutations",
+            "PATCH /financial_mutations/*/link_booking",
+            "DELETE /financial_mutations/*/unlink_booking",
         ),
     ),
     CapabilityScope(
         area="Time registration",
-        scope="time_entries",
+        scopes=("time_entries",),
         reason=(
             "Time entries have their own scope; a token without it gets 401 on "
             "that endpoint even when every other scope is granted."
         ),
         examples=("list_time_entries",),
+        endpoints=("GET /time_entries",),
     ),
     CapabilityScope(
-        area="Reference data",
-        scope="settings",
+        area="Settings and reference data",
+        scopes=("settings",),
         reason=(
-            "Ledger accounts, tax rates, workflows, document styles and custom "
-            "fields. Almost every write preview resolves a ledger account or tax "
-            "rate first, so this is not optional for bookkeeping use."
+            "Financial accounts, products, projects, and creating a ledger "
+            "account. Reading ledger accounts and tax rates is satisfied by any "
+            "of several scopes, but these four accept no substitute."
         ),
         examples=(
-            "list_ledger_accounts",
-            "list_tax_rates",
+            "list_financial_accounts",
+            "list_products",
+            "audit_products",
+            "prepare_bulk_update_product_prices",
+            "list_projects",
             "prepare_create_ledger_account",
-            "get_invoice_defaults_for_contact",
+        ),
+        endpoints=(
+            "GET /financial_accounts",
+            "GET /products",
+            "PATCH /products/*",
+            "GET /projects",
+            "POST /ledger_accounts",
+        ),
+    ),
+    # Reports are listed separately per scope group because Moneybird assigns
+    # them individually. Presenting them as one row would have to name a single
+    # scope, and every available choice would be wrong for most of the set.
+    CapabilityScope(
+        area="Reports: balance sheet, cash flow, general ledger",
+        scopes=("bank",),
+        reason=(
+            "Moneybird files these three under bank, not settings. An easy "
+            "assumption to get wrong, because they read like reference data."
+        ),
+        examples=("get_financial_report",),
+        endpoints=(
+            "GET /reports/balance_sheet",
+            "GET /reports/cash_flow",
+            "GET /reports/general_ledger",
         ),
     ),
     CapabilityScope(
-        area="Products and projects",
-        scope="settings",
+        area="Reports: profit and loss, tax, journal entries",
+        scopes=("documents", "sales_invoices"),
         reason=(
-            "Grouped with reference data. Moneybird does not document which scope "
-            "covers /products and /projects; settings is the inference that "
-            "matches their place in the Moneybird UI."
-        ),
-        examples=("list_products", "audit_products", "list_projects"),
-        documented=False,
-    ),
-    CapabilityScope(
-        area="Financial reports",
-        scope="settings",
-        reason=(
-            "Moneybird does not document a scope for /reports. Requesting "
-            "settings alongside the resource scopes has covered every report this "
-            "server reads."
+            "These need both scopes together, since they span incoming and "
+            "outgoing sides. The tax report backs analyze_vat_settlement."
         ),
         examples=("get_financial_report", "analyze_vat_settlement"),
-        documented=False,
+        endpoints=(
+            "GET /reports/profit_loss",
+            "GET /reports/tax",
+            "GET /reports/journal_entries",
+        ),
+    ),
+    CapabilityScope(
+        area="Reports: debtors, revenue, subscriptions",
+        scopes=("sales_invoices",),
+        reason="The receivable side, scoped like the sales invoices behind it.",
+        examples=("get_financial_report",),
+        endpoints=(
+            "GET /reports/debtors",
+            "GET /reports/debtors_aging",
+            "GET /reports/revenue_by_contact",
+            "GET /reports/revenue_by_project",
+            "GET /reports/subscriptions",
+        ),
+    ),
+    CapabilityScope(
+        area="Reports: creditors, expenses, assets",
+        scopes=("documents",),
+        reason="The payable side, scoped like the purchase documents behind it.",
+        examples=("get_financial_report",),
+        endpoints=(
+            "GET /reports/creditors",
+            "GET /reports/creditors_aging",
+            "GET /reports/expenses_by_contact",
+            "GET /reports/expenses_by_project",
+            "GET /reports/assets",
+        ),
     ),
 )
 
 
-# Named scope sets. `full` is what an ordinary local login requests: this server
-# is a general bookkeeping assistant and a user who cannot see their bank feed or
-# purchase invoices has a broken installation rather than a safer one. The
-# narrower sets exist so a future product tier, or a user who genuinely only
-# invoices, can consent to less without editing code.
+# Areas reachable with any one of several scopes, so they never drive the
+# request. Kept explicit because "why is there no contacts scope?" is a fair
+# question to ask of a bookkeeping integration, and the answer is Moneybird's.
+INCIDENTAL_ACCESS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        "Contacts",
+        ("estimates", "sales_invoices", "documents", "bank", "settings"),
+        ("GET /contacts", "POST /contacts", "PATCH /contacts/*"),
+    ),
+    (
+        "Ledger account and tax rate reads",
+        ("settings", "sales_invoices", "documents", "estimates"),
+        ("GET /ledger_accounts", "GET /tax_rates"),
+    ),
+    ("Administration listing", (), ("GET /administrations",)),
+)
+
+
+# Named scope sets. `full` is what an ordinary login requests: every one of the
+# six is required by at least one currently exposed tool, so a narrower default
+# would just be a broken installation. The narrower sets exist so a future
+# product tier, or a user who genuinely only invoices, can consent to less.
 SCOPE_PROFILES: dict[str, tuple[str, ...]] = {
     "full": KNOWN_SCOPES,
     # Everything except quotations and time registration, which many
-    # administrations never use.
+    # administrations never use. Keeps every report except none — all report
+    # groups are covered by sales_invoices, documents and bank.
     "bookkeeping": ("sales_invoices", "documents", "bank", "settings"),
-    # Draft, send and follow up sales invoices; no purchase or bank access.
+    # Draft, send and follow up sales invoices. No purchase, bank, estimate or
+    # time access; of the reports, only the debtor/revenue/subscription group.
     "invoicing": ("sales_invoices", "settings"),
 }
 
@@ -232,3 +338,17 @@ def missing_scopes(granted: str, required: tuple[str, ...]) -> tuple[str, ...]:
     """
     have = {item for item in (granted or "").replace(",", " ").split() if item}
     return tuple(scope for scope in required if scope not in have)
+
+
+def unavailable_areas(scopes: tuple[str, ...]) -> tuple[str, ...]:
+    """Tool areas a connection with ``scopes`` cannot reach.
+
+    Used by ``auth scopes`` to describe a narrowed profile in terms of what stops
+    working, rather than leaving the user to infer it from six scope names.
+    """
+    granted = set(scopes)
+    return tuple(
+        entry.area
+        for entry in CAPABILITY_SCOPES
+        if not set(entry.scopes) <= granted
+    )
