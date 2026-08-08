@@ -126,22 +126,34 @@ python -m pip uninstall moneybird-mcp
 
 Het verwijderen van het pakket verwijdert `~/.moneybird-mcp` niet. Die map kan OAuth-inloggegevens, goedkeuringen, auditgeschiedenis en zoekstatus bevatten. Bekijk [Levenscyclus van lokale gegevens](data-lifecycle.nl.md).
 
-## OAuth in plaats van een persoonlijk token
+## OAuth met je eigen geregistreerde applicatie
 
-Lokale en geauthenticeerde modi voor één gebruiker kunnen de OAuth-autorisatiecodeflow van Moneybird gebruiken wanneer `MONEYBIRD_ACCESS_TOKEN` ontbreekt.
+Het persoonlijke API-token hierboven is de eenvoudige, ondersteunde manier om dit lokaal te draaien. OAuth is een optie voor **ontwikkeling** en voor **self-hosters die hun eigen OAuth-applicatie registreren** — het is niet de standaardopstelling voor publiek gebruik.
 
-1. Registreer een applicatie bij Moneybird.
-2. Configureer `MONEYBIRD_OAUTH_CLIENT_ID` en `MONEYBIRD_OAUTH_CLIENT_SECRET`.
+Dat is geen voorkeur maar een noodzaak. Een OAuth Client Secret authenticeert de *applicatie*, niet de gebruiker, en kan dus niet in een installeerbaar pakket worden meegeleverd: wat aan iedereen wordt gedistribueerd is geen geheim, en een uitgelekte applicatiegegeven raakt in één keer elke installatie. Dit project bevat daarom geen applicatiegegevens, en er bestaat geen gedeeld "Moneybird MCP"-Client Secret dat je met `pip install` meekrijgt.
+
+Wil je toch lokaal OAuth gebruiken:
+
+1. Registreer je eigen **externe applicatie** op <https://moneybird.com/user/applications/new> met redirect-URI `urn:ietf:wg:oauth:2.0:oob`.
+2. Zet `MONEYBIRD_OAUTH_CLIENT_ID` en `MONEYBIRD_OAUTH_CLIENT_SECRET` in de omgeving of in een expliciet gekozen bestand. Dit zijn applicatiegegevens, geen tokens; behandel het secret als een wachtwoord en commit het nooit.
 3. Voer het volgende uit:
 
 ```bash
-python -m moneybird_mcp.oauth_login --env-file /absolute/path/operator.env
+moneybird-mcp auth login --env-file /absolute/path/operator.env
 ```
 
-Dit werkt zowel voor een geïnstalleerd pakket als voor een clone; in een clone is
-`python scripts/oauth_login.py` een gelijkwaardige wrapper.
+4. Open de getoonde autorisatie-URL, keur de applicatie goed en plak **alleen** de korte autorisatiecode die Moneybird laat zien.
+5. Het commando bewaart de verbinding in de gegevensmap van Moneybird MCP en verifieert hem daarna, waarbij het de administratie kiest (en het vraagt als er meerdere zijn). Start je MCP-client daarna gewoon.
 
-De helper bewaart OAuth-tokens in de gegevensmap van Moneybird MCP. De huidige lokale helper vraagt de scopes aan die in de repository zijn gedocumenteerd; controleer deze voordat je toestemming geeft. Een gehoste productiedienst vereist een afzonderlijke HTTPS-callback, gebruikersidentiteit, opslag voor toestemmingen, een intrekkingsontwerp en een scheiding tussen administraties.
+De uitwisseling in stap 4 verbruikt de autorisatiecode, dus de tokens worden bewaard vóórdat ze geverifieerd worden: mislukt die controle, dan meldt het commando dat en houdt het de gegevens, in plaats van je opnieuw te laten autoriseren. De administratievraag overslaan mag ook — de verbinding blijft dan bewaard zonder administratie, en een latere login of `MONEYBIRD_ADMINISTRATION_ID` vult hem aan. Er wordt nooit iets geraden.
+
+Beheer de verbinding met `moneybird-mcp auth status` en `moneybird-mcp auth logout`. Geen van beide toont ooit een token of het client secret. `logout` verwijdert uitsluitend de lokale gegevens: Moneybird publiceert geen intrekkingsendpoint, dus toegang trek je in op <https://moneybird.com/user/applications>.
+
+`python -m moneybird_mcp.oauth_login` blijft werken en is hetzelfde commando; in een clone is `python scripts/oauth_login.py` een gelijkwaardige wrapper.
+
+Bekijk de aangevraagde scopes met `moneybird-mcp auth scopes` en beperk ze zo nodig met `--scopes`. De volledige uitleg, inclusief de vereiste scopes per endpoint en de voorrangsregels, staat in [Moneybird OAuth](oauth.md) (Engelstalig).
+
+De out-of-band-redirect is een lokaal/ontwikkelmechanisme. Een toekomstige gehoste dienst bewaart het Client Secret van de applicatie in de backend, laat een gebruiker verbinden via **Connect Moneybird** met een HTTPS-callback, en bewaart de tokens per gebruiker server-side. Zo'n dienst vereist daarnaast gebruikersidentiteit, opslag voor toestemmingen, een intrekkingsontwerp en een scheiding tussen administraties; niets daarvan is gebouwd.
 
 ## Claude Desktop-extensie
 

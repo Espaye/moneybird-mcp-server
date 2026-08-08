@@ -187,6 +187,71 @@ class BuildConfigTests(unittest.TestCase):
         )
         run.assert_called_once()
 
+    def _run_main_capturing_data_dir(self, argv: list[str], **kwargs) -> str | None:
+        """Start the server far enough to settle the state root, then stop."""
+        import moneybird_mcp.server as server_module
+        from moneybird_mcp import config as config_module
+
+        fake_mcp = mock.Mock()
+        fake_mcp.http_app.return_value = object()
+        fake_tools = types.ModuleType("moneybird_mcp.tools")
+        fake_tools.mcp = fake_mcp
+
+        os.environ.pop("MONEYBIRD_MCP_DATA_DIR", None)
+        # main() writes the resolved mode back to the environment, so a previous
+        # call would otherwise pin the next transport to an incompatible mode.
+        os.environ.pop("MONEYBIRD_CREDENTIAL_MODE", None)
+        with (
+            mock.patch.dict(sys.modules, {"moneybird_mcp.tools": fake_tools}),
+            mock.patch.object(
+                config_module.Path, "home", return_value=Path("/home/x")
+            ),
+            mock.patch("uvicorn.run"),
+        ):
+            server_module.main(argv, **kwargs)
+        return os.environ.get("MONEYBIRD_MCP_DATA_DIR")
+
+    def test_installed_server_uses_the_login_state_root_on_every_transport(
+        self,
+    ) -> None:
+        """`auth login` writes to ~/.moneybird-mcp; the server must read there too.
+
+        Applying this on stdio alone let a network single-user server look for
+        the OAuth connection in its working directory, so a successful login
+        presented as "no credentials configured".
+        """
+        os.environ["MCP_AUTH_TOKEN"] = "sekrit"
+        for argv in ([], ["--transport", "http"], ["--transport", "sse"]):
+            with self.subTest(argv=argv or ["stdio"]):
+                resolved = self._run_main_capturing_data_dir(list(argv))
+                self.assertEqual(Path(resolved), Path("/home/x/.moneybird-mcp"))
+
+    def test_an_explicit_state_root_still_wins(self) -> None:
+        os.environ["MCP_AUTH_TOKEN"] = "sekrit"
+        os.environ["MONEYBIRD_MCP_DATA_DIR"] = str(Path("/explicit/state"))
+        import moneybird_mcp.server as server_module
+
+        fake_mcp = mock.Mock()
+        fake_mcp.http_app.return_value = object()
+        fake_tools = types.ModuleType("moneybird_mcp.tools")
+        fake_tools.mcp = fake_mcp
+        with (
+            mock.patch.dict(sys.modules, {"moneybird_mcp.tools": fake_tools}),
+            mock.patch("uvicorn.run"),
+        ):
+            server_module.main(["--transport", "http"])
+        self.assertEqual(
+            Path(os.environ["MONEYBIRD_MCP_DATA_DIR"]), Path("/explicit/state")
+        )
+
+    def test_the_legacy_wrapper_keeps_its_working_directory_state(self) -> None:
+        """Backward compatibility: `python moneybird_mcp_server.py` is unchanged."""
+        os.environ["MCP_AUTH_TOKEN"] = "sekrit"
+        resolved = self._run_main_capturing_data_dir(
+            ["--transport", "sse"], apply_default_data_dir=False
+        )
+        self.assertIsNone(resolved)
+
     def test_legacy_entrypoint_defers_tool_import_to_shared_main(self) -> None:
         import moneybird_mcp.server as server_module
 
@@ -201,7 +266,12 @@ class BuildConfigTests(unittest.TestCase):
         ):
             runpy.run_path(str(entrypoint), run_name="__main__")
 
-        main.assert_called_once_with(default_transport="sse")
+        # apply_default_data_dir=False keeps this wrapper's historical
+        # working-directory state; the installed console script defaults to
+        # ~/.moneybird-mcp instead so it agrees with `auth login`.
+        main.assert_called_once_with(
+            default_transport="sse", apply_default_data_dir=False
+        )
         self.assertNotIn("MONEYBIRD_TOOL_DISCOVERY", os.environ)
 
 
@@ -235,7 +305,7 @@ class MissingCredentialAnnouncementTests(unittest.TestCase):
         server = self._announce("local", configured=False)
         self.assertTrue(server.instructions.startswith("\nSETUP INCOMPLETE"))
         self.assertIn("MONEYBIRD_ACCESS_TOKEN", server.instructions)
-        self.assertIn("python -m moneybird_mcp.oauth_login", server.instructions)
+        self.assertIn("moneybird-mcp auth login", server.instructions)
         # The real instructions must survive: the banner is a prefix, not a
         # replacement, or a configured-later session loses every rule.
         self.assertIn("ORIGINAL INSTRUCTIONS", server.instructions)

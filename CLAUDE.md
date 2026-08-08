@@ -25,15 +25,97 @@ scripts that import the package directly (see below).
   - `network_single_user`: authenticated network edge → env → local OAuth profile; request
     Moneybird headers are rejected;
   - `hosted_request_only`: one nonblank trusted request context; no env/OAuth fallback.
-- **OAuth**: `moneybird_mcp/oauth.py` implements the authorization-code flow (app credentials in
-  the parent environment or an explicit file as
-  `MONEYBIRD_OAUTH_CLIENT_ID`/`MONEYBIRD_OAUTH_CLIENT_SECRET`; interactive login via
-  `python -m moneybird_mcp.oauth_login --env-file PATH`, out-of-band redirect; the CLI lives in
-  `moneybird_mcp/oauth_login.py` so a pip install has it, and `scripts/oauth_login.py` is a
-  checkout wrapper — error messages must never point at a path the wheel lacks). Tokens persist in
-  `moneybird_oauth_tokens.json` in the data dir and are used automatically in local or
-  network-single-user mode when `MONEYBIRD_ACCESS_TOKEN` is absent. Hosted request mode never
-  reads that store.
+- **OAuth**: split across four modules so a hosted callback flow can replace only the top
+  layer. `oauth_scopes.py` (scope catalogue + rationale + profiles), `oauth_store.py`
+  (`OAuthConnection` + the `TokenStore` interface + the local `FileTokenStore`),
+  `oauth.py` (URL construction, both grants, refresh-on-read session), `auth_cli.py`
+  (presentation only). App credentials come from `MONEYBIRD_OAUTH_CLIENT_ID` /
+  `MONEYBIRD_OAUTH_CLIENT_SECRET` in the parent environment or an explicit `--env-file`.
+  The user-facing command is `moneybird-mcp auth login | status | logout | scopes`;
+  `moneybird_mcp/oauth_login.py` and `scripts/oauth_login.py` are aliases kept so existing
+  documentation and shell history still work — error messages must never point at a path
+  the wheel lacks. Tokens persist in `moneybird_oauth_tokens.json` in the data dir and are
+  used automatically in local or network-single-user mode when `MONEYBIRD_ACCESS_TOKEN` is
+  absent. Hosted request mode never reads that store. `MONEYBIRD_OAUTH_PROFILE`
+  (`oauth_store.active_profile()`) chooses *which* stored connection — both the `auth`
+  commands and `credentials.py` resolve through that one helper, so a profile the CLI can
+  write is always one the server can read; an explicit `--profile` overrides it per
+  command. The installed `moneybird-mcp` command defaults its data dir to
+  `~/.moneybird-mcp` on **every** transport (`config.apply_installed_default_data_dir`)
+  precisely so login and server agree on the file; only the legacy
+  `python moneybird_mcp_server.py` wrapper keeps the historical cwd state. Full
+  user-facing detail: `docs/oauth.md`.
+  Eight things here are load-bearing and easy to undo by accident:
+  1. **A refresh answer's absent field means "unchanged", not "cleared".** Moneybird may
+     return only a new access token; replacing the record wholesale drops the refresh
+     token and the granted scopes, and the next expiry becomes a forced re-login
+     (`OAuthConnection.merged_with_refresh`). A *failed* refresh must raise and leave the
+     store untouched — a network blip is not a reason to discard a grant.
+  2. **The token endpoint is the one endpoint whose responses contain credentials**, so
+     its error bodies are never rendered wholesale. Only RFC 6749 `error` and
+     `error_description` are extracted, mapped to specific guidance
+     (`invalid_client` → the app credentials, `invalid_grant` → single-use/expired code).
+     Neither grant is retried: an authorization code is single-use and a refresh may
+     rotate the refresh token, so the usual retry convention does not apply.
+  3. **The administration is never selected silently.** One reachable administration is
+     taken, several are offered, and skipping saves no administration — a guessed one
+     sends every later write to the wrong books. Skipping is not an error: the OAuth
+     connection itself is already stored and usable, just without an administration,
+     which a later login or `MONEYBIRD_ADMINISTRATION_ID` can supply. The choice is
+     stored on the connection; `MONEYBIRD_ADMINISTRATION_ID` still overrides it, and
+     `auth status` says which wins.
+  3b. **A new grant never inherits the old administration.** `oauth.store_tokens` is only
+     ever called with the result of an authorization-code exchange, so it stores a new
+     identity and deliberately drops whatever selection the profile held. Re-adding that
+     "convenience" reintroduces the worst bug this flow has had: log in as account A
+     (administration 111), log in again as account B, skip the choice, and every later
+     read and write silently targets 111 — books B was never shown, and which B may even
+     have access to. Overlap is not verification: if the old id is also reachable by the
+     new grant it still goes through normal selection. Refresh is the opposite case and
+     keeps the administration (`merged_with_refresh`). Pinned by
+     `ReloginIdentityTests`, which is the only login test class that starts from a
+     non-empty store — the reason the bug survived a green suite in the first place.
+  7. **`parse_authorization_callback` requires `expected_state`**, has no default, and
+     refuses an empty one instead of skipping the check. A callback parser that stops
+     verifying when the caller forgets an argument lets an attacker-supplied URL bind the
+     installation to their Moneybird account. State is compared before the callback's
+     error or code is read. Only `--redirect-uri` uses this; OOB has no callback.
+  6. **`auth login` persists the grant before it verifies it.** The exchange spends the
+     authorization code, so a failed `/administrations` check must leave the tokens
+     stored and say so — discarding them would cost the user another authorization for
+     no safety gain. Do not "fix" the order.
+  4. **Moneybird documents no revocation endpoint** (`oauth.REVOCATION_SUPPORTED`), so
+     `auth logout` deletes local credentials only and must keep saying so.
+  5. **Local OAuth is for development and self-hosters with their own registered
+     application — never present it as the default public setup.** A Client Secret
+     authenticates the *application*, so it cannot ship inside a source-available
+     package; the personal API token stays the simple public path. Do not add a bundled
+     application credential, and do not reword the docs to imply a PyPI user receives
+     one. The hosted service is where OAuth becomes the normal path: backend holds the
+     secret, user presses Connect Moneybird over an HTTPS callback, tokens stored
+     server-side.
+- **Scopes come from Moneybird's per-endpoint reference, not the Authentication page.**
+  `docs/moneybird_api_scopes.json` is the checked-in snapshot (regenerate with
+  `scripts/render_api_scopes.py`, which needs PyYAML and a downloaded `openapi.yml`).
+  Parse the `Required scope(s)` *description text*, never the `security` array: the array
+  is the same flat list whether scopes are needed together (`documents` **and**
+  `sales_invoices` for profit_loss) or any one suffices (`Any of:` for contacts, ledger
+  account reads, tax rate reads). Three groupings are counter-intuitive and were wrong
+  here before 2026-08-08: **no report requires `settings`** (balance_sheet/cash_flow/
+  general_ledger → `bank`; profit_loss/tax/journal_entries → `documents` + `sales_invoices`;
+  debtors/revenue/subscriptions → `sales_invoices`; creditors/expenses/assets →
+  `documents`), financial **accounts** are `settings` while financial **mutations** are
+  `bank`, and `/administrations` needs no scope at all (documented, and **live
+  geverifieerd 2026-08-08** met een echte OAuth-grant — daarom kan `auth login` een zojuist
+  opgeslagen verbinding verifiëren en de bereikbare administraties aanbieden).
+  `tests/test_oauth_scopes.py` joins every claim against the
+  snapshot and proves the six requested scopes are minimal, so this cannot silently rot.
+- **De volledige lokale OAuth-flow is op 2026-08-08 op Windows live tegen Moneybird
+  doorlopen** met een echte geregistreerde applicatie: autorisatiepagina, OOB-code-uitwisseling,
+  `/administrations`, administratiekeuze, `auth status` zonder secrets, echte leesacties via de
+  opgeslagen verbinding zónder `MONEYBIRD_ACCESS_TOKEN`, en `auth logout`. Behandel die stappen
+  dus als werkend; zoek een storing eerst in de omgeving (data dir, client id/secret) voordat je
+  de flow zelf herschrijft.
 
 ## Running a one-off live query or fix
 
@@ -471,6 +553,21 @@ asset bundled on developer.moneybird.com.
   tests in `tests/test_bank_matching.py`.
 - `moneybird_mcp/reference_cache.py` en `moneybird_mcp/rate_budget.py` — kortstondige
   referentiecache en geobserveerd rate-limitbudget. Tests in `tests/test_reference_cache.py`.
+- `moneybird_mcp/oauth_scopes.py`, `oauth_store.py`, `oauth.py`, `auth_cli.py` — the OAuth
+  stack, layered so only `auth_cli.py` changes for a hosted HTTPS-callback flow. See the
+  OAuth section above for the rules that must not be undone. Tests in
+  `tests/test_oauth.py` (protocol, store, scopes, redaction, credential precedence,
+  profile resolution) and `tests/test_oauth_cli.py` (the four commands, administration
+  selection, re-login identity, profiles, redirect state, console-script dispatch).
+  `moneybird_mcp/auth.py` is unrelated: it is the MCP transport's shared-secret
+  middleware, not Moneybird authentication.
+  **Known limitation, deliberately not fixed here:** `FileTokenStore`'s lock is
+  process-local and it does not fsync before the atomic replace, so two processes writing
+  the store concurrently are uncoordinated. This is latent today because Moneybird access
+  tokens do not expire, so nothing rewrites the store in normal operation; it becomes real
+  if Moneybird starts expiring or rotating tokens. Cross-process locking is follow-up
+  hardening — do not hand-roll a stale-lock protocol or an `msvcrt`/`fcntl` abstraction
+  as a drive-by.
 - `moneybird_mcp/config.py` — constants, `MoneybirdError`, explicit env-file parsing, and `data_dir()`
   (where approvals DB / audit logs / sync caches live; override with
   `MONEYBIRD_MCP_DATA_DIR`). Approvals are persisted in SQLite and survive restarts.

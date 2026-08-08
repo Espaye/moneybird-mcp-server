@@ -292,6 +292,14 @@ class MoneybirdHTTPError(MoneybirdError):
 
 
 
+DATA_DIR_ENV = "MONEYBIRD_MCP_DATA_DIR"
+
+# The state root the *installed* `moneybird-mcp` command uses when the operator
+# named none. A local MCP client may spawn the server with an arbitrary working
+# directory, so the cwd default below is not a usable credential location for it.
+INSTALLED_DATA_DIR_NAME = ".moneybird-mcp"
+
+
 def data_dir() -> Path:
     """Directory for server state (approvals DB, audit logs, sync caches).
 
@@ -301,7 +309,7 @@ def data_dir() -> Path:
     call time, not import time, so tests and long-running processes can
     redirect state without re-importing.
     """
-    override = os.environ.get("MONEYBIRD_MCP_DATA_DIR", "").strip()
+    override = os.environ.get(DATA_DIR_ENV, "").strip()
     if not override:
         return Path(".")
     path = Path(override).expanduser()
@@ -313,6 +321,29 @@ def data_dir() -> Path:
         # bits. Operators must still restrict the directory ACL there.
         pass
     return path
+
+
+def installed_default_data_dir() -> Path:
+    return Path.home() / INSTALLED_DATA_DIR_NAME
+
+
+def apply_installed_default_data_dir() -> str:
+    """Point :data:`DATA_DIR_ENV` at the installed default when it is unset.
+
+    Every installed entrypoint must call this, on every transport. ``auth login``
+    writes the OAuth connection into :func:`data_dir`, and the server reads it
+    from the same place; if only one of them applied this default, a successful
+    login would store credentials the server never looks at. An explicit
+    ``MONEYBIRD_MCP_DATA_DIR`` (including one supplied by ``--env-file``) always
+    wins, and the legacy ``python moneybird_mcp_server.py`` wrapper deliberately
+    does not call this, keeping its historical working-directory state.
+    """
+    existing = os.environ.get(DATA_DIR_ENV, "").strip()
+    if existing:
+        return existing
+    resolved = str(installed_default_data_dir())
+    os.environ[DATA_DIR_ENV] = resolved
+    return resolved
 
 
 def harden_private_file(path: Path) -> None:

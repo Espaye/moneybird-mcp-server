@@ -126,22 +126,36 @@ python -m pip uninstall moneybird-mcp
 
 Uninstalling the package does not delete `~/.moneybird-mcp`. That directory may contain OAuth credentials, approvals, audit history, and search state. See [Local data lifecycle](data-lifecycle.md).
 
-## OAuth instead of a personal token
+## OAuth with your own registered application
 
-Local and authenticated single-user modes can use Moneybird's OAuth authorization-code flow when `MONEYBIRD_ACCESS_TOKEN` is absent.
+The personal API token above is the simple, supported way to run this locally. OAuth is an option for **development** and for **self-hosters who register their own OAuth application** — it is not the default public setup.
 
-1. Register an application with Moneybird.
-2. Configure `MONEYBIRD_OAUTH_CLIENT_ID` and `MONEYBIRD_OAUTH_CLIENT_SECRET`.
+The reason is not preference. An OAuth Client Secret authenticates the *application*, not the user, so it cannot be shipped inside an installable package: anything distributed to every user is not a secret, and a leaked application credential would affect every installation at once. This project therefore embeds no application credential, and there is no shared "Moneybird MCP" Client Secret that `pip install` gives you.
+
+If you do want OAuth locally:
+
+1. Register your own **external application** at <https://moneybird.com/user/applications/new> with redirect URI `urn:ietf:wg:oauth:2.0:oob`.
+2. Put its `MONEYBIRD_OAUTH_CLIENT_ID` and `MONEYBIRD_OAUTH_CLIENT_SECRET` in the environment or an explicitly selected file. These are application credentials, not tokens; treat the secret like a password and never commit it.
 3. Run:
 
 ```bash
-python -m moneybird_mcp.oauth_login --env-file /absolute/path/operator.env
+moneybird-mcp auth login --env-file /absolute/path/operator.env
 ```
 
-This works for an installed package as well as a source checkout; in a checkout
-`python scripts/oauth_login.py` is an equivalent wrapper.
+4. Open the printed authorization URL, approve the application, and paste **only** the short authorization code Moneybird displays.
+5. The command stores the connection in the Moneybird MCP data directory, then verifies it and selects the administration (asking when there is more than one). Start the MCP client normally.
 
-The helper stores OAuth tokens in the Moneybird MCP data directory. The current local helper requests the scopes documented in the repository; review them before authorising. A production hosted service needs a separate HTTPS callback, user identity, grant store, revocation design, and tenant boundary.
+The exchange in step 4 spends the authorization code, so the tokens are stored before they are verified: if that check fails, the command says so and keeps the credentials rather than making you authorize again. Skipping the administration question is fine too — the connection stays stored without one, and a later login or `MONEYBIRD_ADMINISTRATION_ID` supplies it. Nothing is guessed.
+
+Logging in again always stores a **new** grant, with **no** administration selected: the second login is not necessarily the same Moneybird account as the first, so an inherited selection could point later reads and writes at books this login never showed you. Refreshing an existing grant is a different thing and keeps its administration.
+
+Manage the connection with `moneybird-mcp auth status` and `moneybird-mcp auth logout`. Neither ever prints a token or the client secret. `logout` deletes local credentials only: Moneybird publishes no revocation endpoint, so access is withdrawn at <https://moneybird.com/user/applications>.
+
+`python -m moneybird_mcp.oauth_login` still works and is the same command; in a source checkout `python scripts/oauth_login.py` is an equivalent wrapper.
+
+Review the requested scopes with `moneybird-mcp auth scopes`, and narrow them with `--scopes` if wanted. Full detail, including the per-endpoint scope requirements and precedence rules, is in [Moneybird OAuth](oauth.md).
+
+The out-of-band redirect is a local/development mechanism. A future hosted service will hold the application's Client Secret in its backend, let a user connect by pressing **Connect Moneybird** over an HTTPS callback, and store per-user tokens server-side. That service additionally needs user identity, a grant store, a revocation design, and a tenant boundary; none of it is built.
 
 ## Claude Desktop extension
 
