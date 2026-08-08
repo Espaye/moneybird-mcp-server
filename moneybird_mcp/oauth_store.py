@@ -31,6 +31,12 @@ from .config import MoneybirdError, data_dir, harden_private_file
 
 DEFAULT_PROFILE = "default"
 
+# Selects which stored connection this process acts as. One value, read through
+# `active_profile()` everywhere, because a profile the CLI can write but the
+# server cannot read is worse than no profile support at all: `auth status`
+# would report a connection as active that nothing ever loads.
+PROFILE_ENV = "MONEYBIRD_OAUTH_PROFILE"
+
 STORE_FILENAME = "moneybird_oauth_tokens.json"
 
 # Keys this module owns. Anything else Moneybird sends is preserved verbatim in
@@ -49,6 +55,15 @@ _KNOWN_KEYS = frozenset(
 )
 
 _REDACTED = "<redacted>"
+
+
+def active_profile() -> str:
+    """The profile this process uses when a caller names none.
+
+    Read at call time, not import time, so a test or a long-running process can
+    redirect it the same way it can redirect the data directory.
+    """
+    return os.environ.get(PROFILE_ENV, "").strip() or DEFAULT_PROFILE
 
 
 def _text(value: Any) -> str:

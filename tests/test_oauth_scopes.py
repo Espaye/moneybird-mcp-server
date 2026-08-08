@@ -23,6 +23,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCOPES_PATH = REPO_ROOT / "docs" / "moneybird_api_scopes.json"
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
+# The generator is not importable as a package module, and several tests below
+# exercise its parser directly. Inserted here rather than inside one test, so
+# the import does not depend on which test happens to run first.
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from test_client_spec_conformance import _client_operations  # noqa: E402
 
 SNAPSHOT = json.loads(SCOPES_PATH.read_text(encoding="utf-8"))
@@ -60,7 +64,6 @@ class SnapshotIntegrityTests(unittest.TestCase):
 
     def test_the_generator_still_parses_and_or_any_correctly(self) -> None:
         """'and' and 'Any of:' mean opposite things; the security array elides both."""
-        sys.path.insert(0, str(REPO_ROOT / "scripts"))
         from render_api_scopes import parse_requirement
 
         self.assertEqual(
@@ -72,6 +75,47 @@ class SnapshotIntegrityTests(unittest.TestCase):
             ("any", ["settings", "bank"]),
         )
         self.assertEqual(parse_requirement("no heading here"), ("none", []))
+
+    def test_the_scope_section_stops_at_the_next_heading(self) -> None:
+        """Without a blank line the section used to run on into the next one.
+
+        Any scope name mentioned in backticks further down — a response field, a
+        cross-reference — was then read as an extra required scope, silently
+        widening what the login asks for.
+        """
+        from render_api_scopes import parse_requirement
+
+        self.assertEqual(
+            parse_requirement(
+                "### Required scope(s)\n`bank`\n"
+                "### Response\nReturns `sales_invoices` objects"
+            ),
+            ("all", ["bank"]),
+        )
+        self.assertEqual(
+            parse_requirement(
+                "### Required scope(s)\n`documents`\n\n## Notes\nSee `bank`."
+            ),
+            ("all", ["documents"]),
+        )
+
+    def test_equivalent_any_of_wordings_are_all_recognised(self) -> None:
+        """Reading an 'any' line as 'all' would overstate the required scopes."""
+        from render_api_scopes import parse_requirement
+
+        for prefix in ("Any of:", "Any one of:", "One of:", "ANY OF:"):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(
+                    parse_requirement(
+                        f"### Required scope(s)\n{prefix} `settings`, `bank`"
+                    ),
+                    ("any", ["settings", "bank"]),
+                )
+        # A plain list still means every scope together.
+        self.assertEqual(
+            parse_requirement("### Required scope(s)\nAll of: `settings`, `bank`"),
+            ("all", ["settings", "bank"]),
+        )
 
 
 class ClientEndpointCoverageTests(unittest.TestCase):

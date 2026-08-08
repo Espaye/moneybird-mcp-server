@@ -16,10 +16,13 @@ import logging
 import os
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from .config import MoneybirdError, load_env_file
+from .config import (
+    MoneybirdError,
+    apply_installed_default_data_dir,
+    load_env_file,
+)
 from .credentials import (
     CREDENTIAL_MODE_ENV,
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
@@ -313,7 +316,21 @@ def _announce_missing_credentials(credential_mode: str, mcp: Any) -> None:
         logger.warning("Could not add the setup notice to the server instructions.")
 
 
-def main(argv: list[str] | None = None, *, default_transport: str = "stdio") -> None:
+def main(
+    argv: list[str] | None = None,
+    *,
+    default_transport: str = "stdio",
+    apply_default_data_dir: bool = True,
+) -> None:
+    """Run the server (or dispatch ``auth``).
+
+    ``apply_default_data_dir`` is what separates the two entrypoints. The
+    installed ``moneybird-mcp`` command defaults its state root to
+    ``~/.moneybird-mcp`` on **every** transport, so it resolves the same
+    credential store as ``moneybird-mcp auth login``. The legacy
+    ``python moneybird_mcp_server.py`` wrapper passes ``False`` to keep its
+    historical working-directory state for existing deployments.
+    """
     logging.basicConfig(level=logging.INFO)  # stderr; stdout stays protocol-clean
 
     arguments = list(sys.argv[1:] if argv is None else argv)
@@ -329,13 +346,14 @@ def main(argv: list[str] | None = None, *, default_transport: str = "stdio") -> 
     os.environ["MONEYBIRD_TOOL_DISCOVERY"] = config.tool_discovery
     os.environ[CREDENTIAL_MODE_ENV] = config.credential_mode
 
-    if (
-        config.transport == "stdio"
-        and not os.environ.get("MONEYBIRD_MCP_DATA_DIR", "").strip()
-    ):
-        # Local MCP clients may spawn this process with an arbitrary cwd. Set a
-        # stable state root before importing the registered tool surface.
-        os.environ["MONEYBIRD_MCP_DATA_DIR"] = str(Path.home() / ".moneybird-mcp")
+    if apply_default_data_dir:
+        # Every transport, not just stdio: `auth login` writes the OAuth
+        # connection to this same default, and a network single-user server
+        # reads it. Applying the default on stdio alone made a successful login
+        # store credentials that `--transport http` then looked for in the
+        # working directory. Runs after build_config so an --env-file value
+        # still wins. Set before importing the registered tool surface.
+        apply_installed_default_data_dir()
 
     # Importing the tools package registers all tools + prompts on the mcp
     # instance; deferred past arg parsing so --help stays instant.

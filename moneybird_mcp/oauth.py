@@ -49,7 +49,9 @@ from .oauth_scopes import (
 )
 from .oauth_store import (
     DEFAULT_PROFILE,
+    PROFILE_ENV,
     OAuthConnection,
+    active_profile,
     get_token_store,
 )
 
@@ -94,8 +96,10 @@ __all__ = [
     "OAUTH_AUTHORIZE_URL",
     "OAUTH_TOKEN_URL",
     "OOB_REDIRECT_URI",
+    "PROFILE_ENV",
     "REGISTER_APPLICATION_URL",
     "REVOCATION_SUPPORTED",
+    "active_profile",
     "build_authorize_url",
     "configured_scopes",
     "credential_location",
@@ -181,29 +185,45 @@ def generate_state() -> str:
 def parse_authorization_callback(
     callback_url: str,
     *,
-    expected_state: str = "",
+    expected_state: str,
 ) -> str:
     """Extract the authorization code from an OAuth redirect callback URL.
 
-    Raises :class:`MoneybirdError` when the provider reported an error (e.g. the
-    user denied consent), when ``expected_state`` is given and does not match the
-    callback's ``state`` (CSRF), or when no code is present. Hosted flows must
-    always pass ``expected_state``; it is optional only for local development.
+    ``expected_state`` is required and must be the value
+    :func:`generate_state` produced for *this* login attempt. It has no default
+    on purpose: a callback-parsing primitive that silently skips its CSRF check
+    when the caller forgets an argument is the failure this function exists to
+    prevent. Without it an attacker-supplied callback URL binds the installation
+    to the attacker's Moneybird account, and every later read and write goes to
+    their books.
+
+    Raises :class:`MoneybirdError` when the state is absent or does not match,
+    when the provider reported an error (e.g. the user denied consent), or when
+    no code is present. The state is checked first, so an unsolicited callback
+    is refused before any of its other contents are interpreted.
+
+    The out-of-band flow never calls this: Moneybird shows the code in the
+    browser instead of redirecting, so there is no callback URL to parse.
     """
+    if not expected_state:
+        raise MoneybirdError(
+            "An OAuth callback can only be verified against the state issued "
+            "with its authorization request; refusing to parse one without it."
+        )
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(callback_url).query)
+    state = (query.get("state") or [""])[0]
+    if not secrets.compare_digest(state, expected_state):
+        raise MoneybirdError(
+            "OAuth state missing or mismatched on the callback: possible CSRF; "
+            "not exchanging the authorization code. Start the login again and "
+            "paste the URL from that same attempt."
+        )
     error = (query.get("error") or [""])[0]
     if error:
         description = (query.get("error_description") or [""])[0]
         raise MoneybirdError(
             f"Moneybird authorization failed: {error} {description}".strip()
         )
-    if expected_state:
-        state = (query.get("state") or [""])[0]
-        if not secrets.compare_digest(state, expected_state):
-            raise MoneybirdError(
-                "OAuth state mismatch on the callback: possible CSRF; "
-                "not exchanging the authorization code."
-            )
     code = (query.get("code") or [""])[0].strip()
     if not code:
         raise MoneybirdError("The callback URL contains no authorization code.")
@@ -532,22 +552,36 @@ def get_administration_id(profile: str = DEFAULT_PROFILE) -> str | None:
 def store_tokens(
     tokens: dict[str, Any], *, profile: str = DEFAULT_PROFILE
 ) -> OAuthConnection:
-    """Persist a raw token response under ``profile`` and return what was stored.
+    """Persist a newly granted token response under ``profile``.
 
-    An administration already selected for this profile is preserved: it is
-    local state, not part of the grant, and a re-login should not silently move
-    the user back to auto-selection.
+    Every caller receives ``tokens`` from an authorization-code exchange, so
+    this stores a **new grant** and therefore a new identity. It deliberately
+    starts with no administration selected, replacing whatever the profile held
+    before.
+
+    Carrying the previous grant's administration over is the one thing this must
+    not do. The new grant has never been verified against that administration,
+    and in bookkeeping software an inherited id silently points every later read
+    and write at books the user was never shown — including the case where the
+    two grants happen to share access to it. ``auth login`` re-selects from the
+    administrations the new grant can actually reach.
+
+    Refreshing an *existing* grant is the opposite case and keeps its selection;
+    see :meth:`OAuthConnection.merged_with_refresh`.
     """
-    existing = load_connection(profile)
-    connection = OAuthConnection.from_token_response(
-        tokens,
-        administration_id=existing.administration_id if existing else None,
-    )
+    connection = OAuthConnection.from_token_response(tokens)
     save_connection(connection, profile=profile)
     return connection
 
 
 def load_tokens(profile: str = DEFAULT_PROFILE) -> dict[str, Any] | None:
-    """The stored token record for ``profile`` as a plain dict, or ``None``."""
+    """The stored token record for ``profile`` as a plain dict, or ``None``.
+
+    **The returned dict contains the access and refresh tokens in plaintext.**
+    Unlike :class:`~moneybird_mcp.oauth_store.OAuthConnection`, a plain dict has
+    no redacting ``repr``, so this value must never be logged, printed, put in an
+    exception message, or returned from a tool. Use
+    :meth:`OAuthConnection.describe` for anything a human or a log will see.
+    """
     connection = load_connection(profile)
     return connection.to_record() if connection else None

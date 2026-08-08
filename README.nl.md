@@ -140,8 +140,9 @@ De belangrijkste instellingen zijn:
 | `MONEYBIRD_ADMINISTRATION_ID` | de bij OAuth-login gekozen administratie, anders automatisch wanneer eenduidig | Te gebruiken administratie |
 | `MONEYBIRD_OAUTH_CLIENT_ID` / `_SECRET` | geen | Je eigen geregistreerde OAuth-applicatie, voor `auth login` |
 | `MONEYBIRD_OAUTH_SCOPES` | `full` | Scopeprofiel of expliciete lijst die bij login wordt aangevraagd |
+| `MONEYBIRD_OAUTH_PROFILE` | `default` | Welke opgeslagen OAuth-verbinding deze server gebruikt; `auth login --profile` schrijft hem |
 | `MONEYBIRD_CAPABILITY_MODE` | `read_only` | `read_only` of `write_enabled` |
-| `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` voor geïnstalleerde stdio | Lokale goedkeuringen, auditgegevens, OAuth-gegevens en zoekstatus |
+| `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` voor het geïnstalleerde commando | Lokale goedkeuringen, auditgegevens, OAuth-gegevens en zoekstatus |
 | `MCP_TOOL_DISCOVERY` | `search` | Compacte ontdekking; gebruik `full` voor oudere clients |
 | `MCP_TRANSPORT` | `stdio` | `stdio`, `http` of legacy-`sse` |
 

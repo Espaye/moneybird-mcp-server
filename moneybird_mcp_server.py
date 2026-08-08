@@ -16,7 +16,12 @@ if __name__ == "__main__":
     # or any compatibility helpers that may consume server configuration.
     from moneybird_mcp.server import main
 
-    main(default_transport="sse")
+    # apply_default_data_dir=False keeps this wrapper's historical
+    # working-directory state. The installed `moneybird-mcp` command defaults to
+    # ~/.moneybird-mcp instead, so that it and `moneybird-mcp auth login` always
+    # agree on where the OAuth connection lives. MONEYBIRD_MCP_DATA_DIR still
+    # overrides either default.
+    main(default_transport="sse", apply_default_data_dir=False)
 else:
     from decimal import Decimal
 

@@ -147,6 +147,8 @@ moneybird-mcp auth login --env-file /absolute/path/operator.env
 
 The exchange in step 4 spends the authorization code, so the tokens are stored before they are verified: if that check fails, the command says so and keeps the credentials rather than making you authorize again. Skipping the administration question is fine too — the connection stays stored without one, and a later login or `MONEYBIRD_ADMINISTRATION_ID` supplies it. Nothing is guessed.
 
+Logging in again always stores a **new** grant, with **no** administration selected: the second login is not necessarily the same Moneybird account as the first, so an inherited selection could point later reads and writes at books this login never showed you. Refreshing an existing grant is a different thing and keeps its administration.
+
 Manage the connection with `moneybird-mcp auth status` and `moneybird-mcp auth logout`. Neither ever prints a token or the client secret. `logout` deletes local credentials only: Moneybird publishes no revocation endpoint, so access is withdrawn at <https://moneybird.com/user/applications>.
 
 `python -m moneybird_mcp.oauth_login` still works and is the same command; in a source checkout `python scripts/oauth_login.py` is an equivalent wrapper.

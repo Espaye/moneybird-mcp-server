@@ -39,6 +39,22 @@ versioning while allowing pre-1.0 breaking changes.
   the connection, so `MONEYBIRD_ADMINISTRATION_ID` is no longer needed after an OAuth
   login — an explicit environment value still overrides it, and `auth status` flags the
   override.
+  **A new authorization always starts with no administration selected.** Logging in
+  again stores a new grant and therefore a new identity, so it never inherits the
+  previous login's administration: that grant has not been verified against it, and
+  when the two logins are different Moneybird accounts an inherited id would silently
+  point every later read and write at books the user was never shown. Selection always
+  runs against the administrations the *new* grant can reach — including when the old
+  id happens to be among them. Refreshing an existing grant is the opposite case and
+  keeps its selection.
+- **`MONEYBIRD_OAUTH_PROFILE`** selects which stored OAuth connection is used, by both
+  the `auth` commands and the server's own credential resolution. Previously
+  `auth login --profile NAME` could store a connection that nothing ever read, while
+  `auth status` reported it as the active identity. An explicit `--profile` overrides
+  the environment for one command; `auth login` then prints how to activate that
+  profile, and `auth status` distinguishes the profile it inspected from the one the
+  server would actually resolve. `MONEYBIRD_ACCESS_TOKEN` still takes precedence over
+  any profile, and hosted request mode still reads no local connection at all.
 - **`moneybird_mcp/oauth_scopes.py`** — the requested scopes with a rationale per tool
   area, named profiles (`full`, `bookkeeping`, `invoicing`), and validation that rejects
   an unknown scope before the browser opens. Selectable with `--scopes` or
@@ -111,6 +127,31 @@ and no discovery layer is needed in front of it.
 
 ### Changed
 
+- **The installed `moneybird-mcp` command defaults its state root to `~/.moneybird-mcp`
+  on every transport**, not only on stdio, so that it and `moneybird-mcp auth login`
+  always resolve the same credential file. A network single-user server previously
+  looked for the OAuth connection in its working directory, which presented as "no
+  credentials configured" immediately after a successful login. `MONEYBIRD_MCP_DATA_DIR`
+  still overrides it, and the legacy `python moneybird_mcp_server.py` wrapper keeps its
+  historical working-directory state for existing deployments.
+- **`parse_authorization_callback` now requires `expected_state`.** It has no default
+  and an empty value is refused rather than silently skipping the check, because a
+  callback parser that stops verifying when the caller forgets an argument is the exact
+  failure it exists to prevent. The state is compared before anything else in the
+  callback is interpreted. `auth login --redirect-uri …` now issues a random state,
+  sends it, and requires it back; a pasted callback from another attempt is rejected
+  before the code is exchanged. The default out-of-band flow has no callback and is
+  unchanged.
+- **`auth status` in `hosted_request_only` mode reports the gateway as the active
+  identity.** It previously printed the note that local credentials are never read and
+  then named a stored OAuth connection as active anyway. Local credentials are still
+  listed, now labelled inactive and ignored.
+- **`scripts/render_api_scopes.py` parses the scope section more strictly**: it stops at
+  the next Markdown heading as well as at a blank line, and recognises `Any one of:` and
+  `One of:` alongside `Any of:`. Both were latent — regenerating against the current
+  official spec produces a byte-identical `docs/moneybird_api_scopes.json` — but a
+  section running into the next heading would have read an unrelated backticked scope
+  name as required, and an unrecognised "any" wording would have overstated the request.
 - **Token-endpoint failures now say what went wrong.** `HTTP 400` alone is not
   actionable, so the RFC 6749 `error` / `error_description` fields are extracted and
   paired with specific guidance: `invalid_client` points at the application credentials,

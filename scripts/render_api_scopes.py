@@ -37,8 +37,21 @@ SOURCE_URL = (
     "https://raw.githubusercontent.com/moneybird/openapi/refs/heads/main/openapi.yml"
 )
 
-_SCOPE_HEADING = re.compile(r"### Required scope\(s\)\s*(.+?)(?:\n\s*\n|$)", re.S)
+# The scope text ends at a blank line, at the next Markdown heading, or at the
+# end of the description. The heading terminator matters: without it a section
+# that runs straight into the next `###` with no blank line between them keeps
+# matching, and any scope name mentioned in backticks further down (a response
+# field, a cross-reference) is silently read as an extra required scope.
+_SCOPE_HEADING = re.compile(
+    r"### Required scope\(s\)\s*(.+?)(?:\n\s*\n|\n\s*#|$)", re.S
+)
 _SCOPE_NAME = re.compile(r"`([a-z_]+)`")
+
+# Wordings that mean "one of these suffices". Getting this wrong is not
+# symmetric: reading an "any" line as "all" merely overstates the request, but
+# reading an "all" line as "any" would let the minimality test bless a scope set
+# that cannot actually call the endpoint. Both directions are pinned by tests.
+_ANY_OF_PREFIXES = ("any of", "any one of", "one of")
 
 
 def normalize_path(path: str) -> str:
@@ -57,7 +70,7 @@ def parse_requirement(description: str) -> tuple[str, list[str]]:
     if not scopes:
         return "none", []
     # "Any of: `estimates`, `sales_invoices`, ..." vs "`documents` and `sales_invoices`".
-    mode = "any" if text.lower().startswith("any of") else "all"
+    mode = "any" if text.lower().startswith(_ANY_OF_PREFIXES) else "all"
     return mode, scopes
 
 

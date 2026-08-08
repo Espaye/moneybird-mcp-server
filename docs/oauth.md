@@ -1,7 +1,5 @@
 # Moneybird OAuth (bring your own application)
 
-**Language:** **English** · [Nederlands](getting-started.nl.md)
-
 > This is an unofficial community integration and is not developed, endorsed, supported, or audited by Moneybird B.V.
 
 ## Who this is for
@@ -126,6 +124,23 @@ connection remains stored and usable, simply without an administration
 selected. Supply it later with `MONEYBIRD_ADMINISTRATION_ID`, or by running
 `auth login --administration ID` again. No administration is ever guessed.
 
+### A new login is a new identity
+
+Every successful authorization-code exchange stores a **new grant**, and that
+grant starts with **no administration selected** — whatever the profile held
+before is replaced, not inherited.
+
+This matters because the second login is not always the same Moneybird account
+as the first. Carrying the previous selection over would attach an
+administration the new grant has never been verified against, and if the two
+accounts happen to share access to it, every later read and write would land in
+books this login never showed you. So the selection in step 7 always runs
+against the administrations the *new* grant can actually reach, and skipping it
+leaves the connection with none rather than with a stale one.
+
+Refreshing an existing grant is the opposite case: it is the same identity, so
+it keeps its selected administration.
+
 ### 4. Start the MCP client normally
 
 Nothing else to configure. The server picks up the stored connection on its own.
@@ -152,11 +167,17 @@ until you withdraw it in Moneybird at
 ## Where credentials are stored
 
 In the server state directory (`MONEYBIRD_MCP_DATA_DIR`, defaulting to
-`~/.moneybird-mcp` for the installed `moneybird-mcp` command):
+`~/.moneybird-mcp` for the installed `moneybird-mcp` command **on every
+transport**, so that `auth login` and the server it configures always resolve
+the same file):
 
 ```text
 ~/.moneybird-mcp/moneybird_oauth_tokens.json
 ```
+
+The one exception is the legacy `python moneybird_mcp_server.py` wrapper, which
+keeps its historical working-directory state for existing deployments. Set
+`MONEYBIRD_MCP_DATA_DIR` explicitly there, or use the installed command.
 
 The file is written atomically and restricted to the owner where the platform
 supports POSIX mode bits; on Windows it relies on the directory ACL. It is in
@@ -167,8 +188,36 @@ Because `MONEYBIRD_MCP_DATA_DIR` decides the location, log in with the same
 value the server runs with. `auth login` prints the exact path it wrote to, and
 `auth status` prints the path it reads from.
 
+### Known limitation: one process at a time
+
+The store's lock is process-local. Two processes writing the same file
+concurrently — a server refreshing a token while `auth login` runs, say — are
+not coordinated, so one write can overwrite the other, and the file is not
+fsynced before the atomic replace. This is currently latent: Moneybird access
+tokens do not expire, so nothing rewrites the store during normal operation.
+It becomes real if Moneybird starts expiring or rotating tokens, and
+cross-process locking is tracked as follow-up hardening rather than being
+hand-rolled here.
+
+### Profiles
+
 Multiple connections can coexist under `--profile NAME`; the default profile is
 `default`.
+
+A profile is only useful if the server reads the same one, so the profile is a
+single configuration value:
+
+```bash
+moneybird-mcp auth login --profile work     # store under 'work'
+MONEYBIRD_OAUTH_PROFILE=work moneybird-mcp  # and read it back
+```
+
+`MONEYBIRD_OAUTH_PROFILE` selects the profile every command uses by default —
+`login`, `status`, `logout`, and the server's own credential resolution. An
+explicit `--profile` overrides it for that one command. When the two differ,
+`auth login` prints how to activate the profile it just wrote, and `auth status`
+labels which profile it inspected versus which one the server would actually
+read.
 
 ## Precedence
 
@@ -183,7 +232,10 @@ The administration follows the same rule: an explicit
 `MONEYBIRD_ADMINISTRATION_ID` overrides the one chosen at login. `auth status`
 states which one is active and flags the override when both are present.
 
-Hosted request mode never reads the local OAuth store.
+Hosted request mode never reads the local OAuth store, and `auth status` says so
+twice over: it flags the mode, and it reports the active identity as the
+credentials supplied per request by the trusted gateway, labelling any local
+personal token or stored connection as inactive and ignored.
 
 ## Scopes
 
@@ -269,6 +321,17 @@ or set `MONEYBIRD_OAUTH_SCOPES`. Named profiles:
 | `bookkeeping` | `sales_invoices documents bank settings` | estimates, time registration (every report still works) |
 | `invoicing` | `sales_invoices settings` | purchases, bank, estimates, time registration, and every report except the debtor/revenue/subscription group |
 
+**`bookkeeping` is the one worth considering.** It drops `estimates` and
+`time_entries`, which between them are required by exactly three endpoints and
+justify exactly two tools — `list_estimates` and `list_time_entries`. If this
+administration does not use quotations or time registration, those tools are
+dead weight and the profile requests less access at no cost. If it does use
+them, those two tools stop working; nothing else changes, and every report still
+works.
+
+This is a question of how much access you grant the application, not of how much
+this server is allowed to do with it — see below.
+
 `moneybird-mcp auth scopes` prints the same breakdown, computed from the code
 rather than copied. An unknown scope or profile is rejected before the browser
 opens. If Moneybird grants less than was asked for, `auth login` says which
@@ -299,7 +362,7 @@ Only the presentation layer is specific to the local out-of-band CLI:
 |---|---|---|
 | Scope catalogue and rationale | `oauth_scopes.py` | Unchanged |
 | Token model and storage interface | `oauth_store.py` | Implement `TokenStore` over per-tenant encrypted rows; every method already takes the connection's profile explicitly, so there is no global-connection assumption to unpick |
-| URL construction, both grants, refresh | `oauth.py` | Unchanged. `generate_state` / `parse_authorization_callback(expected_state=…)` already implement the CSRF handling a redirect flow needs, which the OOB flow does not use |
+| URL construction, both grants, refresh | `oauth.py` | Unchanged. `generate_state` / `parse_authorization_callback(expected_state=…)` already implement the CSRF handling a redirect flow needs, which the OOB flow does not use. `expected_state` is a required argument with no default, so a callback cannot be exchanged without being bound to the request that asked for it |
 | Administration selection | `oauth.py` + connection record | Unchanged |
 | API authentication | `credentials.py`, `client.py` | Unchanged |
 | Out-of-band prompt | `auth_cli.py` | Replaced by an HTTPS callback route |
@@ -328,3 +391,12 @@ with the one `auth status` prints.
 **More than one administration** — run
 `moneybird-mcp auth login --administration ID`, or set
 `MONEYBIRD_ADMINISTRATION_ID`. Nothing is selected silently.
+
+**"OAuth state missing or mismatched"** — only the `--redirect-uri` flow can
+report this. The pasted callback URL came from a different login attempt (or
+from somewhere else entirely). Start `auth login` again and paste the URL from
+that same run. The default out-of-band flow has no callback and never sees this.
+
+**`auth status` says the connection is not the active identity** — the profile
+being inspected is not the one the server resolves. Set
+`MONEYBIRD_OAUTH_PROFILE` to it, or drop `--profile`.

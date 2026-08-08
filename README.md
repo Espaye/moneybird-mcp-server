@@ -140,8 +140,9 @@ The most useful settings are:
 | `MONEYBIRD_ADMINISTRATION_ID` | the one chosen at OAuth login, else automatic when unambiguous | Administration to use |
 | `MONEYBIRD_OAUTH_CLIENT_ID` / `_SECRET` | none | Your own registered OAuth application, for `auth login` |
 | `MONEYBIRD_OAUTH_SCOPES` | `full` | Scope profile or explicit list requested at login |
+| `MONEYBIRD_OAUTH_PROFILE` | `default` | Which stored OAuth connection this server uses; `auth login --profile` writes it |
 | `MONEYBIRD_CAPABILITY_MODE` | `read_only` | `read_only` or `write_enabled` |
-| `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` for installed stdio | Local approvals, audit, OAuth, and search state |
+| `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` for the installed command | Local approvals, audit, OAuth, and search state |
 | `MCP_TOOL_DISCOVERY` | `search` | Compact discovery; use `full` for older clients |
 | `MCP_TRANSPORT` | `stdio` | `stdio`, `http`, or legacy `sse` |
 

@@ -1,19 +1,27 @@
 """``moneybird-mcp auth`` — connect this installation to a Moneybird account.
 
-Three commands:
+Four commands:
 
     moneybird-mcp auth login    [--env-file PATH] [--profile NAME] [...]
     moneybird-mcp auth status   [--env-file PATH] [--profile NAME]
     moneybird-mcp auth logout   [--profile NAME]
+    moneybird-mcp auth scopes
 
 ``login`` runs Moneybird's out-of-band authorization-code flow: it prints (and
 optionally opens) the consent URL, takes the code Moneybird displays in the
 browser, exchanges it for tokens, and stores the connection. Only then does it
 verify the connection and select an administration — the authorization code is
 spent by the exchange, so a failure afterwards must not throw the grant away.
+Each successful exchange is a *new* grant and therefore starts with no
+administration selected; see :func:`moneybird_mcp.oauth.store_tokens`.
 The out-of-band redirect is a local/development mechanism; a hosted product
 registers an HTTPS callback instead and reuses the same
-:mod:`moneybird_mcp.oauth` layer underneath.
+:mod:`moneybird_mcp.oauth` layer underneath. ``--redirect-uri`` exercises that
+callback path locally, and does issue and require an OAuth ``state``.
+
+The profile every command acts on comes from ``--profile``, else
+``MONEYBIRD_OAUTH_PROFILE`` — the same value the server resolves — so a stored
+connection is always one the server can read.
 
 This module is presentation only. It formats and prompts; it constructs no URLs,
 parses no responses, and touches no files itself. Nothing it prints contains a
@@ -26,11 +34,14 @@ import os
 import sys
 import webbrowser
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from . import oauth
-from .config import MoneybirdError, load_env_file
+from .config import (
+    MoneybirdError,
+    apply_installed_default_data_dir,
+    load_env_file,
+)
 from .oauth_scopes import (
     CAPABILITY_SCOPES,
     INCIDENTAL_ACCESS,
@@ -41,7 +52,7 @@ from .oauth_scopes import (
     parse_scopes,
     unavailable_areas,
 )
-from .oauth_store import DEFAULT_PROFILE
+from .oauth_store import DEFAULT_PROFILE, PROFILE_ENV
 
 PROG = "moneybird-mcp auth"
 
@@ -55,15 +66,20 @@ def _err(message: str) -> None:
 
 
 def _default_data_dir() -> None:
-    """Match the console script's stdio default so the server finds the tokens.
+    """Match the installed console script's default so the server finds the tokens.
 
-    ``moneybird-mcp`` on stdio defaults its state root to ``~/.moneybird-mcp``.
-    Logging in against a different directory would store a working connection
-    somewhere the server never looks, which presents as "I just logged in and it
-    still says no credentials".
+    Both entrypoints call :func:`~moneybird_mcp.config.apply_installed_default_data_dir`,
+    which is the point: logging in against a different directory would store a
+    working connection somewhere the server never looks, presenting as "I just
+    logged in and it still says no credentials".
     """
-    if not os.environ.get("MONEYBIRD_MCP_DATA_DIR", "").strip():
-        os.environ["MONEYBIRD_MCP_DATA_DIR"] = str(Path.home() / ".moneybird-mcp")
+    apply_installed_default_data_dir()
+
+
+def _resolved_profile(args: argparse.Namespace) -> str:
+    """The profile to act on: an explicit ``--profile`` beats the active one."""
+    explicit = (getattr(args, "profile", None) or "").strip()
+    return explicit or oauth.active_profile()
 
 
 def _timestamp(value: int | None) -> str:
@@ -180,6 +196,7 @@ def _verify_connection(access_token: str) -> list[dict[str, Any]]:
 def command_login(args: argparse.Namespace) -> int:
     from .credentials import CREDENTIAL_MODE_HOSTED_REQUEST_ONLY, get_credential_mode
 
+    profile = _resolved_profile(args)
     scopes = parse_scopes(args.scopes or os.environ.get(SCOPES_ENV, ""))
     scope_value = format_scopes(scopes)
 
@@ -198,7 +215,15 @@ def command_login(args: argparse.Namespace) -> int:
     # missing — rather than after the user has already authorized.
     oauth.oauth_client_config()
 
-    url = oauth.build_authorize_url(redirect_uri=args.redirect_uri, scope=scope_value)
+    out_of_band = args.redirect_uri == oauth.OOB_REDIRECT_URI
+    # A redirect flow is the only one that can be attacked by feeding the user a
+    # callback URL from someone else's authorization. State binds the callback to
+    # this attempt; the out-of-band flow has no callback at all, so it needs none.
+    state = "" if out_of_band else oauth.generate_state()
+
+    url = oauth.build_authorize_url(
+        redirect_uri=args.redirect_uri, scope=scope_value, state=state
+    )
     _out("Connecting this installation to Moneybird.\n")
     _out(f"Requesting scopes: {scope_value}")
     _out("\nOpen this URL in your browser and authorize the application:\n")
@@ -209,10 +234,14 @@ def command_login(args: argparse.Namespace) -> int:
         except Exception:  # noqa: BLE001 - opening a browser is best-effort
             pass  # printing the URL is enough, and headless hosts have none
 
-    if args.redirect_uri == oauth.OOB_REDIRECT_URI:
+    if out_of_band:
         _out("Moneybird will show a short authorization code after you approve.")
         prompt = "Paste the authorization code shown by Moneybird: "
     else:
+        _out(
+            "Paste the callback URL from this login attempt; one from an earlier\n"
+            "attempt or from anyone else will be refused."
+        )
         prompt = "Paste the full callback URL you were redirected to: "
 
     try:
@@ -224,21 +253,25 @@ def command_login(args: argparse.Namespace) -> int:
         _err("No authorization code entered; nothing was stored.")
         return 1
 
-    if args.redirect_uri == oauth.OOB_REDIRECT_URI:
+    if out_of_band:
         code = answer
     else:
-        code = oauth.parse_authorization_callback(answer)
+        code = oauth.parse_authorization_callback(answer, expected_state=state)
 
     tokens = oauth.exchange_authorization_code(code, redirect_uri=args.redirect_uri)
 
     # Persist before verifying. The grant has already been consumed at this
     # point, so discarding it because a follow-up read failed would cost the
     # user another authorization round trip for no safety gain.
-    connection = oauth.store_tokens(tokens, profile=args.profile)
+    #
+    # This is a NEW grant, so it starts with no administration: store_tokens
+    # replaces any selection the profile carried from a previous login, which
+    # may have belonged to an entirely different Moneybird account.
+    connection = oauth.store_tokens(tokens, profile=profile)
 
     _out(
         f"\nConnection stored in {oauth.credential_location()} "
-        f"(profile {args.profile!r})."
+        f"(profile {profile!r})."
     )
     _out(f"Granted scopes: {connection.scope or '(not reported by Moneybird)'}")
     if connection.expires_in:
@@ -265,7 +298,8 @@ def command_login(args: argparse.Namespace) -> int:
     except MoneybirdError as exc:
         _err(
             f"\nThe connection was stored, but verifying it failed: {exc}\n"
-            f"Run '{PROG} status' once the problem is resolved."
+            "No administration is selected for it. Run "
+            f"'{PROG} status' once the problem is resolved."
         )
         return 1
 
@@ -276,19 +310,54 @@ def command_login(args: argparse.Namespace) -> int:
         f"{len(administrations)} administration(s)."
     )
 
-    selected = _select_administration(
-        administrations,
-        requested=(args.administration or "").strip(),
-        interactive=sys.stdin.isatty(),
-    )
+    try:
+        selected = _select_administration(
+            administrations,
+            requested=(args.administration or "").strip(),
+            interactive=sys.stdin.isatty(),
+        )
+    except MoneybirdError as exc:
+        # The tokens are valid and stay stored; only the requested administration
+        # was wrong. Say both, because the grant is genuinely usable once an
+        # administration this connection can reach is supplied.
+        _err(
+            f"\n{exc}\nThe new connection was stored without an administration; "
+            "no earlier selection was kept. Re-run the login with a listed id, "
+            "or set MONEYBIRD_ADMINISTRATION_ID."
+        )
+        return 1
+
     if selected:
         oauth.save_connection(
-            connection.with_administration(selected), profile=args.profile
+            connection.with_administration(selected), profile=profile
         )
         _out(f"\nAdministration {selected} saved for this connection.")
+    else:
+        _out(
+            "\nNo administration is stored for this connection. Supply one with "
+            "MONEYBIRD_ADMINISTRATION_ID, or run the login again with "
+            "--administration ID."
+        )
 
+    _profile_activation_note(profile)
     _out("\nDone. Start your MCP client normally; no token needs to be copied.")
     return 0
+
+
+def _profile_activation_note(profile: str) -> None:
+    """Say how to make a non-default profile the one the server actually reads.
+
+    Storing a connection the running server never loads is a silent dead end:
+    the login reports success and every later tool call reports no credentials.
+    """
+    if profile == oauth.active_profile():
+        return
+    _out(
+        f"\nNote: this connection is stored under profile {profile!r}, but this "
+        f"environment resolves\n{oauth.PROFILE_ENV}={oauth.active_profile()!r}. "
+        f"Set {oauth.PROFILE_ENV}={profile} in the environment your MCP client\n"
+        "starts the server with, or the server will not use this connection."
+    )
 
 
 def command_status(args: argparse.Namespace) -> int:
@@ -305,15 +374,30 @@ def command_status(args: argparse.Namespace) -> int:
     )
 
     mode = get_credential_mode()
+    hosted = mode == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY
+    inspected = _resolved_profile(args)
+    active = oauth.active_profile()
+
     _out(f"Credential mode:        {mode}  ({CREDENTIAL_MODE_ENV})")
     _out(f"Credential store:       {oauth.credential_location()}")
-    if mode == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
+    if hosted:
         # Otherwise a stored connection listed below reads as the one in use,
         # and the real answer to "why is my login ignored?" is invisible.
         _out(
             "  note:                 this mode takes credentials only from the "
             "trusted gateway;\n                        anything stored locally "
             "is never read."
+        )
+    _out(f"OAuth profile:          {inspected!r} (inspected)")
+    if inspected != active:
+        # The distinction that matters: this command can be pointed at any
+        # profile, but the server reads exactly one. Reporting only the
+        # inspected profile would present a connection as configured that
+        # nothing ever loads.
+        _out(
+            f"  note:                 the server would use {active!r} here. Set "
+            f"{oauth.PROFILE_ENV}={inspected}\n                        in the "
+            "server's environment to make this the profile it reads."
         )
 
     client_id = os.environ.get(oauth.CLIENT_ID_ENV, "").strip()
@@ -328,7 +412,7 @@ def command_status(args: argparse.Namespace) -> int:
     env_administration = os.environ.get("MONEYBIRD_ADMINISTRATION_ID", "").strip()
 
     try:
-        connection = oauth.load_connection(args.profile)
+        connection = oauth.load_connection(inspected)
     except MoneybirdError as exc:
         _err(f"\nThe stored connection could not be read: {exc}")
         return 1
@@ -340,10 +424,10 @@ def command_status(args: argparse.Namespace) -> int:
         _out("Personal API token:     not set")
 
     if connection is None:
-        _out(f"OAuth connection:       none stored for profile {args.profile!r}")
+        _out(f"OAuth connection:       none stored for profile {inspected!r}")
     else:
         summary = connection.describe()
-        _out(f"OAuth connection:       stored for profile {args.profile!r}")
+        _out(f"OAuth connection:       stored for profile {inspected!r}")
         _out(f"  scopes granted:       {summary['scope'] or '(not reported)'}")
         _out(f"  obtained at:          {_timestamp(summary['obtained_at'])}")
         if summary["expires_in"]:
@@ -361,11 +445,31 @@ def command_status(args: argparse.Namespace) -> int:
     # and an OAuth connection is exactly where "which Moneybird identity am I
     # actually acting as" stops being obvious.
     _out("")
-    if env_token:
+    if hosted:
+        # Nothing local is consulted in this mode, so nothing local may be
+        # presented as the identity in use — not the personal token, and not a
+        # stored connection. Saying otherwise is the exact confusion the note
+        # further up exists to prevent.
+        _out(
+            "Active identity:        the credentials supplied per request by the "
+            "trusted gateway."
+        )
+        if env_token or connection is not None:
+            _out(
+                "  note:                 the local credentials listed above are "
+                "INACTIVE and ignored\n                        in this mode."
+            )
+    elif env_token:
         _out(
             "Active identity:        the personal API token in "
             "MONEYBIRD_ACCESS_TOKEN (it takes precedence over the OAuth "
             "connection)."
+        )
+    elif connection is not None and inspected != active:
+        # Loading it would resolve `active`, not the profile printed above.
+        _out(
+            f"Active identity:        not this connection. The server resolves "
+            f"profile {active!r}, not {inspected!r}."
         )
     elif connection is not None:
         administration = env_administration or connection.administration_id
@@ -390,11 +494,12 @@ def command_status(args: argparse.Namespace) -> int:
 
 
 def command_logout(args: argparse.Namespace) -> int:
-    removed = oauth.delete_connection(args.profile)
+    profile = _resolved_profile(args)
+    removed = oauth.delete_connection(profile)
     if removed:
-        _out(f"Local OAuth credentials for profile {args.profile!r} were deleted.")
+        _out(f"Local OAuth credentials for profile {profile!r} were deleted.")
     else:
-        _out(f"No stored OAuth credentials for profile {args.profile!r}.")
+        _out(f"No stored OAuth credentials for profile {profile!r}.")
 
     # Deleting a file is not revocation, and saying "logged out" without this
     # would leave the user believing access had been withdrawn.
@@ -441,6 +546,14 @@ def command_scopes(_: argparse.Namespace) -> int:
         _out(f"  {name:<12} {format_scopes(scopes)}")
         lost = unavailable_areas(scopes)
         _out(f"  {'':<12} unavailable: {', '.join(lost) if lost else 'nothing'}")
+    _out(
+        "\n'full' is the default because each of the six is required by at least one\n"
+        "exposed tool. 'bookkeeping' is the one worth considering: it drops estimates\n"
+        "and time registration, which justify only list_estimates and list_time_entries.\n"
+        "If this administration has no quotations or time entries, it asks for less\n"
+        "access at no cost; if it has them, those two tools stop working and nothing\n"
+        "else changes. Every report still works under 'bookkeeping'."
+    )
     return 0
 
 
@@ -468,8 +581,12 @@ def build_parser() -> argparse.ArgumentParser:
         )
         subparser.add_argument(
             "--profile",
-            default=DEFAULT_PROFILE,
-            help="Store or read the connection under this profile name.",
+            default=None,
+            help=(
+                "Store or read the connection under this profile name. Defaults "
+                f"to {PROFILE_ENV} (currently the profile the server would use), "
+                f"or {DEFAULT_PROFILE!r} when that is unset."
+            ),
         )
 
     login = subparsers.add_parser(

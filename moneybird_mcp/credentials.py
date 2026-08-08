@@ -114,7 +114,10 @@ def _credentials_from_environment() -> Credentials | None:
 def _credentials_from_oauth_store() -> Credentials | None:
     from . import oauth
 
-    connection = oauth.get_connection()
+    # The profile the operator selected, not an assumed "default". Reading a
+    # fixed profile here while `auth login --profile NAME` writes another is how
+    # a successful login ends up feeding a connection nothing ever loads.
+    connection = oauth.get_connection(oauth.active_profile())
     if connection is None:
         return None
     # An explicit environment value still wins, keeping the whole configuration
@@ -202,7 +205,7 @@ def credentials_are_configured(mode: str) -> bool:
     from . import oauth
 
     try:
-        record = oauth.load_connection()
+        record = oauth.load_connection(oauth.active_profile())
     except (MoneybirdError, OSError, ValueError):
         # An unreadable or malformed store is not proof of a configured
         # identity, and diagnosing it is the resolution path's job.
@@ -223,15 +226,33 @@ def missing_credentials_message(mode: str) -> str:
             "No Moneybird credentials found for network_single_user mode. Set "
             "MONEYBIRD_ACCESS_TOKEN (and optionally MONEYBIRD_ADMINISTRATION_ID) "
             "in the server's environment, start it with --env-file PATH, or "
-            f"{_OAUTH_LOGIN_HINT}. Per-request Moneybird tenant headers are "
-            "rejected in this mode."
+            f"{_OAUTH_LOGIN_HINT}.{_profile_note()} Per-request Moneybird tenant "
+            "headers are rejected in this mode."
         )
     return (
         "No Moneybird credentials found. Set MONEYBIRD_ACCESS_TOKEN (and "
         "optionally MONEYBIRD_ADMINISTRATION_ID) in the environment your MCP "
         "client starts this server with, start it with --env-file PATH, or "
-        f"{_OAUTH_LOGIN_HINT}. Get a personal token at "
+        f"{_OAUTH_LOGIN_HINT}.{_profile_note()} Get a personal token at "
         "https://moneybird.com/user/applications."
+    )
+
+
+def _profile_note() -> str:
+    """Name the OAuth profile that was actually checked, when it is not the default.
+
+    Without this, an operator who set MONEYBIRD_OAUTH_PROFILE reads "no
+    credentials found" while a perfectly good connection sits under a different
+    profile name, with nothing on screen connecting the two.
+    """
+    from .oauth_store import DEFAULT_PROFILE, PROFILE_ENV, active_profile
+
+    profile = active_profile()
+    if profile == DEFAULT_PROFILE:
+        return ""
+    return (
+        f" Only the OAuth profile {profile!r} was checked, because {PROFILE_ENV} "
+        "selects it."
     )
 
 

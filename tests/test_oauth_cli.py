@@ -366,9 +366,22 @@ class LoginTests(_CliCase):
         self.assertIsNone(oauth.load_connection())
         self.assertIsNotNone(oauth.load_connection("second"))
 
-    def test_an_explicit_redirect_uri_takes_a_callback_url(self) -> None:
-        """The same command serves a registered HTTPS callback during development."""
+    def _redirect_login(self, callback: str | None) -> tuple[int, str, str, mock.MagicMock]:
+        """Run a --redirect-uri login, echoing the issued state into the callback.
+
+        ``callback`` is a format string taking ``{state}``; None means "paste a
+        callback that carries no state at all".
+        """
+        issued: list[str] = []
+        real_state = oauth.generate_state
+
+        def capture() -> str:
+            value = real_state()
+            issued.append(value)
+            return value
+
         with (
+            mock.patch.object(oauth, "generate_state", side_effect=capture),
             mock.patch.object(
                 oauth, "exchange_authorization_code", return_value=FAKE_TOKENS
             ) as exchange,
@@ -376,14 +389,246 @@ class LoginTests(_CliCase):
                 auth_cli, "_verify_connection", return_value=ONE_ADMINISTRATION
             ),
         ):
-            code, out, err = self.run_cli(
-                ["login", "--redirect-uri", "https://app.example/cb"],
-                answers=["https://app.example/cb?code=xyz789"],
-            )
+            # The prompt is only reached after the URL is built, so the state
+            # exists by the time the answer is consumed.
+            answers = ["__PLACEHOLDER__"]
+            responses = iter(answers)
+
+            def fake_input(_prompt: str = "") -> str:
+                next(responses)
+                if callback is None:
+                    return "https://app.example/cb?code=xyz789"
+                return callback.format(state=issued[0])
+
+            out, err = io.StringIO(), io.StringIO()
+            with (
+                mock.patch.object(auth_cli, "input", fake_input, create=True),
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(err),
+            ):
+                code = auth_cli.main(
+                    ["login", "--redirect-uri", "https://app.example/cb"]
+                )
+        return code, out.getvalue(), err.getvalue(), exchange
+
+    def test_an_explicit_redirect_uri_takes_a_callback_url(self) -> None:
+        """The same command serves a registered HTTPS callback during development."""
+        code, out, err, exchange = self._redirect_login(
+            "https://app.example/cb?code=xyz789&state={state}"
+        )
         self.assertEqual(code, 0, err)
         exchange.assert_called_once_with(
             "xyz789", redirect_uri="https://app.example/cb"
         )
+        # The state that was verified must actually have been on the wire.
+        self.assertIn("state=", out)
+
+    def test_a_redirect_login_refuses_a_callback_with_no_state(self) -> None:
+        """An attacker-supplied callback binds the install to their account."""
+        code, _, err, exchange = self._redirect_login(None)
+        self.assertEqual(code, 1)
+        self.assertIn("missing or mismatched", err)
+        exchange.assert_not_called()
+        self.assertIsNone(oauth.load_connection())
+
+    def test_a_redirect_login_refuses_a_callback_from_another_attempt(self) -> None:
+        code, _, err, exchange = self._redirect_login(
+            "https://app.example/cb?code=xyz789&state=state-from-somewhere-else"
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("missing or mismatched", err)
+        exchange.assert_not_called()
+        self.assertIsNone(oauth.load_connection())
+
+    def test_the_out_of_band_login_sends_and_expects_no_state(self) -> None:
+        """OOB has no callback to forge, and must stay a bare code paste."""
+        _, out, _, exchange = self._login(["login"], answers=["the-auth-code"])
+        self.assertNotIn("state=", out)
+        exchange.assert_called_once_with(
+            "the-auth-code", redirect_uri=oauth.OOB_REDIRECT_URI
+        )
+
+
+class ReloginIdentityTests(LoginTests):
+    """A second login must not let a new grant inherit the old administration.
+
+    Every other login test starts from an empty store, which is exactly why this
+    class exists: the dangerous case only appears when a connection is already
+    there. An inherited id points later reads and writes at books the new grant
+    was never verified against, and in the cross-account case at books belonging
+    to someone else entirely.
+    """
+
+    def _existing_connection(self, administration: str = "111") -> None:
+        """An earlier grant for a different Moneybird account, with its books chosen."""
+        oauth.store_tokens({"access_token": "AT-OLD-GRANT", "refresh_token": "RT-OLD"})
+        oauth.save_connection(
+            oauth.load_connection().with_administration(administration)
+        )
+        self.assertEqual(oauth.get_administration_id(), administration)
+
+    def test_relogin_then_skipping_leaves_no_administration(self) -> None:
+        self._existing_connection()
+        with mock.patch("sys.stdin.isatty", return_value=True):
+            code, out, err, _ = self._login(
+                ["login"],
+                answers=["code-b", ""],  # "" = skip the choice
+                administrations=TWO_ADMINISTRATIONS,
+            )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(oauth.load_connection().access_token, FAKE_TOKENS["access_token"])
+        self.assertIsNone(oauth.get_administration_id())
+        self.assertIn("No administration is stored", out)
+        self.assertNotIn("111", out)
+
+    def test_relogin_non_interactively_leaves_no_administration(self) -> None:
+        self._existing_connection()
+        with mock.patch("sys.stdin.isatty", return_value=False):
+            code, _, err, _ = self._login(
+                ["login"], answers=["code-b"], administrations=TWO_ADMINISTRATIONS
+            )
+        self.assertEqual(code, 0, err)
+        self.assertIsNone(oauth.get_administration_id())
+
+    def test_relogin_with_an_inaccessible_administration_leaves_none(self) -> None:
+        """The new grant stays stored; the stale selection does not come back."""
+        self._existing_connection()
+        code, _, err, _ = self._login(
+            ["login", "--administration", "999"],
+            answers=["code-b"],
+            administrations=TWO_ADMINISTRATIONS,
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("not accessible", err)
+        self.assertIn("without an administration", err)
+        self.assertEqual(oauth.load_connection().access_token, FAKE_TOKENS["access_token"])
+        self.assertIsNone(oauth.get_administration_id())
+
+    def test_relogin_with_one_reachable_administration_selects_the_new_one(self) -> None:
+        self._existing_connection()
+        code, out, err, _ = self._login(
+            ["login"], answers=["code-b"], administrations=ONE_ADMINISTRATION
+        )
+        self.assertEqual(code, 0, err)
+        # 123 is the id the *new* grant verified, not the stored 111.
+        self.assertEqual(oauth.get_administration_id(), "123")
+        self.assertIn("123", out)
+
+    def test_a_coinciding_administration_id_is_still_re_selected_not_retained(
+        self,
+    ) -> None:
+        """Overlap is not verification.
+
+        When the old id happens to be reachable by the new grant too, it must
+        still go through the normal selection rules. Retaining it "because the
+        ids match" would silently reinstate a choice this login never made.
+        """
+        self._existing_connection(administration="123")
+        with mock.patch("sys.stdin.isatty", return_value=True):
+            code, _, err, _ = self._login(
+                ["login"],
+                answers=["code-b", ""],  # skip
+                administrations=TWO_ADMINISTRATIONS,  # includes 123
+            )
+        self.assertEqual(code, 0, err)
+        self.assertIsNone(oauth.get_administration_id())
+
+    def test_a_failed_verification_after_relogin_reports_no_administration(self) -> None:
+        self._existing_connection()
+        with (
+            mock.patch.object(
+                oauth, "exchange_authorization_code", return_value=FAKE_TOKENS
+            ),
+            mock.patch.object(
+                auth_cli,
+                "_verify_connection",
+                side_effect=MoneybirdError("Moneybird is unreachable"),
+            ),
+        ):
+            code, _, err = self.run_cli(["login"], answers=["code-b"])
+        self.assertEqual(code, 1)
+        self.assertIn("connection was stored", err)
+        self.assertIn("No administration is selected", err)
+        self.assertIsNone(oauth.get_administration_id())
+
+
+class ProfileSelectionTests(_CliCase):
+    """`--profile` must name a connection the running server can actually load."""
+
+    def test_login_defaults_to_the_profile_the_server_would_use(self) -> None:
+        with mock.patch.dict(os.environ, {oauth_store.PROFILE_ENV: "work"}):
+            with (
+                mock.patch.object(
+                    oauth, "exchange_authorization_code", return_value=FAKE_TOKENS
+                ),
+                mock.patch.object(
+                    auth_cli, "_verify_connection", return_value=ONE_ADMINISTRATION
+                ),
+            ):
+                code, out, err = self.run_cli(["login"], answers=["code"])
+        self.assertEqual(code, 0, err)
+        self.assertIsNotNone(oauth.load_connection("work"))
+        self.assertIsNone(oauth.load_connection("default"))
+        self.assertIn("'work'", out)
+
+    def test_an_explicit_profile_overrides_the_environment(self) -> None:
+        with mock.patch.dict(os.environ, {oauth_store.PROFILE_ENV: "work"}):
+            with (
+                mock.patch.object(
+                    oauth, "exchange_authorization_code", return_value=FAKE_TOKENS
+                ),
+                mock.patch.object(
+                    auth_cli, "_verify_connection", return_value=ONE_ADMINISTRATION
+                ),
+            ):
+                code, out, _ = self.run_cli(
+                    ["login", "--profile", "other"], answers=["code"]
+                )
+        self.assertEqual(code, 0)
+        self.assertIsNotNone(oauth.load_connection("other"))
+        # And it says so, because the server would still read 'work'.
+        self.assertIn(oauth_store.PROFILE_ENV, out)
+        self.assertIn("will not use this connection", out)
+
+    def test_logging_into_a_non_default_profile_says_how_to_activate_it(self) -> None:
+        with (
+            mock.patch.object(
+                oauth, "exchange_authorization_code", return_value=FAKE_TOKENS
+            ),
+            mock.patch.object(
+                auth_cli, "_verify_connection", return_value=ONE_ADMINISTRATION
+            ),
+        ):
+            _, out, _ = self.run_cli(["login", "--profile", "second"], answers=["code"])
+        self.assertIn(f"{oauth_store.PROFILE_ENV}=second", out)
+
+    def test_status_distinguishes_the_inspected_profile_from_the_active_one(
+        self,
+    ) -> None:
+        oauth.store_tokens(FAKE_TOKENS, profile="second")
+        _, out, _ = self.run_cli(["status", "--profile", "second"])
+        self.assertIn("'second' (inspected)", out)
+        self.assertIn("the server would use 'default'", out)
+        # And it must not claim the inspected connection is the active identity.
+        self.assertIn("Active identity:        not this connection", out)
+
+    def test_status_reports_the_active_profile_as_active(self) -> None:
+        with mock.patch.dict(os.environ, {oauth_store.PROFILE_ENV: "second"}):
+            oauth.store_tokens(FAKE_TOKENS, profile="second")
+            _, out, _ = self.run_cli(["status"])
+        self.assertIn("'second' (inspected)", out)
+        self.assertNotIn("the server would use", out)
+        self.assertIn("Active identity:        the stored OAuth connection", out)
+
+    def test_logout_defaults_to_the_active_profile(self) -> None:
+        with mock.patch.dict(os.environ, {oauth_store.PROFILE_ENV: "work"}):
+            oauth.store_tokens(FAKE_TOKENS, profile="work")
+            oauth.store_tokens(FAKE_TOKENS, profile="default")
+            code, out, _ = self.run_cli(["logout"])
+        self.assertEqual(code, 0)
+        self.assertIn("'work'", out)
+        self.assertIsNone(oauth.load_connection("work"))
+        self.assertIsNotNone(oauth.load_connection("default"))
 
 
 class StatusTests(_CliCase):
@@ -546,6 +791,34 @@ class HostedModeTests(_CliCase):
         self.assertEqual(code, 0)
         self.assertIn("never read", out)
 
+    def test_status_names_the_gateway_and_never_a_local_connection_as_active(
+        self,
+    ) -> None:
+        """The note is not enough on its own.
+
+        `Active identity` is the line a user trusts, so it must not contradict
+        the note four lines above it by naming a store this mode never reads.
+        """
+        oauth.store_tokens(FAKE_TOKENS)
+        oauth.save_connection(oauth.load_connection().with_administration("111"))
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MONEYBIRD_CREDENTIAL_MODE": "hosted_request_only",
+                "MONEYBIRD_ACCESS_TOKEN": "personal",
+            },
+        ):
+            code, out, _ = self.run_cli(["status"])
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "Active identity:        the credentials supplied per request by the "
+            "trusted gateway.",
+            out,
+        )
+        self.assertNotIn("Active identity:        the stored OAuth connection", out)
+        self.assertNotIn("Active identity:        the personal API token", out)
+        self.assertIn("INACTIVE and ignored", out)
+
     def test_login_warns_before_spending_an_authorization(self) -> None:
         with mock.patch.dict(
             os.environ, {"MONEYBIRD_CREDENTIAL_MODE": "hosted_request_only"}
@@ -705,15 +978,44 @@ class ConsoleScriptDispatchTests(_CliCase):
 
 
 class DataDirectoryTests(_CliCase):
-    def test_the_default_state_root_matches_the_stdio_server(self) -> None:
+    def test_the_default_state_root_matches_the_installed_server(self) -> None:
         """Logging in elsewhere stores a connection the server never finds."""
+        from moneybird_mcp import config as config_module
+
         with mock.patch.dict(os.environ, {"MONEYBIRD_MCP_DATA_DIR": ""}):
-            with mock.patch.object(auth_cli.Path, "home", return_value=Path("/home/x")):
+            with mock.patch.object(
+                config_module.Path, "home", return_value=Path("/home/x")
+            ):
                 auth_cli._default_data_dir()
                 self.assertEqual(
                     Path(os.environ["MONEYBIRD_MCP_DATA_DIR"]),
                     Path("/home/x/.moneybird-mcp"),
                 )
+
+    def test_login_and_the_installed_server_resolve_one_default(self) -> None:
+        """The two entrypoints must not disagree about where credentials live.
+
+        Applying the default on stdio only meant a successful `auth login`
+        stored credentials that `--transport http` then looked for in the
+        working directory.
+        """
+        from moneybird_mcp import config as config_module
+
+        for transport in ("stdio", "http", "sse"):
+            with self.subTest(transport=transport):
+                with mock.patch.dict(os.environ, {"MONEYBIRD_MCP_DATA_DIR": ""}):
+                    with mock.patch.object(
+                        config_module.Path, "home", return_value=Path("/home/x")
+                    ):
+                        auth_cli._default_data_dir()
+                        login_dir = os.environ["MONEYBIRD_MCP_DATA_DIR"]
+
+                        os.environ["MONEYBIRD_MCP_DATA_DIR"] = ""
+                        config_module.apply_installed_default_data_dir()
+                        server_dir = os.environ["MONEYBIRD_MCP_DATA_DIR"]
+
+                self.assertEqual(Path(login_dir), Path(server_dir))
+                self.assertEqual(Path(login_dir), Path("/home/x/.moneybird-mcp"))
 
     def test_an_explicit_state_root_is_respected(self) -> None:
         with mock.patch.dict(os.environ, {"MONEYBIRD_MCP_DATA_DIR": "/custom"}):

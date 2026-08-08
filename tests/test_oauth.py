@@ -213,21 +213,56 @@ class AuthorizationCallbackTests(unittest.TestCase):
         url = "https://gateway.example/callback?code=abc123&state=forged"
         with self.assertRaises(MoneybirdError) as caught:
             oauth.parse_authorization_callback(url, expected_state="expected")
-        self.assertIn("state mismatch", str(caught.exception))
+        self.assertIn("mismatched", str(caught.exception))
         self.assertNotIn("abc123", str(caught.exception))
 
+    def test_a_callback_without_state_is_refused(self) -> None:
+        """An unsolicited callback carries no state; it must not be exchanged."""
+        url = "https://gateway.example/callback?code=abc123"
+        with self.assertRaises(MoneybirdError) as caught:
+            oauth.parse_authorization_callback(url, expected_state="expected")
+        self.assertIn("missing or mismatched", str(caught.exception))
+        self.assertNotIn("abc123", str(caught.exception))
+
+    def test_expected_state_is_required_and_cannot_be_waived(self) -> None:
+        """No default, and an empty value is refused rather than skipping the check.
+
+        A callback parser that quietly stops checking when the caller forgets an
+        argument is the whole failure mode this guards.
+        """
+        with self.assertRaises(TypeError):
+            oauth.parse_authorization_callback(  # type: ignore[call-arg]
+                "https://gateway.example/callback?code=abc123&state=s"
+            )
+        with self.assertRaises(MoneybirdError) as caught:
+            oauth.parse_authorization_callback(
+                "https://gateway.example/callback?code=abc123&state=s",
+                expected_state="",
+            )
+        self.assertIn("refusing to parse", str(caught.exception))
+
     def test_provider_error_is_reported(self) -> None:
+        state = oauth.generate_state()
         url = (
             "https://gateway.example/callback?error=access_denied"
-            "&error_description=The+user+denied+access"
+            f"&error_description=The+user+denied+access&state={state}"
         )
         with self.assertRaises(MoneybirdError) as caught:
-            oauth.parse_authorization_callback(url)
+            oauth.parse_authorization_callback(url, expected_state=state)
         self.assertIn("access_denied", str(caught.exception))
+
+    def test_state_is_checked_before_a_provider_error_is_believed(self) -> None:
+        """An unsolicited error callback is refused as CSRF, not relayed."""
+        url = "https://gateway.example/callback?error=access_denied&state=forged"
+        with self.assertRaises(MoneybirdError) as caught:
+            oauth.parse_authorization_callback(url, expected_state="expected")
+        self.assertIn("missing or mismatched", str(caught.exception))
 
     def test_missing_code_raises(self) -> None:
         with self.assertRaises(MoneybirdError):
-            oauth.parse_authorization_callback("https://gateway.example/callback?state=x")
+            oauth.parse_authorization_callback(
+                "https://gateway.example/callback?state=x", expected_state="x"
+            )
 
     def test_generate_state_is_random_and_urlsafe(self) -> None:
         first, second = oauth.generate_state(), oauth.generate_state()
@@ -869,12 +904,38 @@ class TokenSessionTests(_StoreCase):
             oauth.get_access_token()
         self.assertIn("auth login", str(caught.exception))
 
-    def test_relogin_preserves_a_previously_selected_administration(self) -> None:
+    def test_a_new_grant_never_inherits_the_previous_administration(self) -> None:
+        """A new authorization is a new identity, so its selection starts empty.
+
+        Keeping the old id would attach an administration to a grant that has
+        never been verified against it — and when the two grants belong to
+        different Moneybird accounts, every later read and write would target
+        books the user was never shown.
+        """
         oauth.store_tokens({"access_token": "at-1"})
         oauth.save_connection(oauth.load_connection().with_administration("123"))
-        oauth.store_tokens({"access_token": "at-2"})
         self.assertEqual(oauth.get_administration_id(), "123")
+
+        oauth.store_tokens({"access_token": "at-2"})
+        self.assertIsNone(oauth.get_administration_id())
         self.assertEqual(oauth.get_access_token(), "at-2")
+
+    def test_a_refresh_of_the_same_grant_keeps_its_administration(self) -> None:
+        """The opposite case: refreshing is the same identity, so it keeps its books."""
+        oauth.store_tokens(
+            {
+                "access_token": "at",
+                "refresh_token": "rt",
+                "expires_in": 60,
+                "obtained_at": int(time.time()) - 3600,
+            }
+        )
+        oauth.save_connection(oauth.load_connection().with_administration("123"))
+        with mock.patch.object(
+            oauth, "refresh_access_token", return_value={"access_token": "at-new"}
+        ):
+            self.assertEqual(oauth.get_access_token(), "at-new")
+        self.assertEqual(oauth.get_administration_id(), "123")
 
     def test_delete_connection_removes_the_stored_identity(self) -> None:
         oauth.store_tokens({"access_token": "at"})
@@ -902,6 +963,59 @@ class CredentialFallbackTests(_StoreCase):
         self.assertEqual(resolved.source, "oauth")
         self.assertEqual(resolved.token, "oauth-at")
         self.assertEqual(resolved.administration_id, "123")
+
+    def test_the_selected_profile_is_the_one_resolution_reads(self) -> None:
+        """A profile the CLI can write but the server cannot read is a dead end."""
+        oauth.store_tokens({"access_token": "at-default"})
+        oauth.store_tokens({"access_token": "at-work"}, profile="work")
+        oauth.save_connection(
+            oauth.load_connection("work").with_administration("777"), profile="work"
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MONEYBIRD_ACCESS_TOKEN": "",
+                "MONEYBIRD_ADMINISTRATION_ID": "",
+                oauth_store.PROFILE_ENV: "work",
+            },
+        ):
+            resolved = credentials.resolve_credentials()
+            self.assertTrue(credentials.credentials_are_configured("local"))
+        self.assertEqual(resolved.token, "at-work")
+        self.assertEqual(resolved.administration_id, "777")
+
+    def test_an_unset_profile_env_still_resolves_the_default(self) -> None:
+        oauth.store_tokens({"access_token": "at-default"})
+        with mock.patch.dict(
+            os.environ,
+            {"MONEYBIRD_ACCESS_TOKEN": "", "MONEYBIRD_ADMINISTRATION_ID": ""},
+        ):
+            os.environ.pop(oauth_store.PROFILE_ENV, None)
+            resolved = credentials.resolve_credentials()
+        self.assertEqual(resolved.token, "at-default")
+
+    def test_a_selected_profile_with_no_connection_is_not_configured(self) -> None:
+        """Falling back to another profile's connection would be a silent identity swap."""
+        oauth.store_tokens({"access_token": "at-default"})
+        with mock.patch.dict(
+            os.environ,
+            {"MONEYBIRD_ACCESS_TOKEN": "", oauth_store.PROFILE_ENV: "absent"},
+        ):
+            self.assertFalse(credentials.credentials_are_configured("local"))
+            with self.assertRaises(MoneybirdError) as caught:
+                credentials.resolve_credentials()
+        self.assertIn("'absent'", str(caught.exception))
+
+    def test_a_personal_token_still_wins_over_a_selected_profile(self) -> None:
+        oauth.store_tokens({"access_token": "at-work"}, profile="work")
+        with mock.patch.dict(
+            os.environ,
+            {"MONEYBIRD_ACCESS_TOKEN": "env-at", oauth_store.PROFILE_ENV: "work"},
+        ):
+            resolved = credentials.resolve_credentials()
+        self.assertEqual(resolved.source, "environment")
+        self.assertEqual(resolved.token, "env-at")
 
     def test_env_token_still_wins_over_oauth_store(self) -> None:
         """Deterministic precedence: a personal token is never silently replaced."""
