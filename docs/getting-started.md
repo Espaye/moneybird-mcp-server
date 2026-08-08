@@ -143,7 +143,9 @@ moneybird-mcp auth login --env-file /absolute/path/operator.env
 ```
 
 4. Open the printed authorization URL, approve the application, and paste **only** the short authorization code Moneybird displays.
-5. The command verifies the connection, selects the administration (asking when there is more than one), and stores everything in the Moneybird MCP data directory. Start the MCP client normally.
+5. The command stores the connection in the Moneybird MCP data directory, then verifies it and selects the administration (asking when there is more than one). Start the MCP client normally.
+
+The exchange in step 4 spends the authorization code, so the tokens are stored before they are verified: if that check fails, the command says so and keeps the credentials rather than making you authorize again. Skipping the administration question is fine too — the connection stays stored without one, and a later login or `MONEYBIRD_ADMINISTRATION_ID` supplies it. Nothing is guessed.
 
 Manage the connection with `moneybird-mcp auth status` and `moneybird-mcp auth logout`. Neither ever prints a token or the client secret. `logout` deletes local credentials only: Moneybird publishes no revocation endpoint, so access is withdrawn at <https://moneybird.com/user/applications>.
 

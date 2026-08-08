@@ -66,7 +66,8 @@ connection with no `MONEYBIRD_ACCESS_TOKEN` set, and `auth logout`.
 
 That also settles one thing the documentation alone could not: `/administrations`
 documents no scope requirement, and a real OAuth grant does reach it — which is
-what lets `auth login` verify a new connection before anything is stored.
+what lets `auth login` verify a freshly stored connection and offer the
+administrations it can actually reach.
 
 ## Set-up
 
@@ -109,9 +110,21 @@ The command:
 2. waits while you approve the application in Moneybird;
 3. asks you to paste **only** the short authorization code Moneybird displays;
 4. exchanges that code for an access token and a refresh token;
-5. verifies the connection by listing the administrations it can reach;
-6. selects the administration, asking you when there is more than one;
-7. saves everything locally.
+5. stores the connection locally, and prints where;
+6. verifies it by listing the administrations it can reach;
+7. selects the administration, asking you when there is more than one, and
+   saves that choice onto the stored connection.
+
+The order of steps 5 and 6 is deliberate. The authorization code is spent by
+step 4, so if verification then fails — a network problem, a Moneybird
+hiccup — the tokens stay stored and the command says so, rather than
+discarding a perfectly good grant and making you authorize again. Run
+`auth status` once the problem is resolved.
+
+Skipping the administration choice in step 7 is also not a failure: the OAuth
+connection remains stored and usable, simply without an administration
+selected. Supply it later with `MONEYBIRD_ADMINISTRATION_ID`, or by running
+`auth login --administration ID` again. No administration is ever guessed.
 
 ### 4. Start the MCP client normally
 

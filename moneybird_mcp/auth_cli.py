@@ -8,7 +8,9 @@ Three commands:
 
 ``login`` runs Moneybird's out-of-band authorization-code flow: it prints (and
 optionally opens) the consent URL, takes the code Moneybird displays in the
-browser, exchanges it for tokens, verifies them, and stores the connection.
+browser, exchanges it for tokens, and stores the connection. Only then does it
+verify the connection and select an administration — the authorization code is
+spent by the exchange, so a failure afterwards must not throw the grant away.
 The out-of-band redirect is a local/development mechanism; a hosted product
 registers an HTTPS callback instead and reuses the same
 :mod:`moneybird_mcp.oauth` layer underneath.

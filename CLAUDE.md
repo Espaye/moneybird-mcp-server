@@ -38,7 +38,7 @@ scripts that import the package directly (see below).
   used automatically in local or network-single-user mode when `MONEYBIRD_ACCESS_TOKEN` is
   absent. Hosted request mode never reads that store. Full user-facing detail:
   `docs/oauth.md`.
-  Four things here are load-bearing and easy to undo by accident:
+  Six things here are load-bearing and easy to undo by accident:
   1. **A refresh answer's absent field means "unchanged", not "cleared".** Moneybird may
      return only a new access token; replacing the record wholesale drops the refresh
      token and the granted scopes, and the next expiry becomes a forced re-login
@@ -51,9 +51,16 @@ scripts that import the package directly (see below).
      Neither grant is retried: an authorization code is single-use and a refresh may
      rotate the refresh token, so the usual retry convention does not apply.
   3. **The administration is never selected silently.** One reachable administration is
-     taken, several are offered, and skipping stores nothing — a guessed administration
-     sends every later write to the wrong books. It is stored on the connection;
-     `MONEYBIRD_ADMINISTRATION_ID` still overrides it, and `auth status` says which wins.
+     taken, several are offered, and skipping saves no administration — a guessed one
+     sends every later write to the wrong books. Skipping is not an error: the OAuth
+     connection itself is already stored and usable, just without an administration,
+     which a later login or `MONEYBIRD_ADMINISTRATION_ID` can supply. The choice is
+     stored on the connection; `MONEYBIRD_ADMINISTRATION_ID` still overrides it, and
+     `auth status` says which wins.
+  6. **`auth login` persists the grant before it verifies it.** The exchange spends the
+     authorization code, so a failed `/administrations` check must leave the tokens
+     stored and say so — discarding them would cost the user another authorization for
+     no safety gain. Do not "fix" the order.
   4. **Moneybird documents no revocation endpoint** (`oauth.REVOCATION_SUPPORTED`), so
      `auth logout` deletes local credentials only and must keep saying so.
   5. **Local OAuth is for development and self-hosters with their own registered
@@ -76,8 +83,8 @@ scripts that import the package directly (see below).
   debtors/revenue/subscriptions → `sales_invoices`; creditors/expenses/assets →
   `documents`), financial **accounts** are `settings` while financial **mutations** are
   `bank`, and `/administrations` needs no scope at all (documented, and **live
-  geverifieerd 2026-08-08** met een echte OAuth-grant — daarom kan `auth login` elke
-  nieuwe verbinding verifiëren vóór er iets wordt opgeslagen).
+  geverifieerd 2026-08-08** met een echte OAuth-grant — daarom kan `auth login` een zojuist
+  opgeslagen verbinding verifiëren en de bereikbare administraties aanbieden).
   `tests/test_oauth_scopes.py` joins every claim against the
   snapshot and proves the six requested scopes are minimal, so this cannot silently rot.
 - **De volledige lokale OAuth-flow is op 2026-08-08 op Windows live tegen Moneybird

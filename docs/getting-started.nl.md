@@ -143,7 +143,9 @@ moneybird-mcp auth login --env-file /absolute/path/operator.env
 ```
 
 4. Open de getoonde autorisatie-URL, keur de applicatie goed en plak **alleen** de korte autorisatiecode die Moneybird laat zien.
-5. Het commando verifieert de verbinding, kiest de administratie (en vraagt het als er meerdere zijn) en bewaart alles in de gegevensmap van Moneybird MCP. Start je MCP-client daarna gewoon.
+5. Het commando bewaart de verbinding in de gegevensmap van Moneybird MCP en verifieert hem daarna, waarbij het de administratie kiest (en het vraagt als er meerdere zijn). Start je MCP-client daarna gewoon.
+
+De uitwisseling in stap 4 verbruikt de autorisatiecode, dus de tokens worden bewaard vóórdat ze geverifieerd worden: mislukt die controle, dan meldt het commando dat en houdt het de gegevens, in plaats van je opnieuw te laten autoriseren. De administratievraag overslaan mag ook — de verbinding blijft dan bewaard zonder administratie, en een latere login of `MONEYBIRD_ADMINISTRATION_ID` vult hem aan. Er wordt nooit iets geraden.
 
 Beheer de verbinding met `moneybird-mcp auth status` en `moneybird-mcp auth logout`. Geen van beide toont ooit een token of het client secret. `logout` verwijdert uitsluitend de lokale gegevens: Moneybird publiceert geen intrekkingsendpoint, dus toegang trek je in op <https://moneybird.com/user/applications>.
 

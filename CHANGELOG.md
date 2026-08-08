@@ -11,8 +11,11 @@ versioning while allowing pre-1.0 breaking changes.
   for development and for self-hosters who register their **own** OAuth application.
   Supply that application's client id and secret and run `auth login`; the command
   prints (and optionally opens) the authorization URL, takes the short out-of-band code
-  Moneybird displays, exchanges it, verifies the result, selects the administration, and
-  stores the connection. No Moneybird access or refresh token is ever copied by hand.
+  Moneybird displays, exchanges it, and stores the connection; it then verifies that
+  connection and selects the administration. The exchange spends the authorization code,
+  so a verification failure afterwards leaves the tokens stored and reports that, rather
+  than costing another authorization round trip.
+  No Moneybird access or refresh token is ever copied by hand.
   `auth status` reports which identity is active and from where; `auth logout` deletes
   local credentials and says plainly that Moneybird publishes no revocation endpoint, so
   access is withdrawn at <https://moneybird.com/user/applications>.
@@ -31,7 +34,8 @@ versioning while allowing pre-1.0 breaking changes.
 - **Administration selection at login.** A connection reaching exactly one
   administration selects it; several are listed and offered interactively, or chosen
   with `--administration ID`. Nothing is picked silently, because a guessed
-  administration sends every later write to the wrong books. The choice is stored with
+  administration sends every later write to the wrong books; skipping the choice leaves
+  the OAuth connection stored without one. The choice is stored with
   the connection, so `MONEYBIRD_ADMINISTRATION_ID` is no longer needed after an OAuth
   login — an explicit environment value still overrides it, and `auth status` flags the
   override.
