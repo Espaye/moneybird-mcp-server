@@ -295,7 +295,7 @@ class TokenRequestTests(unittest.TestCase):
         response.__enter__.return_value = response
         response.read.return_value = b'{"access_token":"at"}'
         with mock.patch.object(
-            urllib.request, "urlopen", return_value=response
+            oauth._TOKEN_OPENER, "open", return_value=response
         ) as urlopen:
             oauth._token_request({"grant_type": "refresh_token"})
         request = urlopen.call_args.args[0]
@@ -306,6 +306,41 @@ class TokenRequestTests(unittest.TestCase):
         )
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 20)
 
+    def test_the_token_endpoint_refuses_to_follow_a_redirect(self) -> None:
+        """urllib would hand back the redirect target's body as the token response.
+
+        A 302 becomes a GET of the new location, whose JSON would be parsed and
+        persisted as the access token. The opener refuses instead, so the caller
+        sees the redirect status as an error.
+        """
+        handler = oauth._NoRedirect()
+        self.assertIsNone(
+            handler.redirect_request(
+                mock.Mock(), mock.Mock(), 302, "Found", {}, "https://evil.example/x"
+            )
+        )
+        # The opener actually in use must carry that handler.
+        self.assertTrue(
+            any(
+                isinstance(h, oauth._NoRedirect)
+                for h in oauth._TOKEN_OPENER.handlers
+            )
+        )
+
+    def test_a_redirect_is_surfaced_as_an_error_not_a_token(self) -> None:
+        redirect = urllib.error.HTTPError(
+            oauth.OAUTH_TOKEN_URL,
+            302,
+            "Found",
+            {"Location": "https://evil.example/x"},
+            io.BytesIO(b""),
+        )
+        with mock.patch.object(oauth._TOKEN_OPENER, "open", side_effect=redirect):
+            with self.assertRaises(MoneybirdError) as caught:
+                oauth._token_request({"grant_type": "authorization_code"})
+        self.assertIn("HTTP 302", str(caught.exception))
+        self.assertNotIn("evil.example", str(caught.exception))
+
     def test_token_endpoint_error_never_exposes_response_credentials(self) -> None:
         upstream = urllib.error.HTTPError(
             oauth.OAUTH_TOKEN_URL,
@@ -314,11 +349,7 @@ class TokenRequestTests(unittest.TestCase):
             {},
             io.BytesIO(b'{"refresh_token":"do-not-render"}'),
         )
-        with mock.patch.object(
-            urllib.request,
-            "urlopen",
-            side_effect=upstream,
-        ):
+        with mock.patch.object(oauth._TOKEN_OPENER, "open", side_effect=upstream):
             with self.assertRaises(MoneybirdError) as caught:
                 oauth._token_request({"grant_type": "authorization_code"})
         message = str(caught.exception)
@@ -336,7 +367,7 @@ class TokenRequestTests(unittest.TestCase):
                 b'"error_description":"Client authentication failed"}'
             ),
         )
-        with mock.patch.object(urllib.request, "urlopen", side_effect=upstream):
+        with mock.patch.object(oauth._TOKEN_OPENER, "open", side_effect=upstream):
             with self.assertRaises(MoneybirdError) as caught:
                 oauth._token_request({"grant_type": "authorization_code"})
         message = str(caught.exception)
@@ -351,7 +382,7 @@ class TokenRequestTests(unittest.TestCase):
             {},
             io.BytesIO(b'{"error":"invalid_grant"}'),
         )
-        with mock.patch.object(urllib.request, "urlopen", side_effect=upstream):
+        with mock.patch.object(oauth._TOKEN_OPENER, "open", side_effect=upstream):
             with self.assertRaises(MoneybirdError) as caught:
                 oauth._token_request({"grant_type": "authorization_code"})
         message = str(caught.exception)
@@ -361,7 +392,7 @@ class TokenRequestTests(unittest.TestCase):
         upstream = urllib.error.HTTPError(
             oauth.OAUTH_TOKEN_URL, 503, "Service Unavailable", {}, io.BytesIO(b"")
         )
-        with mock.patch.object(urllib.request, "urlopen", side_effect=upstream):
+        with mock.patch.object(oauth._TOKEN_OPENER, "open", side_effect=upstream):
             with self.assertRaises(MoneybirdError) as caught:
                 oauth._token_request({"grant_type": "refresh_token"})
         self.assertIn("HTTP 503", str(caught.exception))
@@ -369,7 +400,7 @@ class TokenRequestTests(unittest.TestCase):
 
     def test_timeout_says_nothing_was_retried(self) -> None:
         with mock.patch.object(
-            urllib.request, "urlopen", side_effect=TimeoutError()
+            oauth._TOKEN_OPENER, "open", side_effect=TimeoutError()
         ):
             with self.assertRaises(MoneybirdError) as caught:
                 oauth._token_request({"grant_type": "authorization_code"})
@@ -379,8 +410,8 @@ class TokenRequestTests(unittest.TestCase):
 
     def test_network_failure_is_reported_without_a_traceback_chain(self) -> None:
         with mock.patch.object(
-            urllib.request,
-            "urlopen",
+            oauth._TOKEN_OPENER,
+            "open",
             side_effect=urllib.error.URLError(ConnectionRefusedError()),
         ):
             with self.assertRaises(MoneybirdError) as caught:
@@ -391,7 +422,7 @@ class TokenRequestTests(unittest.TestCase):
     def test_a_single_grant_is_never_retried(self) -> None:
         """Repeating a consumed authorization code turns a blip into a dead grant."""
         with mock.patch.object(
-            urllib.request, "urlopen", side_effect=TimeoutError()
+            oauth._TOKEN_OPENER, "open", side_effect=TimeoutError()
         ) as urlopen:
             with self.assertRaises(MoneybirdError):
                 oauth._token_request({"grant_type": "authorization_code"})
@@ -401,7 +432,7 @@ class TokenRequestTests(unittest.TestCase):
         response = mock.MagicMock()
         response.__enter__.return_value = response
         response.read.return_value = b"<html>maintenance</html>"
-        with mock.patch.object(urllib.request, "urlopen", return_value=response):
+        with mock.patch.object(oauth._TOKEN_OPENER, "open", return_value=response):
             with self.assertRaises(MoneybirdError) as caught:
                 oauth._token_request({"grant_type": "refresh_token"})
         self.assertIn("not JSON", str(caught.exception))
@@ -421,9 +452,7 @@ class TokenRequestTests(unittest.TestCase):
                 response.__enter__.return_value = response
                 response.read.return_value = json.dumps(payload).encode("utf-8")
                 with mock.patch.object(
-                    urllib.request,
-                    "urlopen",
-                    return_value=response,
+                    oauth._TOKEN_OPENER, "open", return_value=response
                 ):
                     with self.assertRaisesRegex(
                         MoneybirdError,
@@ -821,7 +850,7 @@ class TokenSessionTests(_StoreCase):
             {},
             io.BytesIO(b'{"error":"invalid_grant","error_description":"revoked"}'),
         )
-        with mock.patch.object(urllib.request, "urlopen", side_effect=upstream):
+        with mock.patch.object(oauth._TOKEN_OPENER, "open", side_effect=upstream):
             with self.assertRaises(MoneybirdError) as caught:
                 oauth.get_access_token()
         message = str(caught.exception)
@@ -942,7 +971,7 @@ class NoAccidentalNetworkTests(_StoreCase):
         def explode(*_: object, **__: object) -> None:
             raise AssertionError("a unit test attempted a network request")
 
-        with mock.patch.object(urllib.request, "urlopen", side_effect=explode):
+        with mock.patch.object(oauth._TOKEN_OPENER, "open", side_effect=explode):
             oauth.build_authorize_url()
             oauth.generate_state()
             oauth_scopes.parse_scopes("bookkeeping")

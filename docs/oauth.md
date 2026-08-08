@@ -56,6 +56,18 @@ top of it — see [Reusable pieces](#reusable-pieces-for-the-hosted-flow) below.
 Nothing about the hosted design requires a user to ever see a Client Secret,
 an authorization code, or a token.
 
+## Verification status
+
+The flow on this page was run end to end against the live Moneybird service on
+Windows on 2026-08-08, using a real registered application: the authorization
+page, the out-of-band code exchange, `/administrations` under the OAuth grant,
+administration selection, `auth status`, real read operations through the stored
+connection with no `MONEYBIRD_ACCESS_TOKEN` set, and `auth logout`.
+
+That also settles one thing the documentation alone could not: `/administrations`
+documents no scope requirement, and a real OAuth grant does reach it — which is
+what lets `auth login` verify a new connection before anything is stored.
+
 ## Set-up
 
 ### 1. Register your own external OAuth application

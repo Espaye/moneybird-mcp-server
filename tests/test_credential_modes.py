@@ -287,24 +287,39 @@ class MissingCredentialGuidanceTests(unittest.TestCase):
 
         with (
             mock.patch.dict(os.environ, {}, clear=False),
-            mock.patch.object(oauth, "load_tokens", return_value=None),
+            mock.patch.object(oauth, "load_connection", return_value=None) as empty,
         ):
             os.environ.pop("MONEYBIRD_ACCESS_TOKEN", None)
             self.assertFalse(credentials_are_configured(CREDENTIAL_MODE_LOCAL))
+        empty.assert_called_once()
 
     def test_startup_probe_treats_an_unreadable_store_as_unconfigured(self) -> None:
-        with (
-            mock.patch.dict(os.environ, {}, clear=False),
-            mock.patch.object(oauth, "load_tokens", side_effect=OSError("locked")),
+        for failure in (
+            OSError("locked"),
+            MoneybirdError("credential file could not be read"),
+            ValueError("not json"),
         ):
-            os.environ.pop("MONEYBIRD_ACCESS_TOKEN", None)
-            self.assertFalse(credentials_are_configured(CREDENTIAL_MODE_LOCAL))
+            with self.subTest(failure=type(failure).__name__):
+                with (
+                    mock.patch.dict(os.environ, {}, clear=False),
+                    mock.patch.object(
+                        oauth, "load_connection", side_effect=failure
+                    ) as broken,
+                ):
+                    os.environ.pop("MONEYBIRD_ACCESS_TOKEN", None)
+                    self.assertFalse(
+                        credentials_are_configured(CREDENTIAL_MODE_LOCAL)
+                    )
+                broken.assert_called_once()
 
     def test_oauth_login_cli_ships_inside_the_installed_package(self) -> None:
         # The message above is only actionable if the command it names exists
-        # wherever the package is installed from.
-        module = importlib.import_module("moneybird_mcp.oauth_login")
-        self.assertTrue(callable(module.main))
+        # wherever the package is installed from. `scripts/` is not in the wheel,
+        # so both the compatibility module and the console-script CLI must be.
+        for name in ("moneybird_mcp.oauth_login", "moneybird_mcp.auth_cli"):
+            with self.subTest(module=name):
+                module = importlib.import_module(name)
+                self.assertTrue(callable(module.main))
 
 
 if __name__ == "__main__":

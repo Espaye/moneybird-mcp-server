@@ -534,6 +534,42 @@ class ConsoleEncodingTests(_CliCase):
         self._assert_ascii(out, err)
 
 
+class HostedModeTests(_CliCase):
+    """Hosted request mode never reads the local store; say so, don't imply it does."""
+
+    def test_status_says_a_stored_connection_would_be_ignored(self) -> None:
+        oauth.store_tokens(FAKE_TOKENS)
+        with mock.patch.dict(
+            os.environ, {"MONEYBIRD_CREDENTIAL_MODE": "hosted_request_only"}
+        ):
+            code, out, _ = self.run_cli(["status"])
+        self.assertEqual(code, 0)
+        self.assertIn("never read", out)
+
+    def test_login_warns_before_spending_an_authorization(self) -> None:
+        with mock.patch.dict(
+            os.environ, {"MONEYBIRD_CREDENTIAL_MODE": "hosted_request_only"}
+        ):
+            with (
+                mock.patch.object(
+                    oauth, "exchange_authorization_code", return_value=FAKE_TOKENS
+                ),
+                mock.patch.object(
+                    auth_cli, "_verify_connection", return_value=ONE_ADMINISTRATION
+                ),
+            ):
+                code, out, _ = self.run_cli(["login"], answers=["code"])
+        self.assertEqual(code, 0)
+        self.assertIn("hosted_request_only", out)
+        # The warning has to precede the URL, or it arrives after the decision.
+        self.assertLess(out.index("hosted_request_only"), out.index("oauth/authorize"))
+
+    def test_local_mode_prints_no_such_warning(self) -> None:
+        oauth.store_tokens(FAKE_TOKENS)
+        _, out, _ = self.run_cli(["status"])
+        self.assertNotIn("never read", out)
+
+
 class ScopesCommandTests(_CliCase):
     def test_scopes_command_explains_every_requested_scope(self) -> None:
         code, out, _ = self.run_cli(["scopes"])

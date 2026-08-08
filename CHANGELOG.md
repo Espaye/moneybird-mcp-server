@@ -23,6 +23,11 @@ versioning while allowing pre-1.0 breaking changes.
   user, so it cannot live inside a distributed package. The personal API token remains
   the simple, supported local path. The abstractions exist because a future hosted
   service will hold the secret in its backend and connect users over an HTTPS callback.
+  **Verified end to end against the live Moneybird service on Windows (2026-08-08)**
+  with a real registered application: authorization page, out-of-band code exchange,
+  `/administrations` under the OAuth grant, administration selection, `auth status`
+  without secret exposure, real read operations through the stored connection with no
+  `MONEYBIRD_ACCESS_TOKEN` present, and `auth logout` removing the local credentials.
 - **Administration selection at login.** A connection reaching exactly one
   administration selects it; several are listed and offered interactively, or chosen
   with `--administration ID`. Nothing is picked silently, because a guessed

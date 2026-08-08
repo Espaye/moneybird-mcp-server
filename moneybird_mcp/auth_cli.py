@@ -176,8 +176,21 @@ def _verify_connection(access_token: str) -> list[dict[str, Any]]:
 
 
 def command_login(args: argparse.Namespace) -> int:
+    from .credentials import CREDENTIAL_MODE_HOSTED_REQUEST_ONLY, get_credential_mode
+
     scopes = parse_scopes(args.scopes or os.environ.get(SCOPES_ENV, ""))
     scope_value = format_scopes(scopes)
+
+    # Said before the browser opens, not after: hosted request mode reads
+    # credentials only from the gateway, so a login there is wasted effort and
+    # a spent authorization.
+    if get_credential_mode() == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
+        _out(
+            "Note: this environment sets credential mode "
+            f"{CREDENTIAL_MODE_HOSTED_REQUEST_ONLY!r}, which takes credentials "
+            "only from\nthe trusted gateway. A connection stored here will not "
+            "be used by that server.\n"
+        )
 
     # Fails here, before the browser opens, when the application credentials are
     # missing — rather than after the user has already authorized.
@@ -285,12 +298,21 @@ def command_status(args: argparse.Namespace) -> int:
     """
     from .credentials import (
         CREDENTIAL_MODE_ENV,
+        CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
         get_credential_mode,
     )
 
     mode = get_credential_mode()
     _out(f"Credential mode:        {mode}  ({CREDENTIAL_MODE_ENV})")
     _out(f"Credential store:       {oauth.credential_location()}")
+    if mode == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
+        # Otherwise a stored connection listed below reads as the one in use,
+        # and the real answer to "why is my login ignored?" is invisible.
+        _out(
+            "  note:                 this mode takes credentials only from the "
+            "trusted gateway;\n                        anything stored locally "
+            "is never read."
+        )
 
     client_id = os.environ.get(oauth.CLIENT_ID_ENV, "").strip()
     has_secret = bool(os.environ.get(oauth.CLIENT_SECRET_ENV, "").strip())

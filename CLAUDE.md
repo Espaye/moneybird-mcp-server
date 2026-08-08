@@ -75,9 +75,17 @@ scripts that import the package directly (see below).
   general_ledger → `bank`; profit_loss/tax/journal_entries → `documents` + `sales_invoices`;
   debtors/revenue/subscriptions → `sales_invoices`; creditors/expenses/assets →
   `documents`), financial **accounts** are `settings` while financial **mutations** are
-  `bank`, and `/administrations` needs no scope at all (which is why `auth login` can
-  verify any new connection). `tests/test_oauth_scopes.py` joins every claim against the
+  `bank`, and `/administrations` needs no scope at all (documented, and **live
+  geverifieerd 2026-08-08** met een echte OAuth-grant — daarom kan `auth login` elke
+  nieuwe verbinding verifiëren vóór er iets wordt opgeslagen).
+  `tests/test_oauth_scopes.py` joins every claim against the
   snapshot and proves the six requested scopes are minimal, so this cannot silently rot.
+- **De volledige lokale OAuth-flow is op 2026-08-08 op Windows live tegen Moneybird
+  doorlopen** met een echte geregistreerde applicatie: autorisatiepagina, OOB-code-uitwisseling,
+  `/administrations`, administratiekeuze, `auth status` zonder secrets, echte leesacties via de
+  opgeslagen verbinding zónder `MONEYBIRD_ACCESS_TOKEN`, en `auth logout`. Behandel die stappen
+  dus als werkend; zoek een storing eerst in de omgeving (data dir, client id/secret) voordat je
+  de flow zelf herschrijft.
 
 ## Running a one-off live query or fix
 

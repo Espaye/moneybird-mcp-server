@@ -272,6 +272,29 @@ _ERROR_GUIDANCE = {
 }
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow a redirect away from the token endpoint.
+
+    urllib would turn a 302 into a GET of the redirect target and hand the body
+    back as if the token endpoint had answered — so whatever that target served
+    would be parsed as a token response and persisted as the access token. Only
+    Moneybird (or something that has already broken TLS) could trigger it, but
+    the endpoint that mints credentials is the wrong place to accept a
+    redirect. ``client.py`` refuses redirects on its credential-bearing
+    requests for the same reason.
+
+    Returning None makes urllib raise the original HTTPError instead.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+# Module-level so the handler chain is built once. It carries no credentials and
+# no cookie jar: every request supplies its own form body.
+_TOKEN_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _token_request(form: dict[str, str]) -> dict[str, Any]:
     """POST ``form`` to the token endpoint and return the parsed JSON response.
 
@@ -288,7 +311,7 @@ def _token_request(form: dict[str, str]) -> dict[str, Any]:
     request.add_header("Accept", "application/json")
     try:
         # The request URL is the module-owned HTTPS Moneybird token endpoint above.
-        with urllib.request.urlopen(  # nosec B310
+        with _TOKEN_OPENER.open(  # nosec B310
             request,
             timeout=DEFAULT_TIMEOUT_SECONDS,
         ) as response:
