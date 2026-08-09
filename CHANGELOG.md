@@ -220,6 +220,12 @@ and no discovery layer is needed in front of it.
   (`state:open|late|reminded|pending_payment` for sales invoices,
   `state:open|late|new|pending_payment` for documents).
 
+### Security
+
+- Raised the optional PDF extra's minimum to `pypdf 6.15.0`, the first release with
+  fixes for CVE-2026-71852 and CVE-2026-71870. The hosted request mode still refuses
+  attachment parsing; this protects local installations that enable the PDF extra.
+
 ## 0.6.1 — 2026-08-05
 
 ### Added

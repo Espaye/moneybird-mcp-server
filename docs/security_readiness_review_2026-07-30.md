@@ -27,7 +27,7 @@ Current decisions:
 | Release profile | Decision now | Principal blockers |
 |---|---|---|
 | Public source-available beta / next tagged release | **NO-GO under the current claims and defaults** | selected-administration escape, cache authorization, approval race, false-success records, ambiguous duplicate handling, network credential fail-open, and missing minimum security/release controls |
-| Hosted read-only alpha | **NO-GO** | cache/tenant authorization, fail-closed identity, hard read-only policy, public MCP authorization, encrypted grants, session-bound OAuth, explicit administration selection, bounded attachments, privacy/lifecycle controls |
+| Hosted read-only alpha | **NO-GO** | cache/tenant authorization, fail-closed human API identity, hard read-only policy, retirement/non-exposure of the M1 path credential, encrypted grants, session-bound OAuth, explicit administration selection, bounded attachments, privacy/lifecycle controls |
 | Hosted write-enabled beta | **NO-GO** | every read-only blocker plus independently trusted confirmation, atomic execution state, typed outcomes, per-action reconciliation, and zero-tolerance safety/evaluation gates |
 
 Publishing the source solely for peer review is lower risk than recommending or tagging it as a usable financial beta. If that distinction is desired, the repository must say so prominently and must not retain the current absolute safety promises.
@@ -60,7 +60,7 @@ Severity is release-contextual: **P0/Critical** means the named profile cannot l
 | F-05 | Hosted credentials fail open to operator credentials | **Confirmed and reproduced** | Critical; any hosted profile blocker |
 | F-06 | Cache access is not authorized against the current grant | **Newly confirmed and reproduced** | Critical; any hosted profile blocker |
 | F-07 | IDs/paths can escape the selected administration | **Newly confirmed and reproduced** | Critical; multi-admin read/write blocker |
-| F-08 | Gateway path secrets and public MCP auth are unsuitable | **Confirmed; upstream OAuth is not edge OAuth** | High/Critical; any public hosted profile blocker |
+| F-08 | Gateway path secrets and public MCP auth are unsuitable | **Confirmed; upstream OAuth is not edge OAuth** | High/Critical if the M1 path route or a generic hosted MCP endpoint is exposed; M2 avoids both |
 | F-09 | User/token persistence is plaintext, non-transactional, collision-prone | **Confirmed and reproduced** | Critical; any hosted profile blocker |
 | F-10 | OAuth state is not session-bound or durable | **Confirmed, with partial defenses** | High; hosted-account blocker |
 | F-11 | Gateway silently selects the first administration | **Confirmed** | Critical for writes; hosted read blocker |
@@ -380,8 +380,10 @@ Path credentials leak through common proxy/APM/history surfaces. A public protec
 
 **Smallest durable correction and migration**
 
-- Use a stable canonical `/mcp` resource URL and `Authorization: Bearer`.
-- Implement the gateway as an MCP OAuth resource server and integrate it with an authorization server: protected-resource and authorization-server metadata; authorization code with PKCE; exact registered HTTPS redirects; short-lived audience/resource-bound access tokens; rotated refresh tokens; and issuer/audience/resource/expiry/scope validation. Choose and document the supported client-registration strategy—preregistration, Client ID Metadata Documents, or controlled dynamic client registration—rather than leaving it implicit.
+- Retire the M1 path credential. If M3 later exposes hosted MCP, use a stable
+  canonical `/mcp` resource URL and `Authorization: Bearer`; the M2 human REST slice
+  does not expose an MCP route.
+- Before M3 exposes a generic hosted MCP endpoint, implement that endpoint as an MCP OAuth resource server and integrate it with an authorization server: protected-resource and authorization-server metadata; authorization code with PKCE; exact registered HTTPS redirects; short-lived audience/resource-bound access tokens; rotated refresh tokens; and issuer/audience/resource/expiry/scope validation. Choose and document the supported client-registration strategy—preregistration, Client ID Metadata Documents, or controlled dynamic client registration—rather than leaving it implicit. The M2 human REST vertical slice uses Clerk authentication and does not expose `/mcp`, so this is not an M2 release dependency.
 - Keep MCP edge credentials and Moneybird tokens strictly separate; never accept or transit a Moneybird token at the MCP edge.
 - Force-rotate existing path keys, store opaque fallback credentials only as hashes, and return 410/401 on old paths without redirecting them.
 
@@ -422,7 +424,12 @@ At-rest credential disclosure, lost accounts/grants, and cross-user credential a
 **Smallest durable correction and migration**
 
 - Use a transactional database for users, sessions, grants, administration memberships, OAuth transactions, edge credentials, deletion jobs, and key versions.
-- Envelope-encrypt provider access/refresh tokens using AEAD and a KMS-managed key; bind AAD to user, grant, and provider.
+- Encrypt provider access/refresh tokens using AEAD and bind AAD to user, grant,
+  and provider. The later accepted M2 ADR narrows this historical recommendation for
+  the invite-only alpha to AES-256-GCM with a versioned application key in AWS
+  Secrets Manager and an explicit runtime-compromise residual risk. KMS envelope
+  encryption remains mandatory before broad onboarding or when key material must
+  not be directly available to the application process.
 - Hash opaque edge credentials; use UUIDv4/128-bit IDs plus uniqueness constraints and collision retry.
 - Transactionally create/update user, grant, membership, and token state. Preserve an old refresh token if a refresh response omits a new one.
 - Inventory and move infrastructure/application secrets to managed secret storage, including `MONEYBIRD_OAUTH_CLIENT_SECRET`, legacy `MCP_AUTH_TOKEN`, authorization-server signing/JWKS private material, webhook signing secrets, and KMS credentials. Rotate legacy values; never back up KMS root credentials beside the ciphertext they protect.
@@ -434,7 +441,8 @@ At-rest credential disclosure, lost accounts/grants, and cross-user credential a
 - No access/refresh/edge credential appears in DB dumps, logs, exceptions, or backups as plaintext.
 - Concurrent writers and refreshes lose no records.
 - Forced ID/hash collisions cannot alias principals.
-- KMS rotation supports old-key read/new-key write and resumable re-encryption.
+- The selected key-ring design supports old-key read/new-key write and resumable
+  re-encryption; a later KMS-envelope migration preserves that property.
 - Revocation, account deletion, retention expiry, and backup restore are tenant-correct.
 
 **Dependencies:** F-05/F-08 identity modes, F-10 sessions, F-11 memberships, F-06 cache ownership.
@@ -496,11 +504,18 @@ Reads or writes can target arbitrary API order rather than user intent. **Critic
 
 **Smallest durable correction and migration**
 
-- Zero administrations: fail onboarding and disable/delete the local grant record; the integration cannot itself revoke the provider-side Moneybird grant.
-- Exactly one: allow explicit documented auto-selection.
+- Zero administrations: fail onboarding and leave no usable connector or selection.
+  The later accepted M2 ADR retains the encrypted grant in `verification_failed`
+  only so the owner can retry after a provider-membership change or disconnect; it
+  cannot authorize any Moneybird operation, and the integration cannot itself
+  revoke the provider-side Moneybird grant.
+- Exactly one: this historical review allowed documented auto-selection, but the
+  later accepted M2 ADR deliberately requires an explicit owner click even for one.
 - More than one: store the grant but issue no usable edge connector/authorization until a trusted picker validates and persists selection for the authenticated principal and grant. Do not use `Mcp-Session-Id` as the authorization unit.
 - Revalidate after provider permission changes; switching administration is a trusted action and invalidates admin-scoped approvals/sessions as designed.
-- Re-fetch all legacy profiles. Auto-confirm exactly-one, mark multi-admin `selection_required`, revoke zero-admin; do not trust the stored first value.
+- Re-fetch any legacy profiles during a future migration; do not trust the stored
+  first value. Fresh M2 starts with no imported profiles, and its stricter picker
+  requires explicit selection for one or many administrations.
 
 **Acceptance and negative tests**
 
@@ -975,7 +990,11 @@ These are proposed ADRs, not accepted implementation decisions.
 
 **Reason:** Plain JSON, 32-bit IDs, first-admin selection, and admin-only cache paths cannot provide isolation or lifecycle guarantees.
 
-**Consequences:** KMS/key-rotation and deletion/backup procedures become required operations. Existing caches/tokens need controlled import or quarantine.
+**Consequences:** Managed key storage, versioned key rotation, and deletion/backup
+procedures become required operations. The accepted M2 ADR permits a directly
+available Secrets Manager application key only for the invite-only alpha and
+requires KMS envelope encryption before broad onboarding. Existing caches/tokens
+need controlled import or quarantine.
 
 **Rejected:** Token hash as tenant ID; plaintext files with locks; trusting a caller-supplied administration header.
 
@@ -1057,9 +1076,9 @@ Each row is intended to be independently reviewable. “Blocks” names the rele
 | 9 | Universal `WriteSpec` and money semantics | Pre-state/version/invariants/verifier/idempotency on every write; Decimal/currency policy | 7, 8 | O/W |
 | 10 | Legacy audit migration | Admin filter, partition/quarantine, JSONL export-only path, corruption tests | 5 | O/W |
 | 11 | Telemetry route labels | Static route/operation fields; external-log purge guidance; PII property tests | 2 | O/R/W |
-| 12 | Identity/grant database and encryption | Transactional users/sessions/grants/memberships, AEAD/KMS, hashed credentials, lifecycle/key rotation | ADR-002 | R/W |
+| 12 | Identity/grant database and encryption | Transactional users/sessions/grants/memberships, AEAD with a versioned managed key, hashed credentials, lifecycle/key rotation; KMS envelope before broad onboarding | ADR-002 plus accepted M2 ADR | R/W |
 | 13 | OAuth transaction and admin picker | Session-bound durable state, fixed origin, zero/one/many selection, legacy profile revalidation | 12 | R/W |
-| 14 | Stable MCP resource and edge OAuth | `/mcp`, PRM/AS metadata, PKCE, audience/resource/scope tokens, rotate old path keys | 3, 12, 13 | R/W |
+| 14 | Stable MCP resource and edge OAuth | `/mcp`, PRM/AS metadata, PKCE, audience/resource/scope tokens, rotate old path keys | 3, 12, 13 | Conditional: any profile exposing generic hosted MCP |
 | 15 | Trusted confirmation control plane | Immutable preview UI, confirmation receipt, session/admin binding, replay/concurrency tests | 5, 12, 13 | W |
 | 16 | Bounded attachment pipeline | Streaming limits, redirect policy, MIME/magic, isolated parser, ephemeral retention/deletion | 2, 12; job interface | R/W |
 | 17 | Application-service seams | Move use cases/contracts behind typed core without big-bang split; adapter parity/import rules | 7, 9 | W; strategic R |
@@ -1113,7 +1132,9 @@ Every enabled action supplies a non-empty, versioned semantic idempotency key. U
    - Parse and validate every user-to-profile reference.
    - Create stable IDs; encrypt Moneybird tokens with bound AAD; hash/rotate edge credentials.
    - Inventory and rotate/import application/infrastructure secrets through managed secret storage. KMS root credentials and authorization-server signing private material are not stored beside encrypted database backups.
-   - Re-fetch Moneybird administrations. Exactly-one becomes selected, multiple becomes `selection_required`, zero/revoked becomes disabled.
+   - Re-fetch Moneybird administrations. Under the accepted M2 ADR, one or multiple
+     become `awaiting_selection`; zero/revoked remains unusable. Do not trust a
+     legacy stored first administration.
 5. **Approval/execution import**
    - Mark every pending legacy approval `expired_legacy_unconfirmed`.
    - Import legacy rows labelled success as `legacy_unverified` evidence unless current Moneybird state and a specific verifier prove `succeeded_verified`.
@@ -1179,7 +1200,7 @@ Legend: **O** required for public source-available beta, **R** required for host
 | T13 | Write preconditions | Violation of each action's declared precondition is caught while unrelated changes do not spuriously block; creates test absence/uniqueness/pre-ID snapshots; this execution is specifically verified | O/W |
 | T14 | Money properties | Decimal equivalence/one-cent/currency/credit/NaN/infinity/missing cases fail correctly | O/W |
 | T15 | Legacy migration | Counts/checksums/idempotent rerun; foreign/unscoped/malformed audit never suppresses; approvals never become confirmed; ordered success→failed, success→invalidated, invalidated→success, duplicate/missing timestamps, and false/absent-verification success cases | O/R/W |
-| T16 | OAuth resource server | PRM/metadata/PKCE; wrong issuer/audience/resource/scope/expiry/signature/provider token rejected; correct challenge | R/W |
+| T16 | OAuth resource server | PRM/metadata/PKCE; wrong issuer/audience/resource/scope/expiry/signature/provider token rejected; correct challenge | Conditional: any profile exposing generic hosted MCP |
 | T17 | OAuth session transaction | Cross-browser/user/worker, restart, replay, simultaneous callback, expiry, Host/proxy spoofing | R/W |
 | T18 | Administration picker | zero/one/many/reordered/tampered/stale membership; no access before selection | R/W |
 | T19 | Secret/data storage lifecycle | No plaintext tokens/secrets in DB/log/backup and hosted financial cache/FTS artifacts are encrypted at rest; concurrent refresh; collision; key rotation; revoke/delete/export/restore isolation; crash between user/grant/token/membership/edge-credential steps yields full rollback or one consistent commit | R/W |
@@ -1227,7 +1248,10 @@ Required for GO:
 1. Every applicable source-available gate passes.
 2. F-05/F-06/F-07/F-08/F-09/F-10/F-11/F-14/F-15/F-18/F-23 are closed.
 3. `hosted_request_only + read_only` is an immutable deployment policy: write denial at edge/tool exposure and shared application service; no local/environment fallback.
-4. Stable `/mcp` OAuth resource server passes T16; no secret appears in URLs/logs.
+4. The M2 human REST API verifies Clerk tokens, canonical origin, membership, and
+   role authorization; no secret appears in URLs/logs. T16 and a stable `/mcp`
+   OAuth resource server become mandatory only if M3 exposes a generic MCP
+   endpoint; M2 must not expose one merely to satisfy this historical gate.
 5. Transactional encrypted grant/session/membership store, encryption at rest for financial cache/FTS artifacts, explicit picker, revocation/deletion/export, backup/restore, and tenant/admin cache ownership pass T6 and T17–T19 and T29.
 6. Attachment support is disabled or passes bounded ephemeral processing and deletion tests T21–T22.
 7. Telemetry privacy, per-tenant/global rate limits, bounded blocking work, audit/incident traces, a documented data-freshness SLA, and a separate authorization/membership revocation-exposure SLA pass. Webhooks may follow an invite-only small alpha if polling/refetch bounds are explicit.

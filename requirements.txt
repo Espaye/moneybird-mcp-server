@@ -9,4 +9,4 @@ httpx>=0.28.1,<1
 uvicorn>=0.35
 # PDF text-layer extraction for read_document_attachment (optional in the wheel
 # as the [pdf] extra; installed by default in the git-clone workflow).
-pypdf>=6.14.2
+pypdf>=6.15.0
