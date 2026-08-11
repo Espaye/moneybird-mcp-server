@@ -8,7 +8,7 @@
 
 > **Unofficial community integration.** This project is not developed, endorsed, supported, or audited by Moneybird B.V.
 >
-> **Beta 0.6.1.** The supported setup is a local MCP server over stdio. It starts mechanically read-only. Experimental writes require an explicit local opt-in and supervised approval.
+> **Beta 0.7.0.** The supported setup is a local MCP server over stdio. It starts mechanically read-only. Experimental writes require an explicit local opt-in and supervised approval.
 
 Use Claude, ChatGPT, Cursor, or another MCP client to search and work with a Moneybird administration. The server can read contacts, invoices, documents, bank mutations, reports, and locally indexed bookkeeping data.
 

@@ -13,7 +13,8 @@ GitHub-release upload.
 
 ## 1. Prepare and review the version commit
 
-- Bump `version` in both `pyproject.toml` and `mcpb/manifest.json`.
+- Bump `version` in `pyproject.toml`, `mcpb/manifest.json`, and
+  `moneybird_mcp/__init__.py`; update the visible beta version in both READMEs.
 - Update `CHANGELOG.md`.
 - Open a pull request into the default branch and require the applicable CI and
   security checks before merge.
