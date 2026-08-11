@@ -5,6 +5,8 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+## 0.7.0 — 2026-08-12
+
 ### Added
 
 - **`moneybird-mcp auth login | status | logout | scopes`** — first-class local OAuth,
