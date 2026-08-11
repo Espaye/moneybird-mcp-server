@@ -71,9 +71,8 @@ def build_config(
             "clients); use --transport http for a network deployment. "
             "Local and single-user credentials come from "
             "MONEYBIRD_ACCESS_TOKEN / MONEYBIRD_ADMINISTRATION_ID (or an "
-            "explicit --env-file, or the OAuth token store); hosted "
-            "request-only mode requires "
-            "gateway-injected credentials."
+            "explicit --env-file, or the OAuth token store); "
+            "hosted_request_only requires trusted per-request credentials."
         ),
         epilog=(
             "Account connection: 'moneybird-mcp auth login' connects this "
@@ -202,7 +201,7 @@ def build_config(
     if transport != "stdio" and credential_mode == CREDENTIAL_MODE_LOCAL:
         logger.error(
             "Refusing to start: credential mode %r is stdio-only. Use %r for "
-            "a single-user network server or %r behind a trusted gateway.",
+            "a single-user network server or %r behind a trusted edge.",
             CREDENTIAL_MODE_LOCAL,
             CREDENTIAL_MODE_NETWORK_SINGLE_USER,
             CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
@@ -269,7 +268,7 @@ change made afterwards.
 def _announce_missing_credentials(credential_mode: str, mcp: Any) -> None:
     """Say at startup that no Moneybird identity is configured yet.
 
-    Hosted request mode legitimately starts without one (every request brings
+    Request-context mode legitimately starts without one (every request brings
     its own), so it is skipped. The other modes have exactly one identity, and
     an MCP client reports a server that starts as connected: without this the
     first sign of a forgotten token is a failed answer to a real question.

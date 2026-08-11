@@ -7,7 +7,7 @@ credential, cache, approval, audit event, and attachment as sensitive.
 
 This project is pre-1.0. Security fixes are made on the latest released version and `main`.
 Older releases may not receive backports. The package is experimental and is not a substitute
-for an accountant, access-control gateway, or independently verified payment system.
+for an accountant, access-control system, or independently verified payment system.
 
 ## Supported deployment posture
 
@@ -17,11 +17,9 @@ for an accountant, access-control gateway, or independently verified payment sys
   `MCP_AUTH_TOKEN`; non-loopback binds also require
   `MCP_TRUSTED_TLS_PROXY=true` and a correctly configured TLS terminator. The static
   bearer secret does not provide multi-user identity.
-- **Hosted gateway:** the repository contains only a loopback demo and is a production
-  no-go. Its MCP app is forced to `hosted_request_only`: live reads only, with all
-  writes, durable search sync/cache access, and attachment parsing refused.
-
-Do not expose the demo gateway or a local data directory as a hosted tenant boundary.
+- **Request-context integration:** `hosted_request_only` accepts credentials only from
+  trusted per-request context and refuses writes, durable search state, and attachment
+  parsing. It is an advanced integration boundary, not a complete identity system.
 
 Release automation also depends on external repository controls. The `pypi`
 environment must accept deployments only from protected `main`, and a `v*` tag
@@ -62,11 +60,9 @@ urgent containment: disable network exposure and writes immediately.
 - Local stdio is the primary supported deployment.
 - Model instructions and tool annotations are not security controls.
 - A prepare/execute approval ID is not, by itself, proof that a human confirmed a write.
-- Network and hosted deployments require explicit fail-closed identity and capability modes.
+- Network and request-context deployments require explicit fail-closed identity and capability modes.
 - `write_enabled` is available only for local and authenticated single-user operation;
-  hosted request mode refuses writes unconditionally.
+  request-context mode refuses writes unconditionally.
 - Moneybird fields and attachment text are untrusted model input.
 
-See [the threat model](docs/threat_model.md), [data handling](docs/data_handling.md), and the
-[dated 2026-07-30 readiness review](docs/security_readiness_review_2026-07-30.md). That review
-is a revision-specific historical snapshot, not the current implementation status.
+See [the threat model](docs/threat_model.md) and [data handling](docs/data_handling.md).

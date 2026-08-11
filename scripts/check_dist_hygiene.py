@@ -30,7 +30,6 @@ DENY_PATTERNS = (
     ".moneybird_sync_index*.json",
     ".moneybird_search_fts*.sqlite3",
     ".moneybird_audit_log*.jsonl",
-    "gateway_demo_users.json",
 )
 
 

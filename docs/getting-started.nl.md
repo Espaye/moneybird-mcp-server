@@ -153,8 +153,6 @@ Beheer de verbinding met `moneybird-mcp auth status` en `moneybird-mcp auth logo
 
 Bekijk de aangevraagde scopes met `moneybird-mcp auth scopes` en beperk ze zo nodig met `--scopes`. De volledige uitleg, inclusief de vereiste scopes per endpoint en de voorrangsregels, staat in [Moneybird OAuth](oauth.md) (Engelstalig).
 
-De out-of-band-redirect is een lokaal/ontwikkelmechanisme. Een toekomstige gehoste dienst bewaart het Client Secret van de applicatie in de backend, laat een gebruiker verbinden via **Connect Moneybird** met een HTTPS-callback, en bewaart de tokens per gebruiker server-side. Zo'n dienst vereist daarnaast gebruikersidentiteit, opslag voor toestemmingen, een intrekkingsontwerp en een scheiding tussen administraties; niets daarvan is gebouwd.
-
 ## Claude Desktop-extensie
 
 Vanuit een clone van de repository:

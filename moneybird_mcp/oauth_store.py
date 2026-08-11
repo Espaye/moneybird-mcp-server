@@ -3,9 +3,8 @@
 One *connection* is one Moneybird identity this installation may act as: the
 tokens obtained for it, the scopes Moneybird granted, and the administration
 selected for it. :class:`TokenStore` is the only interface the rest of the
-package uses to reach one, so a hosted deployment can back connections with a
-database row per tenant without touching :mod:`moneybird_mcp.client` or the
-tool surface.
+package uses to reach one, so another integration can provide a different store
+without touching :mod:`moneybird_mcp.client` or the tool surface.
 
 Locally the store is a single JSON file in :func:`moneybird_mcp.config.data_dir`,
 keyed by profile name. That on-disk shape predates this module and is preserved
@@ -253,10 +252,9 @@ class OAuthConnection:
 class TokenStore(Protocol):
     """Where OAuth connections live.
 
-    A hosted deployment implements this over its own encrypted per-tenant
-    storage and registers it with :func:`set_token_store`. Every method takes
-    the profile explicitly; there is no ambient "current connection", because
-    that assumption is exactly what a multi-tenant backend cannot make.
+    Another integration can implement this over its own protected storage and
+    register it with :func:`set_token_store`. Every method takes the profile
+    explicitly; there is no ambient "current connection" assumption.
     """
 
     def load(self, profile: str = DEFAULT_PROFILE) -> OAuthConnection | None: ...
@@ -280,8 +278,8 @@ class FileTokenStore:
     Writes go through a temporary file in the same directory and an atomic
     replace, so an interrupted save cannot truncate a working connection. The
     lock is process-local; concurrent *processes* are not coordinated, which is
-    acceptable for a single user's machine and is one of the things a hosted
-    store would do differently.
+    acceptable for a single user's machine. Other deployment boundaries can
+    replace it with coordinated storage.
     """
 
     def __init__(self, path: Path | None = None) -> None:

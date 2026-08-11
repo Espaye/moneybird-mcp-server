@@ -79,7 +79,7 @@ class ExpectedToolErrorReportingTests(unittest.TestCase):
         self.assertTrue(any("list_contacts" in line for line in logs.output))
 
     def test_direct_python_callers_still_see_moneybird_error(self) -> None:
-        # Scripts, tests, and the one-off flows in CLAUDE.md import these
+        # Scripts, tests, and one-off integration flows import these
         # functions directly; only the MCP-facing callable is translated.
         with mock.patch.object(
             _context, "get_client", side_effect=MoneybirdError(MESSAGE)

@@ -77,7 +77,7 @@ def membership_ttl_seconds() -> float:
 
 
 def caching_enabled() -> bool:
-    """False in hosted request mode, where a grant can be revoked mid-process."""
+    """False in request-context mode, where a grant can be revoked mid-process."""
     from .credentials import (
         CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
         get_credential_mode,

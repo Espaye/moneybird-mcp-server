@@ -14,10 +14,8 @@ verify the connection and select an administration — the authorization code is
 spent by the exchange, so a failure afterwards must not throw the grant away.
 Each successful exchange is a *new* grant and therefore starts with no
 administration selected; see :func:`moneybird_mcp.oauth.store_tokens`.
-The out-of-band redirect is a local/development mechanism; a hosted product
-registers an HTTPS callback instead and reuses the same
-:mod:`moneybird_mcp.oauth` layer underneath. ``--redirect-uri`` exercises that
-callback path locally, and does issue and require an OAuth ``state``.
+The out-of-band redirect is a local/development mechanism. ``--redirect-uri``
+exercises the callback path locally and does issue and require an OAuth ``state``.
 
 The profile every command acts on comes from ``--profile``, else
 ``MONEYBIRD_OAUTH_PROFILE`` — the same value the server resolves — so a stored
@@ -200,14 +198,14 @@ def command_login(args: argparse.Namespace) -> int:
     scopes = parse_scopes(args.scopes or os.environ.get(SCOPES_ENV, ""))
     scope_value = format_scopes(scopes)
 
-    # Said before the browser opens, not after: hosted request mode reads
-    # credentials only from the gateway, so a login there is wasted effort and
+    # Said before the browser opens, not after: request-context mode reads
+    # credentials only from the trusted edge, so a login there is wasted effort and
     # a spent authorization.
     if get_credential_mode() == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:
         _out(
             "Note: this environment sets credential mode "
             f"{CREDENTIAL_MODE_HOSTED_REQUEST_ONLY!r}, which takes credentials "
-            "only from\nthe trusted gateway. A connection stored here will not "
+            "only from\ntrusted request context. A connection stored here will not "
             "be used by that server.\n"
         )
 
@@ -374,18 +372,18 @@ def command_status(args: argparse.Namespace) -> int:
     )
 
     mode = get_credential_mode()
-    hosted = mode == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY
+    request_context = mode == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY
     inspected = _resolved_profile(args)
     active = oauth.active_profile()
 
     _out(f"Credential mode:        {mode}  ({CREDENTIAL_MODE_ENV})")
     _out(f"Credential store:       {oauth.credential_location()}")
-    if hosted:
+    if request_context:
         # Otherwise a stored connection listed below reads as the one in use,
         # and the real answer to "why is my login ignored?" is invisible.
         _out(
             "  note:                 this mode takes credentials only from the "
-            "trusted gateway;\n                        anything stored locally "
+            "trusted request context;\n                        anything stored locally "
             "is never read."
         )
     _out(f"OAuth profile:          {inspected!r} (inspected)")
@@ -445,14 +443,14 @@ def command_status(args: argparse.Namespace) -> int:
     # and an OAuth connection is exactly where "which Moneybird identity am I
     # actually acting as" stops being obvious.
     _out("")
-    if hosted:
+    if request_context:
         # Nothing local is consulted in this mode, so nothing local may be
         # presented as the identity in use — not the personal token, and not a
         # stored connection. Saying otherwise is the exact confusion the note
         # further up exists to prevent.
         _out(
             "Active identity:        the credentials supplied per request by the "
-            "trusted gateway."
+            "trusted request context."
         )
         if env_token or connection is not None:
             _out(

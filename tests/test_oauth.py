@@ -204,13 +204,13 @@ class ScopeTests(unittest.TestCase):
 class AuthorizationCallbackTests(unittest.TestCase):
     def test_code_is_extracted_when_state_matches(self) -> None:
         state = oauth.generate_state()
-        url = f"https://gateway.example/callback?code=abc123&state={state}"
+        url = f"https://callback.example/return?code=abc123&state={state}"
         self.assertEqual(
             oauth.parse_authorization_callback(url, expected_state=state), "abc123"
         )
 
     def test_state_mismatch_raises_without_leaking_the_code(self) -> None:
-        url = "https://gateway.example/callback?code=abc123&state=forged"
+        url = "https://callback.example/return?code=abc123&state=forged"
         with self.assertRaises(MoneybirdError) as caught:
             oauth.parse_authorization_callback(url, expected_state="expected")
         self.assertIn("mismatched", str(caught.exception))
@@ -218,7 +218,7 @@ class AuthorizationCallbackTests(unittest.TestCase):
 
     def test_a_callback_without_state_is_refused(self) -> None:
         """An unsolicited callback carries no state; it must not be exchanged."""
-        url = "https://gateway.example/callback?code=abc123"
+        url = "https://callback.example/return?code=abc123"
         with self.assertRaises(MoneybirdError) as caught:
             oauth.parse_authorization_callback(url, expected_state="expected")
         self.assertIn("missing or mismatched", str(caught.exception))
@@ -232,11 +232,11 @@ class AuthorizationCallbackTests(unittest.TestCase):
         """
         with self.assertRaises(TypeError):
             oauth.parse_authorization_callback(  # type: ignore[call-arg]
-                "https://gateway.example/callback?code=abc123&state=s"
+                "https://callback.example/return?code=abc123&state=s"
             )
         with self.assertRaises(MoneybirdError) as caught:
             oauth.parse_authorization_callback(
-                "https://gateway.example/callback?code=abc123&state=s",
+                "https://callback.example/return?code=abc123&state=s",
                 expected_state="",
             )
         self.assertIn("refusing to parse", str(caught.exception))
@@ -244,7 +244,7 @@ class AuthorizationCallbackTests(unittest.TestCase):
     def test_provider_error_is_reported(self) -> None:
         state = oauth.generate_state()
         url = (
-            "https://gateway.example/callback?error=access_denied"
+            "https://callback.example/return?error=access_denied"
             f"&error_description=The+user+denied+access&state={state}"
         )
         with self.assertRaises(MoneybirdError) as caught:
@@ -253,7 +253,7 @@ class AuthorizationCallbackTests(unittest.TestCase):
 
     def test_state_is_checked_before_a_provider_error_is_believed(self) -> None:
         """An unsolicited error callback is refused as CSRF, not relayed."""
-        url = "https://gateway.example/callback?error=access_denied&state=forged"
+        url = "https://callback.example/return?error=access_denied&state=forged"
         with self.assertRaises(MoneybirdError) as caught:
             oauth.parse_authorization_callback(url, expected_state="expected")
         self.assertIn("missing or mismatched", str(caught.exception))
@@ -261,7 +261,7 @@ class AuthorizationCallbackTests(unittest.TestCase):
     def test_missing_code_raises(self) -> None:
         with self.assertRaises(MoneybirdError):
             oauth.parse_authorization_callback(
-                "https://gateway.example/callback?state=x", expected_state="x"
+                "https://callback.example/return?state=x", expected_state="x"
             )
 
     def test_generate_state_is_random_and_urlsafe(self) -> None:
@@ -728,8 +728,8 @@ class FileTokenStoreTests(_StoreCase):
         mode = stat.S_IMODE(store.path.stat().st_mode)
         self.assertEqual(mode & 0o077, 0)
 
-    def test_the_store_is_replaceable_for_a_hosted_backend(self) -> None:
-        """A hosted deployment swaps storage without touching the client."""
+    def test_the_store_is_replaceable_for_an_alternative_backend(self) -> None:
+        """An alternative integration swaps storage without touching the client."""
 
         class MemoryStore:
             def __init__(self) -> None:
@@ -755,9 +755,9 @@ class FileTokenStoreTests(_StoreCase):
         memory = MemoryStore()
         previous = oauth_store.set_token_store(memory)
         try:
-            oauth.store_tokens({"access_token": "hosted-at"}, profile="tenant-7")
-            self.assertEqual(oauth.get_access_token("tenant-7"), "hosted-at")
-            # Reported verbatim: a hosted location is not a filesystem path.
+            oauth.store_tokens({"access_token": "external-at"}, profile="profile-7")
+            self.assertEqual(oauth.get_access_token("profile-7"), "external-at")
+            # Reported verbatim: an alternative location need not be a filesystem path.
             self.assertEqual(oauth.credential_location(), "memory://tenant-rows")
             self.assertIsNone(oauth.get_access_token("tenant-8"))
         finally:

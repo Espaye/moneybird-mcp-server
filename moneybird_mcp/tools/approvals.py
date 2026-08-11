@@ -102,7 +102,7 @@ def execute_approved_action(approval_id: ApprovalId) -> dict[str, Any]:
     and single-use; this tool only removes the need to rediscover a separate
     action-specific ``*_from_approval`` tool.
     """
-    # Hosted mode has no local principal-bound approval state and must fail before
+    # Request-context mode has no local principal-bound approval state and must fail before
     # touching credentials or the approvals database. Local read-only attempts
     # resolve their pending action first so the policy audit names that action.
     if get_credential_mode() == CREDENTIAL_MODE_HOSTED_REQUEST_ONLY:

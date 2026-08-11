@@ -55,8 +55,6 @@ This is not the default public setup, and there is no shared application credent
 
 When both a personal token and an OAuth connection exist, the personal token wins; `moneybird-mcp auth status` says which one is active. Full detail: [Moneybird OAuth](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/oauth.md).
 
-A future hosted service will remove this trade-off entirely: the backend holds the application's Client Secret, a user presses **Connect Moneybird** and approves in Moneybird over an HTTPS callback, and their tokens are stored server-side. That service is not built — see the [deployment boundary](#deployment-boundary).
-
 Claude Code registrations are scoped. Its default `local` scope is available only in the current project; use `--scope user` when Moneybird should be available from every project. If `claude mcp list` says connected but a different project shows no tools, check `claude mcp get moneybird` and re-add the configuration at user scope. Do not use project scope for a configuration containing a personal token, because project scope writes a shared `.mcp.json` file.
 
 ### Install with `pip`
@@ -160,9 +158,8 @@ See [Getting started](https://github.com/Espaye/moneybird-mcp-server/blob/main/d
 |---|---|---|
 | Local stdio | One user on one machine | Supported default |
 | Authenticated HTTP/SSE | One trusted user behind authentication and TLS | Experimental |
-| Hosted multi-user service | Multiple users or organisations | Not implemented |
 
-Every HTTP/SSE listener requires `MCP_AUTH_TOKEN`, including loopback. Non-loopback listeners are refused unless a trusted TLS proxy is explicitly configured. The included gateway is a demonstration, not a production hosted product.
+Every HTTP/SSE listener requires `MCP_AUTH_TOKEN`, including loopback. Non-loopback listeners are refused unless a trusted TLS proxy is explicitly configured. The network transport is intended for one trusted user and does not provide multi-user identity or tenant isolation.
 
 See [Deployment and safety](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/deployment-and-safety.md), [Security policy](https://github.com/Espaye/moneybird-mcp-server/blob/main/SECURITY.md), and the [threat model](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/threat_model.md).
 
@@ -202,4 +199,4 @@ Use [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues) for r
 
 This project is **source-available, not OSI-approved open source**. It is distributed under the MIT License with the **Commons Clause License Condition v1.0**.
 
-Personal use, internal organisational use, inspection, and modification are permitted. Selling the software, offering a paid hosted service based substantially on it, or commercially repackaging it requires a separate commercial licence. For commercial licensing, contact the repository owner through [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues). The complete terms in [LICENSE](https://github.com/Espaye/moneybird-mcp-server/blob/main/LICENSE) govern.
+Personal use, internal organisational use, inspection, and modification are permitted. Selling the software, commercially providing its functionality as a service, or commercially repackaging it requires a separate commercial licence. For commercial licensing, contact the repository owner through [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues). The complete terms in [LICENSE](https://github.com/Espaye/moneybird-mcp-server/blob/main/LICENSE) govern.

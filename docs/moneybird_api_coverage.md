@@ -26,8 +26,7 @@ match *suggestions* Moneybird's own transaction screen shows are equally absent;
 
 Rate limits apply to every endpoint below and are enforced **per IP address**: 150
 requests per 5 minutes, and 50 per 5 minutes for everything under `/reports/`. That
-per-IP scope is the reason a multi-tenant deployment cannot simply add tenants — see
-`docs/hosted_gateway_design.md`.
+per-IP scope must be considered whenever several processes use the same egress address.
 
 ## Administrations
 

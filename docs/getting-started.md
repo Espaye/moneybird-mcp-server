@@ -155,8 +155,6 @@ Manage the connection with `moneybird-mcp auth status` and `moneybird-mcp auth l
 
 Review the requested scopes with `moneybird-mcp auth scopes`, and narrow them with `--scopes` if wanted. Full detail, including the per-endpoint scope requirements and precedence rules, is in [Moneybird OAuth](oauth.md).
 
-The out-of-band redirect is a local/development mechanism. A future hosted service will hold the application's Client Secret in its backend, let a user connect by pressing **Connect Moneybird** over an HTTPS callback, and store per-user tokens server-side. That service additionally needs user identity, a grant store, a revocation design, and a tenant boundary; none of it is built.
-
 ## Claude Desktop extension
 
 From a repository clone:

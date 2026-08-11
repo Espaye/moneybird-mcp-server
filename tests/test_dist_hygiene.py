@@ -80,7 +80,6 @@ class DistHygieneTests(unittest.TestCase):
             "moneybird_mcp/.moneybird_sync_index_123.json",
             "moneybird_mcp/.moneybird_search_fts_123.sqlite3",
             "moneybird_mcp/.moneybird_audit_log_123.jsonl",
-            "moneybird_mcp/gateway_demo_users.json",
         ):
             with self.subTest(leaked=leaked):
                 problems = self._check([*CLEAN_WHEEL, leaked], CLEAN_SDIST)

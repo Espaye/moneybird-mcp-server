@@ -64,8 +64,8 @@ class ReportedErrorTests(unittest.TestCase):
             self.assertEqual(format_reported_error(parse_reported_error(body)), "")
 
     def test_unparseable_body_is_still_quoted(self) -> None:
-        rendered = format_reported_error(parse_reported_error("<html>Gateway</html>"))
-        self.assertIn("Gateway", rendered)
+        rendered = format_reported_error(parse_reported_error("<html>Proxy</html>"))
+        self.assertIn("Proxy", rendered)
 
     def test_a_huge_body_cannot_flood_the_message_or_audit_log(self) -> None:
         rendered = format_reported_error(parse_reported_error(json.dumps("x" * 50_000)))

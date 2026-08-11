@@ -6,13 +6,10 @@ Moneybird MCP reads bookkeeping data and, when explicitly enabled, can mutate
 contacts, documents, invoices, payments, and bank bookings.
 
 The primary supported deployment is local stdio. Authenticated
-`network_single_user` is experimental. The repository's gateway is a loopback demo
-and is not approved for production hosting.
-
-Current `hosted_request_only` containment is deliberately narrow: gateway-injected
-credentials, live Moneybird reads, and no writes, durable search sync/cache access,
-or attachment parsing. The production controls below are release gates, not claims
-that the demo already implements them.
+`network_single_user` is experimental. `hosted_request_only` is an advanced
+request-context mode: it accepts credentials only from a trusted edge, performs
+live Moneybird reads, and refuses writes, durable search state, and attachment
+parsing. This repository does not supply multi-user identity or tenant isolation.
 
 ## Assets
 
@@ -22,16 +19,16 @@ that the demo already implements them.
   sync/FTS caches;
 - write previews, approval payloads, claims, executions, audit events, and
   unresolved outcomes;
-- MCP/session credentials, URL keys, logs, backups, and encryption keys.
+- MCP/session credentials, local logs, and backups.
 
 ## Trust boundaries
 
 1. MCP client/model to server.
-2. Network listener or gateway to an authenticated principal and Moneybird grant.
+2. Network listener or trusted edge to an authenticated caller and Moneybird grant.
 3. Grant to an explicitly authorized administration.
 4. Server to Moneybird API and signed attachment-storage redirects.
 5. Untrusted Moneybird/document content to model context.
-6. Process to durable state, logs, release artifacts, and any future worker/backups.
+6. Process to durable state, logs, release artifacts, and backups.
 
 Prompts, tool descriptions, annotations, model reasoning, and an approval ID are not
 independent authorization or human-confirmation boundaries.
@@ -43,10 +40,10 @@ independent authorization or human-confirmation boundaries.
   `hosted_request_only` refuses every write executor regardless of that setting.
 - All SSE/HTTP transports require `MCP_AUTH_TOKEN`. Non-loopback binds additionally
   require an explicit trusted-TLS-proxy acknowledgement.
-- Hosted credentials come only from authenticated gateway request context; no
+- Request-context credentials come only from the trusted request context; no
   environment or local OAuth fallback is allowed.
-- Hosted search performs live reads and revalidates membership instead of reading a
-  durable index. Hosted sync and attachment parsing fail before cache, client, or
+- Request-context search performs live reads and revalidates administration access
+  instead of reading a durable index. Sync and attachment parsing fail before cache, client, or
   parser access.
 - Prepared writes bind a payload and use a durable atomic claim/outcome record to
   reduce replay and concurrent duplicate execution.
@@ -66,30 +63,30 @@ independent authorization or human-confirmation boundaries.
   signals. CodeQL is an additional signal when GitHub Code Security is available
   and deliberately enabled.
 
-## Threats, current posture, and remaining gates
+## Threats and current posture
 
-| Threat | Current posture | Remaining production gate |
+| Threat | Current mitigation | Residual risk |
 |---|---|---|
-| Model self-approves a mutation | Preview/claim binds the action, but is not proof of human confirmation | Trusted confirmation outside model-callable tools with a bound receipt |
-| Duplicate or ambiguous write | Atomic phase-aware claim and durable typed outcome; unresolved occurrences stay blocked; a local operator CLI records evidence-based resolution | Automated hosted reconciliation and recovery UI |
-| Wrong tenant/administration | Hosted request credentials only; live-search membership validation; durable hosted artifacts disabled | Durable identity/grant model, canonical routing, current-membership enforcement on every artifact and operation |
-| Cache disclosure after revocation | Hosted durable cache reads/sync are disabled | Tenant ownership, revocation bounds, deletion and authorization-before-read |
-| Credential fallback or URL leakage | Explicit credential modes; network bearer header | Demo URL keys must be replaced by a non-URL session/OAuth design and safe logging policy |
-| False success | Every approval action has a versioned WriteSpec and controlled-field postcondition; closed failure/partial states cannot become success evidence | Continue provider/live-contract tests and reconciliation after crashes |
-| Route or redirect escape | Encoded API paths; signed-storage DNS addresses are validated and pinned through the TLS connection | Continue origin/admin pinning and adversarial route/redirect tests |
-| Prompt injection | Content is treated as untrusted; hard capability gates do not depend on prompts | Provenance UI and trusted confirmation boundary |
-| Attachment exhaustion or parser exploit | Bounded download/page/text parsing plus a time/memory-limited disposable worker; hosted disabled | Hosted backpressure, global/per-tenant capacity, patch and abuse policy |
-| Telemetry/privacy leak | Structured, redacted operation telemetry | Review end-to-end logs/proxies and retention; treat pseudonyms as linkable |
-| Supply-chain compromise | Dependency/Bandit/history-secret scans, optional CodeQL when available, minimum-version lane, SHA-pinned Actions, reproducible build check, SBOM, Trusted Publishing, and verified PyPI provenance | Restrict the `pypi` environment to `main` with an independent reviewer; protect `v*` tags with a ruleset; ongoing dependency review |
+| Model self-approves a mutation | Preview/claim binds the action, but is not proof of human confirmation | Keep client-side destructive-tool confirmation enabled and supervise every write |
+| Duplicate or ambiguous write | Atomic phase-aware claim and durable typed outcome; unresolved occurrences stay blocked; a local operator CLI records evidence-based resolution | Provider timeouts can still require manual reconciliation |
+| Wrong administration | Explicit selection, numeric path confinement, and live membership revalidation before cache use | A credential with several administrations still requires careful operator selection |
+| Cache disclosure after revocation | Local cache reads revalidate administration access | The operator remains responsible for deleting local files and backups |
+| Credential leakage | Explicit credential modes, authenticated network transport, redacted errors and telemetry | Shell, proxy, client, and operating-system logs are outside the package boundary |
+| False success | Every approval action has a versioned WriteSpec and controlled-field postcondition; closed failure/partial states cannot become success evidence | Provider/live-contract drift and crashes can require reconciliation |
+| Route or redirect escape | Encoded API paths; signed-storage DNS addresses are validated and pinned through the TLS connection | Continue administration-pinning and adversarial route/redirect tests |
+| Prompt injection | Content is treated as untrusted; hard capability gates do not depend on prompts | Model-visible approval is not independent human confirmation |
+| Attachment exhaustion or parser exploit | Bounded download/page/text parsing plus a time/memory-limited disposable worker | Concurrent local callers still require operator-level resource controls |
+| Telemetry/privacy leak | Structured, redacted operation telemetry | Review end-to-end logs and retention; treat pseudonyms as linkable |
+| Supply-chain compromise | Dependency/Bandit/history-secret scans, optional CodeQL, minimum-version lane, SHA-pinned Actions, reproducible build check, SBOM, Trusted Publishing, and verified PyPI provenance | Ongoing dependency review and repository controls remain necessary |
 
 ## Current invariants
 
 - A network listener does not start without its required static bearer configuration.
 - A non-loopback network listener does not start without the trusted TLS-proxy
   acknowledgement.
-- Missing hosted request identity fails closed instead of falling back to local
+- Missing request-context identity fails closed instead of falling back to local
   credentials.
-- Hosted mode cannot dispatch a Moneybird mutation, build/read a durable search
+- Request-context mode cannot dispatch a Moneybird mutation, build/read a durable search
   index, or download/parse an attachment.
 - Read-only mode denies writes in the execution service, not only by hiding tools.
 - A claimed action cannot be claimed a second time as a new execution.
@@ -102,12 +99,11 @@ independent authorization or human-confirmation boundaries.
 - The local operator controls endpoint, filesystem, token, and client security.
 - Dedicated data directories and current state files receive best-effort owner-only
   POSIX modes; Windows and mounted filesystems still require an operator-reviewed ACL.
-- The demo gateway uses plaintext single-process files and a secret URL path.
 - The live repository currently lacks the external `pypi` environment branch/reviewer
   policy and protected `v*` tag ruleset needed to make workflow release guards an
   independently enforced boundary.
-- Local PDF isolation is per-document, not a hosted queue or global capacity
-  controller; concurrent callers still require deployment-level backpressure.
+- Local PDF isolation is per-document; concurrent callers still require
+  operator-level resource controls.
 - A model-callable approval flow cannot independently establish human intent.
 - Some Moneybird operations are not transactionally composable; partial progress can
   require manual repair.

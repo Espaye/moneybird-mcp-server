@@ -44,7 +44,7 @@ The project applies best-effort private POSIX modes, but Windows and some mounte
 
 ## Retention
 
-There is no automatic hosted retention or deletion service.
+There is no automatic retention or deletion service.
 
 - Pending approvals normally expire after 15 minutes.
 - Claimed, partial, ambiguous, and verification-failed write outcomes remain durable for reconciliation.

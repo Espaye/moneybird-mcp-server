@@ -24,8 +24,7 @@ versioning while allowing pre-1.0 breaking changes.
   This is deliberately **not** the default public setup, and the package ships no
   application credential: a Client Secret authenticates the application rather than the
   user, so it cannot live inside a distributed package. The personal API token remains
-  the simple, supported local path. The abstractions exist because a future hosted
-  service will hold the secret in its backend and connect users over an HTTPS callback.
+  the simple, supported local path.
   **Verified end to end against the live Moneybird service on Windows (2026-08-08)**
   with a real registered application: authorization page, out-of-band code exchange,
   `/administrations` under the OAuth grant, administration selection, `auth status`
@@ -54,7 +53,7 @@ versioning while allowing pre-1.0 breaking changes.
   the environment for one command; `auth login` then prints how to activate that
   profile, and `auth status` distinguishes the profile it inspected from the one the
   server would actually resolve. `MONEYBIRD_ACCESS_TOKEN` still takes precedence over
-  any profile, and hosted request mode still reads no local connection at all.
+  any profile, and request-context mode still reads no local connection at all.
 - **`moneybird_mcp/oauth_scopes.py`** — the requested scopes with a rationale per tool
   area, named profiles (`full`, `bookkeeping`, `invoicing`), and validation that rejects
   an unknown scope before the browser opens. Selectable with `--scopes` or
@@ -78,7 +77,7 @@ versioning while allowing pre-1.0 breaking changes.
   proves the request is minimal: dropping any one scope must break a real endpoint.
 - **`moneybird_mcp/oauth_store.py`** — a typed `OAuthConnection` and a `TokenStore`
   interface with a local owner-only, atomically written JSON implementation. Every
-  method takes the profile explicitly, so a hosted backend can swap in per-tenant
+  method takes the profile explicitly, so an alternative backend can provide its own
   storage without touching the API client. `OAuthConnection` redacts both tokens in its
   `repr`/`str`, so a traceback or a `%r` cannot leak one.
 - `suggest_bank_mutation_matches`: for each unprocessed bank mutation, the open sales
@@ -104,6 +103,11 @@ versioning while allowing pre-1.0 breaking changes.
   per-IP throttle rather than to the server.
 
 ### Removed
+
+- Removed internal architecture, roadmap, dated audit, release-evidence, and
+  maintainer-memory documents from the public package repository.
+- Removed the source-only experimental web onboarding prototype. It was never
+  included in the wheel or supported as an MCP deployment path.
 
 **Breaking.** The advertised tool catalogue goes from 85 tools / 84,399 bytes to
 **57 tools / 69,436 bytes**, so the full list is comfortably shippable to every client
@@ -142,7 +146,7 @@ and no discovery layer is needed in front of it.
   sends it, and requires it back; a pasted callback from another attempt is rejected
   before the code is exchanged. The default out-of-band flow has no callback and is
   unchanged.
-- **`auth status` in `hosted_request_only` mode reports the gateway as the active
+- **`auth status` in `hosted_request_only` mode reports request context as the active
   identity.** It previously printed the note that local credentials are never read and
   then named a stored OAuth connection as active anyway. Local credentials are still
   listed, now labelled inactive and ignored.
@@ -223,7 +227,7 @@ and no discovery layer is needed in front of it.
 ### Security
 
 - Raised the optional PDF extra's minimum to `pypdf 6.15.0`, the first release with
-  fixes for CVE-2026-71852 and CVE-2026-71870. The hosted request mode still refuses
+  fixes for CVE-2026-71852 and CVE-2026-71870. Request-context mode still refuses
   attachment parsing; this protects local installations that enable the PDF extra.
 
 ## 0.6.1 — 2026-08-05
@@ -287,7 +291,7 @@ and no discovery layer is needed in front of it.
   The project is now **source-available, not OSI-approved open source**. Inspecting,
   downloading, modifying, personal use, and internal use within your own organisation
   remain permitted free of charge. Selling the Software — including offering it as a paid
-  or commercial hosted service, providing a managed service whose value derives entirely or
+  or commercial service, providing a managed service whose value derives entirely or
   substantially from its functionality, or repackaging it commercially as a competing
   product — now requires a separate commercial licence from the Licensor (`Espaye`).
   Enquiries go to the repository owner via a GitHub issue.
@@ -419,8 +423,8 @@ their own licences.
   writes the reason itself as a single line. Direct Python callers still see
   `MoneybirdError` unchanged.
 - The missing-credentials message now matches the credential mode that is actually
-  running. In local mode it no longer suggests `X-Moneybird-Token` (read only in hosted
-  request mode) or `scripts/oauth_login.py` (absent from the wheel).
+  running. In local mode it no longer suggests `X-Moneybird-Token` (read only in
+  request-context mode) or `scripts/oauth_login.py` (absent from the wheel).
 
 ## 0.4.0 — 2026-07-31
 
@@ -431,7 +435,7 @@ their own licences.
   values supplied by the parent process.
 - Defaulted the server and Desktop bundle to `read_only`; experimental writes now require
   an explicit local or authenticated single-user capability opt-in.
-- Forced hosted request mode to live reads only: all writes, durable search sync/cache
+- Forced request-context mode to live reads only: all writes, durable search sync/cache
   access, and attachment download/parsing are refused without credential fallback.
 - Required bearer authentication for every network transport and an explicit trusted
   TLS-proxy acknowledgement for non-loopback binds.
@@ -447,8 +451,6 @@ their own licences.
   values, non-positive payments, and zero-value explicit bank links.
 - Applied best-effort owner-only modes to explicitly configured data directories and
   current approval, audit, OAuth, sync, and FTS state files.
-- Hardened the loopback gateway demo's identifiers and single-process JSON writes while
-  documenting its plaintext, URL-key, and production no-go limitations.
 - Added vulnerability reporting, supported-deployment guidance, and reconciled threat/data
   boundaries.
 - Added direct transport tests for numeric-address TCP pinning with original-hostname
@@ -480,7 +482,7 @@ their own licences.
   independent post-read to match both booking id and type, expose only the three
   link types whose target can be proven, and preserve invoice-currency amounts
   instead of translating them as ledger base amounts.
-- Made hosted search use live Moneybird reads with membership revalidation instead of local
+- Made request-context search use live Moneybird reads with membership revalidation instead of local
   JSON/FTS state.
 - Hardened release automation with a `main` ref guard, source/tag verification, dependency
   audit, exact artifact matrix tests, late tag re-verification, tested-candidate/PyPI
