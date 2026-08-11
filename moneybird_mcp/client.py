@@ -860,7 +860,7 @@ class MoneybirdClient:
         before a durable financial cache is opened.
 
         The positive result is held for ``membership_ttl_seconds`` (60s by default,
-        0 to disable, never in hosted request mode). That bounds revocation
+        0 to disable, never in request-context mode). That bounds revocation
         latency to a minute instead of to a single call, and removes a measured
         ~50 ms round trip from every repeat ``search`` — where it otherwise
         dominated: the local index lookup itself costs ~6 ms. A refusal is never

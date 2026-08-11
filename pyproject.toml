@@ -39,7 +39,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # PDF text-layer extraction for read_document_attachment. Without it the local tool
-# reports the missing extra; attachment parsing is disabled in hosted request mode.
+# reports the missing extra; attachment parsing is disabled in request-context mode.
 pdf = ["pypdf>=6.15.0"]
 
 [project.urls]
@@ -67,19 +67,13 @@ include = [
     "mcpb",
     "README.md",
     "README.nl.md",
-    "CLAUDE.md",
     "SECURITY.md",
     "CONTRIBUTING.md",
     "SUPPORT.md",
     "CHANGELOG.md",
     ".env.example",
 ]
-exclude = [
-    "**/__pycache__",
-    # Validation reports contain artifact digests and therefore cannot be part
-    # of the sdist whose digest they record.
-    "docs/release_validation_*.md",
-]
+exclude = ["**/__pycache__"]
 
 [tool.ruff]
 target-version = "py311"

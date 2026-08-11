@@ -25,11 +25,11 @@ published version can be repaired by uploading a replacement file.
 ## 2. Verify locally
 
 ```text
-ruff check moneybird_mcp gateway scripts tests moneybird_mcp_server.py
-python -m compileall moneybird_mcp gateway scripts
+ruff check moneybird_mcp scripts tests moneybird_mcp_server.py
+python -m compileall moneybird_mcp scripts
 python -m pytest -q
-python -m pytest --cov=moneybird_mcp --cov=gateway --cov-report=term-missing --cov-fail-under=70
-bandit --quiet --recursive moneybird_mcp gateway scripts moneybird_mcp_server.py --severity-level medium --confidence-level medium
+python -m pytest --cov=moneybird_mcp --cov-report=term-missing --cov-fail-under=70
+bandit --quiet --recursive moneybird_mcp scripts moneybird_mcp_server.py --severity-level medium --confidence-level medium
 python -m pip_audit -r requirements.txt
 python -m pip install -c requirements-minimum.txt -r requirements.txt pytest
 python -m pytest -q
@@ -159,5 +159,4 @@ python scripts/build_mcpb.py
 ```
 
 After the automated release is complete, upload that platform's bundle to the
-matching GitHub release. The gateway demo is intentionally not included in the
-wheel, sdist, or `.mcpb`.
+matching GitHub release.

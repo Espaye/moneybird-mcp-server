@@ -1,6 +1,6 @@
 # Deployment and safety
 
-Moneybird MCP has deliberately different boundaries for local, single-user network, and hosted operation.
+Moneybird MCP has deliberately different boundaries for local, single-user network, and trusted request-context operation.
 
 ## Supported posture
 
@@ -8,9 +8,9 @@ Moneybird MCP has deliberately different boundaries for local, single-user netwo
 |---|---|---|---|---|
 | `local` | stdio | request context, environment, or local OAuth store | Read-only by default; explicit experimental opt-in | Supported default |
 | `network_single_user` | authenticated HTTP/SSE | environment or local OAuth store | Read-only by default; explicit experimental opt-in | Experimental |
-| `hosted_request_only` | authenticated HTTP/SSE behind a trusted gateway | one gateway-injected request token and administration | Refused | Containment mode only |
+| `hosted_request_only` | authenticated HTTP/SSE behind a trusted edge | one trusted per-request token and administration | Refused | Advanced integration mode |
 
-The repository does not implement production multi-user identity, sessions, per-user OAuth grants, encrypted credential storage, tenant-isolated approvals, or hosted reconciliation.
+The server does not implement multi-user identity, sessions, tenant membership, or tenant-isolated approvals. Its network modes must not be treated as those controls.
 
 ## Read-only default
 
@@ -71,13 +71,13 @@ The server defaults to `127.0.0.1`. It refuses a non-loopback plaintext bind unl
 MCP_TRUSTED_TLS_PROXY=true
 ```
 
-Set that only when a trusted reverse proxy actually terminates TLS before the application listener. The gateway or proxy must strip client-supplied Moneybird credential headers and inject trusted context itself.
+Set that only when a trusted reverse proxy actually terminates TLS before the application listener. The proxy must strip client-supplied Moneybird credential headers before injecting trusted context itself.
 
 ## ChatGPT and other remote clients
 
 Some MCP clients connect only to network-accessible HTTPS endpoints. For local testing, a trusted tunnel can terminate TLS while Moneybird MCP remains bound to loopback.
 
-A tunnel does not convert the static-secret single-user server into a production hosted service. Confirm the client's current authentication and destructive-tool confirmation behaviour before exposing an endpoint.
+A tunnel does not convert the static-secret single-user server into a multi-user service. Confirm the client's current authentication and destructive-tool confirmation behaviour before exposing an endpoint.
 
 Relevant documentation:
 
@@ -124,11 +124,11 @@ When a personal token is absent, local and single-user modes can use the OAuth s
 
 The token file contains secrets and is not encrypted by this project. Protect the data directory with an appropriate filesystem ACL.
 
-### Hosted request credentials
+### Trusted request-context credentials
 
-`hosted_request_only` accepts only one nonblank gateway-injected token and administration per request. It does not fall back to environment or local OAuth credentials. It also refuses writes, durable sync/FTS access, and attachment parsing.
+`hosted_request_only` accepts only one nonblank trusted token and administration per request. It does not fall back to environment or local OAuth credentials. It also refuses writes, durable sync/FTS access, and attachment parsing.
 
-This mode is containment for a future gateway, not a production-hosting claim.
+This mode supplies credential isolation for an external trusted edge. That edge remains responsible for authentication, authorization, header stripping, and request-context integrity.
 
 ## Security documents
 

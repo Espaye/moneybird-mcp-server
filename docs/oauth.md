@@ -32,28 +32,6 @@ That is also why the personal API token remains the simple, supported public
 path for local use: it is a per-user credential the user already controls, with
 no application secret involved.
 
-### Where this is heading
-
-The hosted product solves this properly, and it is the reason the OAuth code
-exists now:
-
-| | Local OAuth (this page) | Future hosted service |
-|---|---|---|
-| Who registers the application | You | Us, once |
-| Where the Client Secret lives | Your machine, in a file you select | Our backend, never on a client |
-| How a user connects | CLI: paste an out-of-band code | Press **Connect Moneybird**, approve, done |
-| Redirect URI | `urn:ietf:wg:oauth:2.0:oob` | An HTTPS callback |
-| Where user tokens live | `~/.moneybird-mcp/moneybird_oauth_tokens.json` | Server-side, one token set per connection |
-
-The out-of-band redirect is a development and local-integration mechanism; it
-exists because a local CLI has no reachable callback endpoint. The hosted flow
-will not use it.
-
-The code is deliberately layered so the hosted implementation replaces only the
-top of it — see [Reusable pieces](#reusable-pieces-for-the-hosted-flow) below.
-Nothing about the hosted design requires a user to ever see a Client Secret,
-an authorization code, or a token.
-
 ## Verification status
 
 The flow on this page was run end to end against the live Moneybird service on
@@ -232,9 +210,9 @@ The administration follows the same rule: an explicit
 `MONEYBIRD_ADMINISTRATION_ID` overrides the one chosen at login. `auth status`
 states which one is active and flags the override when both are present.
 
-Hosted request mode never reads the local OAuth store, and `auth status` says so
+Request-context mode never reads the local OAuth store, and `auth status` says so
 twice over: it flags the mode, and it reports the active identity as the
-credentials supplied per request by the trusted gateway, labelling any local
+credentials supplied through trusted request context, labelling any local
 personal token or stored connection as inactive and ignored.
 
 ## Scopes
@@ -354,23 +332,18 @@ server does both:
 - neither grant is retried automatically: an authorization code is single-use,
   and a refresh may rotate the refresh token.
 
-## Reusable pieces for the hosted flow
+## Module boundaries
 
 Only the presentation layer is specific to the local out-of-band CLI:
 
-| Concern | Module | Hosted reuse |
+| Concern | Module | Boundary |
 |---|---|---|
 | Scope catalogue and rationale | `oauth_scopes.py` | Unchanged |
-| Token model and storage interface | `oauth_store.py` | Implement `TokenStore` over per-tenant encrypted rows; every method already takes the connection's profile explicitly, so there is no global-connection assumption to unpick |
-| URL construction, both grants, refresh | `oauth.py` | Unchanged. `generate_state` / `parse_authorization_callback(expected_state=…)` already implement the CSRF handling a redirect flow needs, which the OOB flow does not use. `expected_state` is a required argument with no default, so a callback cannot be exchanged without being bound to the request that asked for it |
+| Token model and storage interface | `oauth_store.py` | The local implementation stores owner-only JSON; alternative storage must preserve profile isolation and refresh-merge semantics |
+| URL construction, both grants, refresh | `oauth.py` | `generate_state` / `parse_authorization_callback(expected_state=…)` implement callback CSRF handling. `expected_state` is required, so a callback cannot be exchanged without being bound to its initiating request |
 | Administration selection | `oauth.py` + connection record | Unchanged |
 | API authentication | `credentials.py`, `client.py` | Unchanged |
-| Out-of-band prompt | `auth_cli.py` | Replaced by an HTTPS callback route |
-
-What the hosted product still needs beyond this — user identity, grant
-ownership, authorization, durable artifact ownership, trusted write
-confirmation, and a per-IP rate-limit story — is in
-[hosted gateway design](hosted_gateway_design.md).
+| Out-of-band prompt | `auth_cli.py` | Local CLI presentation |
 
 ## Troubleshooting
 

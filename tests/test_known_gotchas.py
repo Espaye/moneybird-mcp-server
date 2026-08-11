@@ -1,6 +1,6 @@
 """Regressions for Moneybird quirks that used to be documented but not enforced.
 
-Each case here is a gotcha that CLAUDE.md described in prose while the code still
+Each case here is a previously identified edge case that the code still
 either crashed on it, or returned something a caller would read as a confident
 answer. The point of these tests is that the nuance now lives in the code, so a
 caller does not have to remember it.

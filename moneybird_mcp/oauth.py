@@ -16,8 +16,8 @@ This module is the protocol layer and holds no presentation logic: URL
 construction, the two token grants, and the refresh-on-read session helper. The
 CLI lives in :mod:`moneybird_mcp.auth_cli`, persistence in
 :mod:`moneybird_mcp.oauth_store`, and the scope rationale in
-:mod:`moneybird_mcp.oauth_scopes`. A hosted callback flow reuses everything here
-and swaps only the first two.
+:mod:`moneybird_mcp.oauth_scopes`. Callback integrations can reuse the protocol
+primitives without using the local CLI or file store.
 
 Nothing in this module logs, and no exception it raises carries a client secret,
 an authorization code, an access token, or a refresh token.
@@ -65,7 +65,7 @@ REGISTER_APPLICATION_URL = "https://moneybird.com/user/applications/new"
 
 # Out-of-band: Moneybird shows the authorization code in the browser instead of
 # redirecting, so no reachable callback endpoint is needed. This is the local /
-# development mechanism; a hosted product registers an HTTPS callback instead.
+# development mechanism; callback integrations supply their own redirect URI.
 OOB_REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
 
 CLIENT_ID_ENV = "MONEYBIRD_OAUTH_CLIENT_ID"
@@ -158,7 +158,7 @@ def build_authorize_url(
 
     ``redirect_uri`` must exactly match one registered on the application;
     Moneybird rejects any mismatch. It is a caller-supplied value rather than
-    user input: the OOB default serves the CLI, and a hosted flow passes its own
+    user input: the OOB default serves the CLI, and a callback flow passes its own
     HTTPS callback.
     """
     client_id, _ = oauth_client_config()
@@ -176,7 +176,7 @@ def build_authorize_url(
 def generate_state() -> str:
     """A cryptographically random CSRF ``state`` value for :func:`build_authorize_url`.
 
-    Hosted (redirect-URI) flows must generate this per login attempt, keep it in the
+    Redirect-URI flows must generate this per login attempt, keep it in the
     user's session, and pass it to :func:`parse_authorization_callback`.
     """
     return secrets.token_urlsafe(32)
@@ -453,8 +453,8 @@ def _profile_lock(profile: str) -> threading.RLock:
 def credential_location() -> str:
     """Where the active store keeps credentials, as text.
 
-    Text, not a path: a hosted store's location is a database or secret-manager
-    reference, and forcing that through :class:`~pathlib.Path` corrupts it.
+    Text, not a path: another store's location may not be a filesystem path, and
+    forcing that through :class:`~pathlib.Path` corrupts it.
     Anything that only displays the location must use this.
     """
     return get_token_store().location()
@@ -545,7 +545,7 @@ def get_administration_id(profile: str = DEFAULT_PROFILE) -> str | None:
 
 # --- Backward-compatible dict API --------------------------------------------
 #
-# The gateway demo and existing callers pass raw Moneybird token responses
+# Existing callers pass raw Moneybird token responses
 # around. Keep that working on top of the typed store.
 
 

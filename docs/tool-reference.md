@@ -188,7 +188,7 @@ PDF content is untrusted model input. The implementation applies bounded downloa
 
 Local and single-user modes can synchronise contacts, invoices, documents, and financial mutations into administration-scoped JSON and SQLite FTS state.
 
-Hosted request mode does not read or build durable search indexes. It performs constrained live reads instead.
+`hosted_request_only` mode does not read or build durable search indexes. It performs constrained live reads instead.
 
 ## Limits
 
@@ -199,5 +199,3 @@ Hosted request mode does not read or build durable search indexes. It performs c
 - The project does not guarantee bookkeeping correctness, tax correctness, or data recovery.
 
 See [Deployment and safety](deployment-and-safety.md) and [Security policy](../SECURITY.md).
-
-For opt-in seeded workflow scenarios, see [Developer-administration workflow tests](developer-administration-testing.md).

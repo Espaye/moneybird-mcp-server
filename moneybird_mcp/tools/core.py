@@ -121,7 +121,7 @@ def list_administrations() -> dict[str, Any]:
     client = ctx.get_client(require_administration=False)
     administrations = client.list_administrations()
     # The caller's resolved credential context is authoritative. Consulting the
-    # process-global environment here would expose an operator default to hosted
+    # process-global environment here would expose an operator default to request-context
     # request-scoped callers.
     configured_id = client.administration_id
     return {
@@ -154,7 +154,7 @@ def search(
     client.require_current_administration_access()
     results: list[dict[str, Any]] = []
     use_durable_cache = get_credential_mode() != CREDENTIAL_MODE_HOSTED_REQUEST_ONLY
-    # Hosted request credentials have no durable principal/grant identifier yet.
+    # Request-context credentials have no durable principal/grant identifier.
     # Keep that mode live-only so two grants to the same administration can never
     # share a process-local JSON or FTS artifact.
     index = load_sync_index(client.administration_id) if use_durable_cache else {}

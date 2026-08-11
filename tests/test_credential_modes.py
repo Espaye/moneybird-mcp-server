@@ -66,7 +66,7 @@ class CredentialResolutionModeTests(unittest.TestCase):
             ),
             mock.patch.object(oauth, "get_connection") as stored_oauth,
         ):
-            with self.assertRaisesRegex(MoneybirdError, "Hosted request credentials"):
+            with self.assertRaisesRegex(MoneybirdError, "Trusted request credentials"):
                 resolve_credentials(CREDENTIAL_MODE_HOSTED_REQUEST_ONLY)
 
         stored_oauth.assert_not_called()
@@ -80,7 +80,7 @@ class CredentialResolutionModeTests(unittest.TestCase):
             mock.patch.dict(os.environ, {"MONEYBIRD_ACCESS_TOKEN": "operator-token"}),
             mock.patch.object(oauth, "get_connection") as stored_oauth,
         ):
-            with self.assertRaisesRegex(MoneybirdError, "Hosted request credentials"):
+            with self.assertRaisesRegex(MoneybirdError, "Trusted request credentials"):
                 resolve_credentials(CREDENTIAL_MODE_HOSTED_REQUEST_ONLY)
 
         stored_oauth.assert_not_called()
@@ -221,7 +221,7 @@ class CredentialModeMiddlewareTests(unittest.TestCase):
 class MissingCredentialGuidanceTests(unittest.TestCase):
     """The advice has to match the mode the user is actually running.
 
-    Request headers only exist in hosted mode, and ``scripts/`` is not part of
+    Request headers only exist in request-context mode, and ``scripts/`` is not part of
     the wheel, so a pip install cannot run anything under it.
     """
 

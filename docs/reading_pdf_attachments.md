@@ -48,10 +48,9 @@ documents with no useful text layer are not OCRed.
 ## Deployment boundary
 
 Attachment download and parsing are disabled before client access in
-`hosted_request_only` mode. The local parser now has per-document process isolation,
-timeout, and memory containment. A hosted parser additionally needs durable job
-capacity, global/per-tenant concurrency and abuse controls, tenant-scoped
-observability, and an explicit retention policy before this surface can be enabled.
+`hosted_request_only` mode. The local parser has per-document process isolation,
+timeout, and memory containment, but request-context operation has no shared
+capacity, abuse, or retention controls for this surface.
 
 For local or `network_single_user` use, parsing happens outside the server process.
 The parent terminates a worker that exceeds its deadline; Unix uses an address-space
@@ -68,4 +67,4 @@ under their own retention and deletion policy.
 - OCR and image-based extraction.
 - Automatic bookkeeping writes from parsed values.
 - Inferring ledger accounts, tax rates, or line-item semantics.
-- Hosted parsing without durable capacity, backpressure, abuse, and lifecycle controls.
+- Request-context parsing without shared capacity, backpressure, abuse, and lifecycle controls.

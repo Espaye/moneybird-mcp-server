@@ -321,7 +321,7 @@ class MissingCredentialAnnouncementTests(unittest.TestCase):
         self.assertEqual(server.instructions, "ORIGINAL INSTRUCTIONS")
 
     def test_hosted_mode_is_never_annotated(self) -> None:
-        # Every hosted request carries its own credentials; there is nothing
+        # Every request-context call carries its own credentials; there is nothing
         # missing to announce, and the check is skipped before it runs.
         from moneybird_mcp import server as server_module
 

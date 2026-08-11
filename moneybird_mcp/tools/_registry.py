@@ -25,7 +25,7 @@ HARD RULES (never break):
    returned approval_id. In compact discovery, never pass a write executor to call_tool:
    call_tool is read-only and will refuse it so the MCP client cannot miss the destructive
    annotation on the directly exposed execute_approved_action tool.
-   The approval id is model-callable and is not independent proof of human intent; hosted
+   The approval id is model-callable and is not independent proof of human intent; request-context
    writes therefore remain disabled.
 2. Never invent data (invoice numbers, references, amounts, dates, counterparties). If it
    is missing, ask or leave it blank.

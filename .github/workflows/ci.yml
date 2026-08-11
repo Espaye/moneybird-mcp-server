@@ -30,8 +30,8 @@ jobs:
       - name: Install pinned Ruff
         run: python -m pip install --disable-pip-version-check ruff==0.16.1
 
-      - name: Check production, gateway, scripts, and tests
-        run: ruff check moneybird_mcp gateway scripts tests moneybird_mcp_server.py
+      - name: Check package, scripts, and tests
+        run: ruff check moneybird_mcp scripts tests moneybird_mcp_server.py
 
   coverage:
     name: Coverage regression floor
@@ -56,7 +56,6 @@ jobs:
         run: >-
           python -m pytest
           --cov=moneybird_mcp
-          --cov=gateway
           --cov-report=term-missing
           --cov-fail-under=70
 

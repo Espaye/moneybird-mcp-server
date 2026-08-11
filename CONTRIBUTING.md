@@ -29,9 +29,9 @@ Use Python 3.11 or newer in a fresh virtual environment:
 ```powershell
 python -m pip install -r requirements.txt
 python -m pip install ruff==0.16.1 pytest-cov==7.1.0
-ruff check moneybird gateway scripts tests moneybird_mcp_server.py
+ruff check moneybird_mcp scripts tests moneybird_mcp_server.py
 python -m pytest -q
-python -m pytest --cov=moneybird --cov=gateway --cov-report=term-missing --cov-fail-under=70
+python -m pytest --cov=moneybird_mcp --cov-report=term-missing --cov-fail-under=70
 python -m pip install -c requirements-minimum.txt -r requirements.txt pytest
 python -m pytest -q
 ```
@@ -75,7 +75,7 @@ A prompt is never sufficient enforcement. Changes must not:
 - record failed, partial, unverified, or ambiguous work as verified success;
 - retry a write after dispatch may have started without reconciliation;
 - use caller-controlled paths, administration IDs, cache ownership, or telemetry labels;
-- fall back to operator credentials in a hosted request;
+- fall back to operator credentials in request-context mode;
 - expose secrets or bookkeeping content in logs, URLs, fixtures, or packages.
 
 Use `apply_patch`-sized, reviewable migrations. A migration that has observed new writes must

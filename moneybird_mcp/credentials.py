@@ -3,7 +3,7 @@
 ``local`` preserves the original request -> environment -> OAuth fallback used by
 stdio clients and local scripts. ``network_single_user`` permits only the local
 environment/OAuth identity and rejects request-supplied tenant headers.
-``hosted_request_only`` accepts only a non-empty, gateway-injected request token
+``hosted_request_only`` accepts only a non-empty token from trusted request context
 and never falls back to process-wide credentials.
 
 The token is never logged.
@@ -86,7 +86,7 @@ def _request_headers() -> dict[str, str]:
     try:
         raw = get_http_headers(include_all=True)
     except Exception:
-        # In strict hosted mode an empty mapping fails closed below. Local modes
+        # In strict request-context mode an empty mapping fails closed below. Local modes
         # retain their historical off-HTTP fallback behavior.
         return {}
     return {
@@ -150,8 +150,8 @@ def resolve_credentials(mode: str | None = None) -> Credentials:
         credentials = _credentials_from_headers(headers)
         if credentials is None:
             raise MoneybirdError(
-                "Hosted request credentials are required: send a non-empty "
-                "'X-Moneybird-Token' header through the trusted gateway."
+                "Trusted request credentials are required: supply a non-empty "
+                "'X-Moneybird-Token' header through the authenticating edge."
             )
         return credentials
 
@@ -174,7 +174,7 @@ def resolve_credentials(mode: str | None = None) -> Credentials:
     return credentials
 
 
-# Only the modes that can actually fall back this far need a message; hosted
+# Only the modes that can actually fall back this far need a message; strict
 # request mode fails earlier, on the missing header.
 _OAUTH_LOGIN_HINT = (
     "connect through Moneybird OAuth with 'moneybird-mcp auth login' (add "
@@ -218,7 +218,7 @@ def missing_credentials_message(mode: str) -> str:
 
     Naming request headers or a repository script to someone running a local
     stdio server sends them after options that mode cannot use: headers are
-    only read in hosted request mode, and ``scripts/`` is not part of the
+    only read in request-context mode, and ``scripts/`` is not part of the
     installed wheel.
     """
     if mode == CREDENTIAL_MODE_NETWORK_SINGLE_USER:

@@ -55,8 +55,6 @@ Dit is niet de standaardopstelling voor publiek gebruik, en het pakket bevat gee
 
 Bestaan er zowel een persoonlijk token als een OAuth-verbinding, dan wint het persoonlijke token; `moneybird-mcp auth status` vertelt welke actief is. Volledige uitleg: [Moneybird OAuth](docs/oauth.md) (Engelstalig).
 
-Een toekomstige gehoste dienst neemt deze afweging helemaal weg: de backend bewaart het Client Secret, een gebruiker drukt op **Connect Moneybird** en keurt goed in Moneybird via een HTTPS-callback, en zijn tokens staan server-side. Die dienst is nog niet gebouwd.
-
 Registraties in Claude Code hebben een scope. De standaardscope `local` is alleen beschikbaar in het huidige project; gebruik `--scope user` wanneer Moneybird vanuit elk project beschikbaar moet zijn. Als `claude mcp list` verbonden meldt maar een ander project geen tools toont, controleer dan `claude mcp get moneybird` en voeg de configuratie opnieuw toe met userscope. Gebruik geen projectscope voor een configuratie met een persoonlijk token, omdat projectscope een gedeeld `.mcp.json`-bestand schrijft.
 
 ### Installeren met `pip`
@@ -160,9 +158,8 @@ Bekijk [Aan de slag](docs/getting-started.nl.md) voor volledige installatievoorb
 |---|---|---|
 | Lokale stdio | Eén gebruiker op één computer | Ondersteunde standaard |
 | Geauthenticeerde HTTP/SSE | Eén vertrouwde gebruiker achter authenticatie en TLS | Experimenteel |
-| Gehoste dienst voor meerdere gebruikers | Meerdere gebruikers of organisaties | Niet geïmplementeerd |
 
-Iedere HTTP/SSE-listener vereist `MCP_AUTH_TOKEN`, ook op loopback. Niet-loopbacklisteners worden geweigerd tenzij expliciet een vertrouwde TLS-proxy is geconfigureerd. De meegeleverde gateway is een demonstratie en geen gehost product voor productiegebruik.
+Iedere HTTP/SSE-listener vereist `MCP_AUTH_TOKEN`, ook op loopback. Niet-loopbacklisteners worden geweigerd tenzij expliciet een vertrouwde TLS-proxy is geconfigureerd. Het netwerktransport is bedoeld voor één vertrouwde gebruiker en biedt geen identiteit voor meerdere gebruikers of tenantisolatie.
 
 Bekijk [Deployment and safety](docs/deployment-and-safety.md), het [beveiligingsbeleid](SECURITY.md) en het [dreigingsmodel](docs/threat_model.md).
 
@@ -204,4 +201,4 @@ Gebruik [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues) v
 
 Dit project is **source-available en geen OSI-goedgekeurde open source**. Het wordt verspreid onder de MIT License met de **Commons Clause License Condition v1.0**.
 
-Persoonlijk gebruik, intern gebruik binnen een organisatie, inspectie en aanpassing zijn toegestaan. Voor het verkopen van de software, het aanbieden van een betaalde gehoste dienst die er in belangrijke mate op is gebaseerd, of commerciële herverpakking is een afzonderlijke commerciële licentie nodig. Neem voor commerciële licenties contact op met de repository-eigenaar via [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues). De volledige voorwaarden in [LICENSE](LICENSE) zijn bepalend.
+Persoonlijk gebruik, intern gebruik binnen een organisatie, inspectie en aanpassing zijn toegestaan. Voor het verkopen van de software, het commercieel aanbieden van de functionaliteit als dienst, of commerciële herverpakking is een afzonderlijke commerciële licentie nodig. Neem voor commerciële licenties contact op met de repository-eigenaar via [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues). De volledige voorwaarden in [LICENSE](LICENSE) zijn bepalend.

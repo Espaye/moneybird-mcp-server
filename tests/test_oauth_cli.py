@@ -779,8 +779,8 @@ class ConsoleEncodingTests(_CliCase):
         self._assert_ascii(out, err)
 
 
-class HostedModeTests(_CliCase):
-    """Hosted request mode never reads the local store; say so, don't imply it does."""
+class RequestContextModeTests(_CliCase):
+    """Request-context mode never reads the local store; say so, don't imply it does."""
 
     def test_status_says_a_stored_connection_would_be_ignored(self) -> None:
         oauth.store_tokens(FAKE_TOKENS)
@@ -791,7 +791,7 @@ class HostedModeTests(_CliCase):
         self.assertEqual(code, 0)
         self.assertIn("never read", out)
 
-    def test_status_names_the_gateway_and_never_a_local_connection_as_active(
+    def test_status_names_request_context_and_never_a_local_connection_as_active(
         self,
     ) -> None:
         """The note is not enough on its own.
@@ -812,7 +812,7 @@ class HostedModeTests(_CliCase):
         self.assertEqual(code, 0)
         self.assertIn(
             "Active identity:        the credentials supplied per request by the "
-            "trusted gateway.",
+            "trusted request context.",
             out,
         )
         self.assertNotIn("Active identity:        the stored OAuth connection", out)
