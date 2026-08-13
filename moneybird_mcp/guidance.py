@@ -229,7 +229,7 @@ Werkwijze:
 
 
 def prompt_koppel_banktransacties(period: str = "", limit: str = "10") -> str:
-    """Loop onverwerkte bankmutaties langs en koppel ze — met akkoord per koppeling."""
+    """Koppel mutaties, met één akkoord voor een eenduidige volledige groep."""
     wanneer = period.strip() or "de afgelopen maand"
     return f"""\
 Help me de onverwerkte banktransacties wegwerken voor periode "{wanneer}"
@@ -244,6 +244,8 @@ Werkwijze:
    referentie in de omschrijving, exact openstaand bedrag, IBAN van de tegenpartij en
    contactnaam. Doe dat matchwerk niet zelf opnieuw met rapporten en factuurlijsten.
 2. Neem per mutatie de uitkomst over:
+   - sterke `group_matches`: één inkoopfactuur wordt exact volledig gedekt door twee of meer
+     mutaties van dezelfde tegenpartij. Presenteer de hele groep meteen als één voorstel;
    - suggestion "exact" of "strong": één voorstel met de meegeleverde evidence als onderbouwing;
    - suggestion "ambiguous": meerdere kandidaten passen even goed (bijvoorbeeld dezelfde
      klant met twee openstaande facturen van hetzelfde bedrag). Leg beide voor en vraag welke;
@@ -253,8 +255,11 @@ Werkwijze:
 3. Presenteer per mutatie één voorstel met onderbouwing: koppelen aan factuur/document
    (booking_type SalesInvoice of Document) of direct aan een categorie (LedgerAccount).
    Twijfelgevallen zet je apart met wat er mist; die koppel je niet.
-4. Na akkoord per mutatie (of per expliciet goedgekeurd groepje):
-   prepare_link_bank_mutation_booking → execute_approved_action.
+4. Na akkoord:
+   - sterke volledige groep: prepare_settle_purchase_invoice_from_bank_mutations →
+     execute_approved_action. Dit ene approval koppelt alle mutaties, verwerkt een nog nieuwe
+     inkoopfactuur met ongewijzigde boekingsregels en verifieert status `paid`;
+   - losse match: prepare_link_bank_mutation_booking → execute_approved_action.
    Rapporteer per koppeling de verificatie (payments/ledger_account_bookings na afloop).
 5. Fout gekoppeld? Herstel met prepare_unlink_bank_mutation_booking →
    execute_approved_action.
@@ -418,7 +423,7 @@ def register_guidance(mcp) -> None:
 
     mcp.prompt(
         name="koppel_banktransacties",
-        description="Loop onverwerkte bankmutaties langs, stel per mutatie een koppeling voor (factuur, document of categorie) en voer die na akkoord uit.",
+        description="Koppel onverwerkte bankmutaties; stel een exact passende groep als één actie voor en voer die met één akkoord inclusief factuurverwerking uit.",
         tags={"boekhouding", "bank"},
     )(prompt_koppel_banktransacties)
 

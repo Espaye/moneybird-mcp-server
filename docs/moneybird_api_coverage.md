@@ -145,7 +145,7 @@ per-IP scope must be considered whenever several processes use the same egress a
 | POST | `/documents/purchase_invoices` | Create a new purchase invoice | — |
 | DELETE | `/documents/purchase_invoices/{id}` | Delete a purchase invoices | — |
 | GET | `/documents/purchase_invoices/{id}` | Get purchase invoice | ✅ `fetch("purchase_invoice:<id>")` |
-| PATCH | `/documents/purchase_invoices/{id}` | Update purchase invoice | ✅ `prepare_reclassify_document_lines`, `prepare_reconcile_purchase_invoice` |
+| PATCH | `/documents/purchase_invoices/{id}` | Update purchase invoice | ✅ `prepare_reclassify_document_lines`, `prepare_reconcile_purchase_invoice`, `prepare_settle_purchase_invoice_from_bank_mutations` (process after exact grouped payment) |
 | POST | `/documents/purchase_invoices/{id}/attachments` | Add attachment to purchase invoice | — |
 | DELETE | `/documents/purchase_invoices/{id}/attachments/{attachment_id}` | Delete an attachment | — |
 | GET | `/documents/purchase_invoices/{id}/attachments/{attachment_id}/download` | Download attachment | ✅ read_document_attachment |
@@ -254,7 +254,7 @@ per-IP scope must be considered whenever several processes use the same egress a
 |---|---|---|---|
 | GET | `/financial_mutations` | List all financial mutations | ✅ `list_financial_mutations`, `suggest_bank_mutation_matches` (unprocessed + candidate matching) |
 | GET | `/financial_mutations/{id}` | Get a financial mutation by id | ✅ `fetch("financial_mutation:<id>")` |
-| PATCH | `/financial_mutations/{id}/link_booking` | Links a financial mutation to a booking | ✅ `prepare_link_bank_mutation_booking` |
+| PATCH | `/financial_mutations/{id}/link_booking` | Links a financial mutation to a booking | ✅ `prepare_link_bank_mutation_booking`, `prepare_settle_purchase_invoice_from_bank_mutations` (exact group + invoice processing) |
 | DELETE | `/financial_mutations/{id}/unlink_booking` | Unlinks a booking from a financial mutation | ✅ `prepare_unlink_bank_mutation_booking` |
 | GET | `/financial_mutations/synchronization` | List all ids and versions | ✅ `sync_search_index` |
 | POST | `/financial_mutations/synchronization` | Fetch financial mutations with given ids | ✅ `sync_search_index` |

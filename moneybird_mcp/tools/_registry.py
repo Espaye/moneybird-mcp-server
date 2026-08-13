@@ -42,7 +42,11 @@ HOW TO WORK:
   the domain rules the API does not express. list_bookkeeping_guide_topics lists them.
 - To process the bank feed, start with suggest_bank_mutation_matches. It matches unprocessed
   bank mutations against open invoices deterministically (reference in the description, exact
-  open amount, counterparty IBAN, contact name) and returns candidates with their evidence.
+  open amount, counterparty IBAN, contact name) and returns candidates with their evidence. It
+  also returns group_matches when two or more outgoing mutations uniquely add up to one purchase
+  invoice's complete open balance. Prefer prepare_settle_purchase_invoice_from_bank_mutations for
+  a strong group_match: one preview and one approval then link the complete group, process a
+  still-new invoice without changing its accounting lines, and verify the final paid state.
   Do not redo that matching by hand from reports and invoice lists. When a mutation comes back
   as 'ambiguous' or 'none', ask the user instead of picking one; 'none' usually means the
   amount belongs on a ledger account rather than an invoice.
@@ -69,6 +73,8 @@ HOW TO WORK:
   mutation to an invoice, document, or ledger category (prepare_link_bank_mutation_booking /
   prepare_unlink_bank_mutation_booking), moving existing direct bank bookings between ledger
   accounts as a preflighted and verified batch (prepare_reclassify_bank_mutation_bookings),
+  settling one purchase invoice from an exact group of bank mutations in one approval
+  (prepare_settle_purchase_invoice_from_bank_mutations),
   crediting an invoice (prepare_create_credit_invoice), and the
   invoice/contact/journal/reclassify flows.
 - When one task contains related purchase-invoice corrections and direct bank-booking moves,

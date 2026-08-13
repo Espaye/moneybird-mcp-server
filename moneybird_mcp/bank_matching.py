@@ -27,8 +27,10 @@ still goes through ``prepare_link_bank_mutation_booking`` and explicit approval.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from itertools import combinations
 from typing import Any
 
 from .formatting import money_decimal
@@ -48,6 +50,9 @@ _IBAN_NOISE = re.compile(r"[^A-Za-z0-9]")
 CONFIDENCE_EXACT = "exact"
 CONFIDENCE_STRONG = "strong"
 CONFIDENCE_POSSIBLE = "possible"
+
+MAX_GROUP_SIZE = 10
+MAX_GROUP_FUTURE_INVOICE_DAYS = 45
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -328,3 +333,109 @@ def match_mutation(
     else:
         result["suggestion"] = top["confidence"]
     return result
+
+
+def _same_counterparty(mutation: dict[str, Any], record: dict[str, Any]) -> bool:
+    contra_iban = normalize_iban(mutation.get("contra_account_number"))
+    if contra_iban and contra_iban in _contact_ibans(record):
+        return True
+    return bool(
+        _tokens(mutation.get("contra_account_name")) & _tokens(_contact_name(record))
+    )
+
+
+def _group_date_plausible(mutation: dict[str, Any], record: dict[str, Any]) -> bool:
+    mutation_date = _parse_date(mutation.get("date"))
+    record_date = _parse_date(record.get("invoice_date") or record.get("date"))
+    if not mutation_date or not record_date:
+        return True
+    age = (mutation_date - record_date).days
+    return -MAX_GROUP_FUTURE_INVOICE_DAYS <= age <= MAX_INVOICE_AGE_DAYS
+
+
+def _exact_subsets(
+    mutations: list[dict[str, Any]],
+    target: Decimal,
+) -> list[tuple[int, ...]]:
+    """Return at most two exact multi-mutation subsets for ambiguity detection."""
+
+    if len(mutations) > MAX_GROUP_SIZE:
+        return []
+    amounts = []
+    for mutation in mutations:
+        amount = _decimal(mutation.get("amount_open"))
+        if amount is None:
+            amount = _decimal(mutation.get("amount"))
+        amounts.append(abs(amount or Decimal()))
+    matches = []
+    for size in range(2, len(mutations) + 1):
+        for subset in combinations(range(len(mutations)), size):
+            if sum((amounts[index] for index in subset), Decimal()) == target:
+                matches.append(subset)
+                if len(matches) == 2:
+                    return matches
+    return matches
+
+
+def match_mutation_groups(
+    mutations: list[dict[str, Any]],
+    purchase_documents: list[tuple[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Find exact, counterparty-matched groups that settle one purchase invoice."""
+
+    def is_open_outgoing(mutation: dict[str, Any]) -> bool:
+        amount = _decimal(mutation.get("amount_open"))
+        if amount is None:
+            amount = _decimal(mutation.get("amount"))
+        return str(mutation.get("state") or "unprocessed") == "unprocessed" and bool(
+            amount is not None and amount < 0
+        )
+
+    outgoing = [mutation for mutation in mutations if is_open_outgoing(mutation)]
+
+    proposals: list[dict[str, Any]] = []
+    for kind, document in purchase_documents:
+        if kind != "purchase_invoice":
+            continue
+        outstanding = open_amount(document)
+        if outstanding is None or outstanding <= 0:
+            continue
+        compatible = [
+            mutation
+            for mutation in outgoing
+            if _same_counterparty(mutation, document)
+            and _group_date_plausible(mutation, document)
+        ]
+        subsets = _exact_subsets(compatible, outstanding)
+        if not subsets:
+            continue
+        chosen = subsets[0]
+        selected = [compatible[index] for index in chosen]
+        mutation_ids = [str(item.get("id") or "") for item in selected]
+        proposal = {
+            "suggestion": "strong" if len(subsets) == 1 else "ambiguous",
+            "booking_id": str(document.get("id") or ""),
+            "open_amount": f"{outstanding:.2f}",
+            "financial_mutation_ids": mutation_ids,
+            "process_purchase_invoice": True,
+        }
+        if len(subsets) > 1:
+            proposal["alternative_financial_mutation_ids"] = [
+                str(compatible[index].get("id") or "") for index in subsets[1]
+            ]
+        proposals.append(proposal)
+
+    mutation_use = Counter(
+        mutation_id
+        for proposal in proposals
+        for mutation_id in proposal["financial_mutation_ids"]
+    )
+    for proposal in proposals:
+        overlapping = [
+            mutation_id
+            for mutation_id in proposal["financial_mutation_ids"]
+            if mutation_use[mutation_id] > 1
+        ]
+        if overlapping:
+            proposal["suggestion"] = "ambiguous"
+    return proposals

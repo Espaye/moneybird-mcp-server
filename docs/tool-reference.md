@@ -71,9 +71,9 @@ In compact mode these stay visible without a search step:
 - `list_financial_mutations`
 - `suggest_bank_mutation_matches` — for each unprocessed mutation, which open invoice it
   most likely settles, with the evidence (reference in the bank description, exact open
-  amount, counterparty IBAN, contact name). Read-only; linking still goes through
-  `prepare_link_bank_mutation_booking`. A tie is reported as `ambiguous` rather than
-  resolved.
+  amount, counterparty IBAN, contact name). It also reports `group_matches` when two or
+  more outgoing mutations uniquely add up to one purchase invoice's complete open balance.
+  A tie or competing exact subset is reported as `ambiguous` rather than resolved.
 - `get_financial_report`
 
 ### Search and API coverage
@@ -138,7 +138,9 @@ Write families include:
 - payments: register payments on supported invoices and documents;
 - ledger and journals: create ledger accounts and general journal documents;
 - purchase documents: line reclassification and reconciliation;
-- banking: link, unlink, and reclassify mutation bookings;
+- banking: link, unlink, and reclassify mutation bookings; exact multi-mutation purchase
+  settlements use `prepare_settle_purchase_invoice_from_bank_mutations` for one preview and
+  approval that also processes the invoice and verifies its final `paid` state;
 - combined bookkeeping correction batches;
 - meter-usage invoice runs.
 - product-only bulk price updates.
