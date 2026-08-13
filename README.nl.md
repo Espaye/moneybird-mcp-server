@@ -102,6 +102,7 @@ moneybird-mcp --help
 - Onverwerkte banktransacties koppelen aan de openstaande facturen die ze betalen, met per kandidaat de onderbouwing, en het eerlijk melden wanneer twee kandidaten even goed passen.
 - Moneybird-rapporten lezen, waaronder winst-en-verliesrekening, balans, grootboek, btw-, debiteuren- en crediteurenrapporten.
 - Inkoopfacturen, factuurverzendinstellingen, bankmutaties en boekhoudkundige inconsistenties controleren.
+- Eén inkoopfactuur met een exact passende groep bankmutaties afwikkelen via één voorvertoning en akkoord, inclusief factuurverwerking en eindcontrole.
 - Productgegevens controleren en beveiligde bulkprijswijzigingen met exacte decimale voorbeelden berekenen.
 - PDF-bijlagen lokaal lezen wanneer de optionele PDF-afhankelijkheid is geïnstalleerd.
 - Een lokale zoekindex bouwen voor snellere gerangschikte zoekresultaten.

@@ -102,6 +102,7 @@ moneybird-mcp --help
 - Match unprocessed bank transactions to the open invoices they settle, with the evidence for each candidate, and say so plainly when two candidates fit equally well.
 - Read Moneybird reports, including profit and loss, balance sheet, general ledger, VAT, debtor, and creditor reports.
 - Review purchase invoices, invoice-delivery settings, bank mutations, and bookkeeping inconsistencies.
+- Settle one purchase invoice from an exact group of bank mutations with one preview and approval, including final invoice processing and verification.
 - Audit product data and calculate guarded bulk price changes with exact decimal previews.
 - Read PDF attachments locally when the optional PDF dependency is installed.
 - Build a local search index for faster ranked search.

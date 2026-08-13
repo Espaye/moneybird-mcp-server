@@ -228,6 +228,12 @@ class ToolSearchRankingTests(unittest.TestCase):
         "book a bank transaction to a ledger": "prepare_link_bank_mutation_booking",
         "factuur versturen naar klant": "prepare_send_sales_invoice",
         "bankmutatie koppelen aan factuur": "prepare_link_bank_mutation_booking",
+        "link multiple bank mutations and process the purchase invoice": (
+            "prepare_settle_purchase_invoice_from_bank_mutations"
+        ),
+        "meerdere bankmutaties koppelen en inkoopfactuur verwerken": (
+            "prepare_settle_purchase_invoice_from_bank_mutations"
+        ),
         "klant toevoegen": "prepare_create_contact",
         "memoriaalboeking maken": "prepare_create_general_journal_document",
         "creditfactuur maken": "prepare_create_credit_invoice",

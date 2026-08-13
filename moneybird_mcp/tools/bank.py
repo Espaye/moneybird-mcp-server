@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from ..bank_matching import match_mutation
+from ..bank_matching import match_mutation, match_mutation_groups
 from ..config import (
     FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
     FINANCIAL_MUTATION_UNLINK_BOOKING_TYPES,
@@ -28,6 +28,7 @@ from ..formatting import (
     purchase_document_title,
 )
 from ..invoicing import (
+    details_attributes_payload,
     parse_decimal_number,
 )
 from ..task_context import MoneybirdTaskContext
@@ -180,9 +181,11 @@ def suggest_bank_mutation_matches(
         )
         for mutation in mutations
     ]
+    group_matches = match_mutation_groups(mutations, purchase_documents)
     summary = Counter(match["suggestion"] for match in matches)
     result: dict[str, Any] = {
         "matches": matches,
+        "group_matches": group_matches,
         "count": len(matches),
         "summary": dict(summary),
         "candidate_pool": {
@@ -190,10 +193,11 @@ def suggest_bank_mutation_matches(
             "open_purchase_documents": len(purchase_documents),
         },
         "next_step": (
-            "Show these to the user, then use prepare_link_bank_mutation_booking "
-            "for each agreed match and execute_approved_action after their "
-            "explicit yes. Mutations with suggestion 'none' usually belong on a "
-            "ledger account rather than an invoice."
+            "Prefer one strong group_match when present: show its complete preview, "
+            "then use prepare_settle_purchase_invoice_from_bank_mutations so one "
+            "approval links every mutation and processes the invoice. Otherwise use "
+            "prepare_link_bank_mutation_booking per agreed match. Mutations with "
+            "suggestion 'none' usually belong on a ledger account rather than an invoice."
         ),
     }
     if warnings:
@@ -1169,14 +1173,22 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
     expected_open = money_decimal(before.get("amount_open")) - money_decimal(
         requested_price
     )
+    # Moneybird's link endpoint accepts the signed bank-mutation amount, but a
+    # payment stored on an invoice/document is returned as a positive magnitude.
+    # Ledger bookings retain the mutation sign.
     expected_price = f"{money_decimal(requested_price):.2f}"
+    expected_link_price = (
+        expected_price
+        if requested_type == "LedgerAccount"
+        else f"{abs(money_decimal(requested_price)):.2f}"
+    )
     verification = {
         "mutation_id_matches": str(after_record.get("id") or "") == str(mutation_id),
         "exactly_one_new_link_visible": len(new_links) == 1,
         "new_link_visible_on_mutation": len(target_links) == 1,
         "booking_target_matches": len(target_links) == 1,
         "new_link_price_matches": any(
-            f"{money_decimal(item.get('price')):.2f}" == expected_price
+            f"{money_decimal(item.get('price')):.2f}" == expected_link_price
             for item in target_links
         ),
         "amount_open_matches": (
@@ -1218,6 +1230,356 @@ def link_bank_mutation_booking_from_approval(approval_id: ApprovalId) -> dict[st
     client = ctx.get_client()
     return run_approved_write(
         client, approval_id, "link_bank_mutation_booking", _execute_link_booking
+    )
+
+
+def _purchase_invoice_lines(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Stable booking fields that must survive the status-triggering save."""
+
+    return sorted(
+        (
+            {
+                "id": str(line.get("id") or ""),
+                "description": str(line.get("description") or ""),
+                "price": f"{money_decimal(line.get('price')):.2f}",
+                "amount": str(line.get("amount_decimal") or line.get("amount") or "1"),
+                "ledger_account_id": str(line.get("ledger_account_id") or ""),
+                "tax_rate_id": str(line.get("tax_rate_id") or ""),
+                "project_id": str(line.get("project_id") or ""),
+                "product_id": str(line.get("product_id") or ""),
+                "period": str(line.get("period") or ""),
+                "row_order": int(line.get("row_order") or 0),
+            }
+            for line in (record.get("details") or [])
+        ),
+        key=lambda line: (line["row_order"], line["id"]),
+    )
+
+
+def _purchase_invoice_settlement_snapshot(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(record.get("id") or ""),
+        "version": str(record.get("version") or record.get("updated_at") or ""),
+        "state": record.get("state"),
+        "total_price_incl_tax": f"{money_decimal(record.get('total_price_incl_tax')):.2f}",
+        "open_amount": f"{money_decimal(_open_amount(record)):.2f}",
+        "prices_are_incl_tax": bool(record.get("prices_are_incl_tax")),
+        "lines": _purchase_invoice_lines(record),
+    }
+
+
+def _processing_details(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(detail.get("id") or ""),
+            "description": str(detail.get("description") or ""),
+            "price": f"{money_decimal(detail.get('price')):.2f}",
+            "amount": str(detail.get("amount") or "1"),
+        }
+        for detail in lines
+    ]
+
+
+@mcp.tool(annotations=PREPARE_ANNOTATIONS)
+def prepare_settle_purchase_invoice_from_bank_mutations(
+    document_id: Annotated[
+        str,
+        Field(description="Internal Moneybird id of the purchase invoice to settle."),
+    ],
+    financial_mutation_ids: Annotated[
+        list[str],
+        Field(
+            min_length=2,
+            max_length=10,
+            description=(
+                "Two to ten unprocessed outgoing bank mutation ids whose absolute "
+                "amounts exactly equal the invoice's current open amount."
+            ),
+        ),
+    ],
+) -> dict[str, Any]:
+    """Prepare one approval to link several bankmutaties and process one inkoopfactuur.
+
+    Only an unambiguous supplier group that exactly closes the open balance is accepted.
+    The executor preflights every record and verifies the paid invoice after the writes.
+    """
+    document_id = str(document_id or "").strip()
+    mutation_ids = [str(item or "").strip() for item in financial_mutation_ids]
+    if not document_id:
+        raise MoneybirdError("document_id is required.")
+    if any(not item for item in mutation_ids) or len(set(mutation_ids)) != len(
+        mutation_ids
+    ):
+        raise MoneybirdError("financial_mutation_ids must be non-empty and unique.")
+    if not 2 <= len(mutation_ids) <= 10:
+        raise MoneybirdError("Provide between 2 and 10 unique financial mutation ids.")
+
+    client = ctx.get_client()
+    task = MoneybirdTaskContext(client)
+    invoice = task.documents("purchase_invoice", [document_id])[document_id]
+    mutations = task.financial_mutations(mutation_ids)
+    expected_invoice = _purchase_invoice_settlement_snapshot(invoice)
+    if not expected_invoice["version"]:
+        raise MoneybirdError("The purchase invoice has no version/updated_at value.")
+    open_amount = money_decimal(expected_invoice["open_amount"])
+    if expected_invoice["state"] == "paid" or open_amount <= 0:
+        raise MoneybirdError(f"Purchase invoice {document_id} has no open amount.")
+    if not expected_invoice["lines"]:
+        raise MoneybirdError(f"Purchase invoice {document_id} has no booking lines.")
+    if any(
+        not line["id"] or not line["ledger_account_id"] or not line["tax_rate_id"]
+        for line in expected_invoice["lines"]
+    ):
+        raise MoneybirdError(
+            "The purchase invoice has incomplete ledger/tax lines."
+        )
+
+    items: list[dict[str, Any]] = []
+    for mutation_id in mutation_ids:
+        mutation = mutations[mutation_id]
+        state = _mutation_link_state(mutation)
+        version = str(mutation.get("version") or mutation.get("updated_at") or "")
+        if not version:
+            raise MoneybirdError(f"Financial mutation {mutation_id} has no version.")
+        if state["state"] != "unprocessed" or state["payments"] or state["ledger_account_bookings"]:
+            raise MoneybirdError(f"Financial mutation {mutation_id} is already booked.")
+        amount = money_decimal(state["amount_open"])
+        if amount >= 0:
+            raise MoneybirdError(f"Financial mutation {mutation_id} is not outgoing.")
+        items.append(
+            {
+                "financial_mutation_id": mutation_id,
+                "expected_version": version,
+                "expected_state": state,
+                "price": f"{amount:.2f}",
+                "preview": {
+                    "date": mutation.get("date"),
+                    "contra_account_name": mutation.get("contra_account_name"),
+                    "amount": f"{amount:.2f}",
+                },
+            }
+        )
+    total = sum((abs(money_decimal(item["price"])) for item in items), Decimal())
+    if total != open_amount:
+        raise MoneybirdError(
+            f"Selected mutations total {total:.2f}; invoice {document_id} has "
+            f"{open_amount:.2f} open and must be closed exactly."
+        )
+    groups = match_mutation_groups(
+        [mutations[mutation_id] for mutation_id in mutation_ids],
+        [("purchase_invoice", invoice)],
+    )
+    if not any(
+        group["suggestion"] == "strong"
+        and set(group["financial_mutation_ids"]) == set(mutation_ids)
+        for group in groups
+    ):
+        raise MoneybirdError(
+            "The selected mutations do not form one unambiguous supplier group."
+        )
+
+    payload = {
+        "document_id": document_id,
+        "expected_invoice": expected_invoice,
+        "items": items,
+    }
+    return stage_write(
+        "settle_purchase_invoice_from_bank_mutations",
+        summary=(
+            f"Link {len(items)} bank mutations totalling {total:.2f} to purchase "
+            f"invoice {invoice.get('reference') or document_id} and process it"
+        ),
+        payload=payload,
+        preview={
+            "purchase_invoice": {
+                "id": document_id,
+                "reference": invoice.get("reference"),
+                "contact": document_contact_title(invoice),
+                "date": invoice.get("date"),
+                "state_before": invoice.get("state"),
+                "state_after_expected": "paid",
+                "total_price_incl_tax": expected_invoice["total_price_incl_tax"],
+                "open_amount": expected_invoice["open_amount"],
+                "lines_unchanged": True,
+            },
+            "mutations": [item["preview"] for item in items],
+            "mutation_count": len(items),
+            "total": f"{total:.2f}",
+        },
+        fingerprint=duplicate_fingerprint(
+            "settle_purchase_invoice_from_bank_mutations", payload
+        ),
+    )
+
+
+def _group_payment_verified(
+    mutation: dict[str, Any],
+    *,
+    document_id: str,
+    price: str,
+) -> bool:
+    expected_payment = f"{abs(money_decimal(price)):.2f}"
+    matches = [
+        payment
+        for payment in (mutation.get("payments") or [])
+        if str(payment.get("invoice_id") or "") == document_id
+        and str(payment.get("invoice_type") or "") == "Document"
+        and f"{money_decimal(payment.get('price')):.2f}" == expected_payment
+    ]
+    return (
+        mutation.get("state") == "processed"
+        and money_decimal(mutation.get("amount_open")) == Decimal("0.00")
+        and len(matches) == 1
+    )
+
+
+def _execute_group_settlement(client, payload: dict[str, Any]) -> dict[str, Any]:
+    document_id = payload["document_id"]
+    mutation_ids = [item["financial_mutation_id"] for item in payload["items"]]
+    task = MoneybirdTaskContext(client)
+    invoice = task.documents(
+        "purchase_invoice", [document_id], refresh=True
+    )[document_id]
+    mutations = task.financial_mutations(mutation_ids, refresh=True)
+    if _purchase_invoice_settlement_snapshot(invoice) != payload["expected_invoice"]:
+        raise MoneybirdError(
+            "The purchase invoice changed after the grouped settlement preview. "
+            "Prepare it again."
+        )
+    for item in payload["items"]:
+        mutation = mutations[item["financial_mutation_id"]]
+        version = str(mutation.get("version") or mutation.get("updated_at") or "")
+        if (
+            version != item["expected_version"]
+            or _mutation_link_state(mutation) != item["expected_state"]
+        ):
+            raise MoneybirdError(
+                f"Financial mutation {item['financial_mutation_id']} changed after "
+                "the grouped settlement preview. Prepare it again."
+            )
+
+    completed: list[str] = []
+    failures: list[dict[str, Any]] = []
+    mark_write_dispatch_started()
+    for item in payload["items"]:
+        mutation_id = item["financial_mutation_id"]
+        try:
+            client.link_financial_mutation_booking(
+                mutation_id,
+                {
+                    "booking_type": "Document",
+                    "booking_id": document_id,
+                    "price": item["price"],
+                },
+            )
+            completed.append(mutation_id)
+        except Exception as exc:  # noqa: BLE001 - preserve a partial batch outcome
+            failures.append(
+                {
+                    "step": "link_bank_mutation",
+                    "financial_mutation_id": mutation_id,
+                    "error": str(exc),
+                }
+            )
+            break
+
+    linked_mutations = task.financial_mutations(mutation_ids, refresh=True)
+    mutation_verification = {
+        item["financial_mutation_id"]: _group_payment_verified(
+                linked_mutations[item["financial_mutation_id"]],
+                document_id=document_id,
+                price=item["price"],
+            )
+        for item in payload["items"]
+    }
+    if not failures and not all(mutation_verification.values()):
+        failures.append({"step": "verify_bank_mutations", "error": "Not all links persisted."})
+
+    if not failures and len(completed) == len(payload["items"]):
+        try:
+            invoice_after_links = client.get_document("purchase_invoice", document_id)
+            if invoice_after_links.get("state") != "paid":
+                client.update_document(
+                    "purchase_invoice",
+                    document_id,
+                    {
+                        "prices_are_incl_tax": payload["expected_invoice"][
+                            "prices_are_incl_tax"
+                        ],
+                        "details_attributes": details_attributes_payload(
+                            _processing_details(payload["expected_invoice"]["lines"])
+                        ),
+                    },
+                )
+        except Exception as exc:  # noqa: BLE001 - links may already be durable
+            failures.append(
+                {
+                    "step": "process_purchase_invoice",
+                    "document_id": document_id,
+                    "error": str(exc),
+                }
+            )
+
+    mark_write_verifying()
+    final_invoice = task.documents(
+        "purchase_invoice", [document_id], refresh=True
+    )[document_id]
+
+    expected_invoice = payload["expected_invoice"]
+    invoice_verification = {
+        "state_paid": final_invoice.get("state") == "paid",
+        "paid_at_visible": bool(final_invoice.get("paid_at")),
+        "open_amount_zero": money_decimal(_open_amount(final_invoice))
+        == Decimal("0.00"),
+        "total_unchanged": (
+            f"{money_decimal(final_invoice.get('total_price_incl_tax')):.2f}"
+            == expected_invoice["total_price_incl_tax"]
+        ),
+        "lines_unchanged": _purchase_invoice_lines(final_invoice)
+        == expected_invoice["lines"],
+    }
+    fully_verified = (
+        not failures
+        and len(completed) == len(payload["items"])
+        and all(mutation_verification.values())
+        and all(invoice_verification.values())
+    )
+    return {
+        "_status": "completed" if fully_verified else "completed_with_errors",
+        "_audit_result": "success" if fully_verified else "partial_failure",
+        "_audit": {
+            "document_id": document_id,
+            "completed_link_count": len(completed),
+            "failure_count": len(failures),
+            "fully_verified": fully_verified,
+        },
+        "fully_verified": fully_verified,
+        "completed": completed,
+        "failures": failures,
+        "verification": {
+            "purchase_invoice": {
+                "id": document_id,
+                "reference": final_invoice.get("reference"),
+                "state": final_invoice.get("state"),
+                "paid_at": final_invoice.get("paid_at"),
+                **invoice_verification,
+            },
+            "mutations": mutation_verification,
+        },
+    }
+
+
+def settle_purchase_invoice_from_bank_mutations_from_approval(
+    approval_id: ApprovalId,
+) -> dict[str, Any]:
+    """Execute one explicitly approved grouped purchase-invoice settlement."""
+
+    client = ctx.get_client()
+    return run_approved_write(
+        client,
+        approval_id,
+        "settle_purchase_invoice_from_bank_mutations",
+        _execute_group_settlement,
     )
 
 

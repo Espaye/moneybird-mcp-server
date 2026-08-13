@@ -348,6 +348,14 @@ Een veelgestelde vraag. Een bankmutatie is "verwerkt" als hij gekoppeld is aan e
 > Let op de uitkomst `ambiguous`: die betekent dat meerdere facturen even goed passen —
 > typisch een vaste maandfactuur van hetzelfde bedrag zonder factuurnummer in de
 > omschrijving. Dat is niet op te lossen door de eerste te kiezen; vraag het de gebruiker.
+>
+> Geeft de tool een sterke `group_match`, dan tellen twee of meer uitgaande mutaties van
+> dezelfde tegenpartij uniek en exact op tot het volledige open bedrag van één
+> inkoopfactuur. Presenteer die complete groep meteen als één voorstel. Gebruik na akkoord
+> `prepare_settle_purchase_invoice_from_bank_mutations`: één approval preflight alle
+> mutaties en de factuur, koppelt de groep, verwerkt een nog `new` staande factuur zonder
+> boekingsregels of btw te veranderen, en verifieert de eindstatus `paid`. Bij een
+> alternatieve subset of concurrerende factuur blijft de uitkomst `ambiguous`.
 
 Voor de diagnose van één blijvend onverwerkte mutatie werk je zo:
 

@@ -5,6 +5,16 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+### Added
+
+- **One-approval grouped purchase-invoice settlements.** Exact, unique groups from
+  `suggest_bank_mutation_matches` can now be linked and the invoice processed through
+  `prepare_settle_purchase_invoice_from_bank_mutations`; stale or ambiguous groups fail closed.
+
+### Fixed
+
+- Outgoing invoice/document links now verify Moneybird's positive payment magnitude correctly.
+
 ## 0.7.0 — 2026-08-12
 
 ### Added

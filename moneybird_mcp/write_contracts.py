@@ -158,6 +158,13 @@ WRITE_SPECS: dict[str, WriteSpec] = {
         "invoice occurrence plus send payload",
         "inspect send events/state without automatically resending",
     ),
+    "settle_purchase_invoice_from_bank_mutations": _spec(
+        "invoice version/state/total/lines/payments and every mutation version/booking state",
+        "independent batch GET proves every mutation processed with its exact payment, "
+        "the invoice paid, and total/booking lines unchanged",
+        "invoice occurrence plus the ordered exact mutation settlement group",
+        "inspect each mutation and the invoice; retain explicit partial child outcomes",
+    ),
     "set_contacts_delivery_method_email": _spec(
         "complete-batch contact version/delivery snapshots",
         "independent GET proves Email for every selected contact",

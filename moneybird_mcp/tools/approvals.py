@@ -14,6 +14,7 @@ from ._registry import mcp
 from .bank import (
     link_bank_mutation_booking_from_approval,
     reclassify_bank_mutation_bookings_from_approval,
+    settle_purchase_invoice_from_bank_mutations_from_approval,
     unlink_bank_mutation_booking_from_approval,
 )
 from .contacts import (
@@ -73,6 +74,9 @@ APPROVAL_EXECUTORS: dict[str, ApprovalExecutor] = {
     "register_payment": register_payment_from_approval,
     "resume_sales_invoice_workflow": resume_sales_invoice_workflow_from_approval,
     "send_sales_invoice": send_sales_invoice_from_approval,
+    "settle_purchase_invoice_from_bank_mutations": (
+        settle_purchase_invoice_from_bank_mutations_from_approval
+    ),
     "set_contacts_delivery_method_email": (
         set_contacts_delivery_method_email_from_approval
     ),
