@@ -13,6 +13,13 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Fixed
 
+- **`read_document_attachment` could hang an MCP session forever (Windows).** The PDF parser
+  ran in a `multiprocessing` spawn worker, which re-runs the parent's `__main__` module inside
+  the child and ships the payload over a pipe whose read end the parent keeps open. A child
+  that stalled while bootstrapping blocked the server thread in `Process.start()` with no
+  deadline — the 10-second limit only started once `start()` returned — so the tool call never
+  returned and the client waited indefinitely. The parser now runs as a plain subprocess whose
+  entire exchange is bounded by one timeout.
 - Outgoing invoice/document links now verify Moneybird's positive payment magnitude correctly.
 
 ## 0.7.0 — 2026-08-12

@@ -36,8 +36,8 @@ The implementation then:
 - enforces a 20 MiB limit using both declared size and streamed bytes;
 - validates the advertised content type and PDF magic bytes;
 - parses at most 100 pages;
-- parses in a disposable spawned worker process with a 10-second wall-clock
-  timeout and 256 MiB process-memory limit;
+- parses in a disposable worker subprocess (`moneybird_mcp._pdf_worker`) with a
+  10-second wall-clock timeout and 256 MiB process-memory limit;
 - returns at most 40,000 text characters;
 - keeps the downloaded bytes and extracted text in memory and does not retain an
   attachment file.
@@ -53,9 +53,14 @@ timeout, and memory containment, but request-context operation has no shared
 capacity, abuse, or retention controls for this surface.
 
 For local or `network_single_user` use, parsing happens outside the server process.
-The parent terminates a worker that exceeds its deadline; Unix uses an address-space
-limit and Windows uses a process-memory-limited Job Object. Parser failures fail
-closed without returning partial text. Continue to treat untrusted PDFs as an input
+The worker is started with `subprocess`, not `multiprocessing`: the spawn transport
+re-runs the server's `__main__` inside the child and hands the payload over a pipe
+whose read end the parent retains, so a child that stalls while bootstrapping wedges
+the server thread before any deadline applies. The parent now writes the options and
+bytes, reads the JSON result, and kills a worker that exceeds its deadline — all
+under one timeout that also covers process start. Unix uses an address-space limit
+and Windows uses a process-memory-limited Job Object. Parser failures fail closed
+without returning partial text. Continue to treat untrusted PDFs as an input
 risk and keep `pypdf` patched.
 
 Older versions wrote attachments under the data directory. The current tool does
