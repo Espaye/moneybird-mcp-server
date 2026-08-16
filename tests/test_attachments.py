@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import email.message
 import io
+import os
 import socket
+import subprocess
 import unittest
 import urllib.error
 import urllib.request
 from unittest import mock
 
+import moneybird_mcp.attachments
 from moneybird_mcp.attachments import (
     extract_pdf_text,
     looks_like_pdf,
@@ -119,31 +122,69 @@ class ExtractPdfTextTests(unittest.TestCase):
         self.assertEqual(result["isolation"], "worker_process")
         self.assertIn("time limit", result["note"])
 
-    def test_parser_worker_failure_is_closed_and_joined(self) -> None:
-        parent_connection = mock.Mock()
-        parent_connection.poll.return_value = True
-        parent_connection.recv.side_effect = EOFError
-        child_connection = mock.Mock()
+    def test_parser_worker_failure_is_reported_without_partial_text(self) -> None:
         process = mock.Mock()
-        process.exitcode = 17
-        process.is_alive.return_value = False
-        context = mock.Mock()
-        context.Pipe.return_value = (parent_connection, child_connection)
-        context.Process.return_value = process
+        process.returncode = 17
+        process.communicate.return_value = (b"", b"")
 
         with mock.patch(
-            "moneybird_mcp.attachments.multiprocessing.get_context",
-            return_value=context,
+            "moneybird_mcp.attachments.subprocess.Popen",
+            return_value=process,
         ):
             result = extract_pdf_text(_minimal_pdf("worker failure"))
 
         self.assertFalse(result["available"])
         self.assertEqual(result["isolation"], "worker_process")
         self.assertIn("failed safely", result["note"])
-        process.start.assert_called_once()
-        parent_connection.close.assert_called_once()
-        child_connection.close.assert_called_once()
-        process.join.assert_called_once_with(2)
+        self.assertNotIn("text", result)
+
+    def test_unstartable_worker_fails_closed(self) -> None:
+        with mock.patch(
+            "moneybird_mcp.attachments.subprocess.Popen",
+            side_effect=OSError("no interpreter"),
+        ):
+            result = extract_pdf_text(_minimal_pdf("no interpreter"))
+
+        self.assertFalse(result["available"])
+        self.assertIn("could not be started", result["note"])
+
+    def test_a_worker_that_never_responds_cannot_block_the_server(self) -> None:
+        """Regression: a stalled worker used to wedge the caller forever.
+
+        The multiprocessing spawn transport handed the payload over a pipe whose
+        read end the parent kept open, so a child that stalled while
+        bootstrapping blocked Process.start() with no deadline at all.
+        """
+        process = mock.Mock()
+        process.returncode = None
+        process.communicate.side_effect = [
+            subprocess.TimeoutExpired(cmd="worker", timeout=0.01),
+            (b"", b""),
+        ]
+
+        with mock.patch(
+            "moneybird_mcp.attachments.subprocess.Popen",
+            return_value=process,
+        ):
+            result = extract_pdf_text(
+                _minimal_pdf("stalled"),
+                timeout_seconds=0.01,
+            )
+
+        self.assertFalse(result["available"])
+        self.assertIn("time limit", result["note"])
+        process.kill.assert_called_once_with()
+
+    def test_worker_environment_makes_the_package_importable(self) -> None:
+        package_root = os.path.dirname(
+            os.path.dirname(os.path.abspath(moneybird_mcp.attachments.__file__))
+        )
+        self.assertIn(
+            package_root,
+            moneybird_mcp.attachments._worker_environment()["PYTHONPATH"].split(
+                os.pathsep
+            ),
+        )
 
     def test_safe_attachment_filename(self) -> None:
         self.assertEqual(

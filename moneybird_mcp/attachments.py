@@ -9,12 +9,15 @@ is deliberately out of scope (see docs/reading_pdf_attachments.md).
 from __future__ import annotations
 
 import io
-import multiprocessing
+import json
 import os
 import re
+import subprocess
+import sys
 from typing import Any
 
 PDF_MAGIC = b"%PDF"
+_WORKER_KILL_GRACE_SECONDS = 5.0
 DEFAULT_MAX_TEXT_CHARS = 40_000
 DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 DEFAULT_MAX_PDF_PAGES = 100
@@ -224,20 +227,22 @@ def _apply_worker_memory_limit(max_memory_bytes: int) -> None:
     _WINDOWS_JOB_HANDLE = int(job)
 
 
-def _pdf_worker(
-    connection: Any,
-    data: bytes,
-    options: dict[str, Any],
-    max_memory_bytes: int,
-) -> None:
-    try:
-        _apply_worker_memory_limit(max_memory_bytes)
-        result = _extract_pdf_text_in_process(data, **options)
-        connection.send(("result", result))
-    except BaseException as exc:
-        connection.send(("error", f"{type(exc).__name__}: {exc}"))
-    finally:
-        connection.close()
+def _worker_command() -> list[str]:
+    if not sys.executable:
+        raise OSError("No Python interpreter is available to isolate PDF parsing.")
+    return [sys.executable, "-m", "moneybird_mcp._pdf_worker"]
+
+
+def _worker_environment() -> dict[str, str]:
+    """Guarantee the worker can import this package, whatever the server's cwd."""
+
+    package_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    environment = os.environ.copy()
+    existing = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        f"{package_root}{os.pathsep}{existing}" if existing else package_root
+    )
+    return environment
 
 
 def extract_pdf_text(
@@ -293,61 +298,77 @@ def extract_pdf_text(
             "note": "The attachment is not a PDF; no text was extracted.",
         }
 
-    context = multiprocessing.get_context("spawn")
-    parent_connection, child_connection = context.Pipe(duplex=False)
-    process = context.Process(
-        target=_pdf_worker,
-        args=(
-            child_connection,
-            data,
-            {
-                "max_chars": max_chars,
-                "max_bytes": max_bytes,
-                "max_pages": max_pages,
-                "content_type": content_type,
-            },
-            max_memory_bytes,
-        ),
-        name="moneybird-pdf-parser",
-    )
-    process.start()
-    child_connection.close()
+    # The payload is one JSON options line followed by the raw bytes. Sending it
+    # through communicate() keeps the whole exchange — process start, write,
+    # read, and exit — inside a single deadline. An unresponsive worker can
+    # never block the server thread indefinitely.
+    payload = json.dumps(
+        {
+            "max_chars": max_chars,
+            "max_bytes": max_bytes,
+            "max_pages": max_pages,
+            "content_type": content_type,
+            "max_memory_bytes": max_memory_bytes,
+        }
+    ).encode("utf-8") + b"\n" + data
+
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        if not parent_connection.poll(timeout_seconds):
-            process.terminate()
-            process.join(2)
-            if process.is_alive():
-                process.kill()
-                process.join(2)
-            return {
-                "available": False,
-                "untrusted_content": True,
-                "isolation": "worker_process",
-                "note": (
-                    "The PDF parser exceeded its time limit and was terminated."
-                ),
-            }
-        status, payload = parent_connection.recv()
-    except (EOFError, OSError):
-        status, payload = (
-            "error",
-            f"worker exited with code {process.exitcode}",
+        process = subprocess.Popen(
+            _worker_command(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=_worker_environment(),
+            creationflags=creation_flags,
         )
-    finally:
-        parent_connection.close()
-        process.join(2)
-        if process.is_alive():
-            process.terminate()
-            process.join(2)
-    if status != "result":
+    except OSError as exc:
         return {
             "available": False,
             "untrusted_content": True,
             "isolation": "worker_process",
-            "note": f"The isolated PDF parser failed safely ({payload}).",
+            "note": f"The isolated PDF parser could not be started ({exc}).",
         }
+
+    try:
+        stdout, _ = process.communicate(payload, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            process.communicate(timeout=_WORKER_KILL_GRACE_SECONDS)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+        return {
+            "available": False,
+            "untrusted_content": True,
+            "isolation": "worker_process",
+            "note": "The PDF parser exceeded its time limit and was terminated.",
+        }
+    except (OSError, ValueError) as exc:
+        process.kill()
+        return {
+            "available": False,
+            "untrusted_content": True,
+            "isolation": "worker_process",
+            "note": f"The isolated PDF parser failed safely ({exc}).",
+        }
+
+    try:
+        if process.returncode != 0:
+            raise ValueError(f"worker exited with code {process.returncode}")
+        result = json.loads(stdout.decode("utf-8"))
+        if not isinstance(result, dict):
+            raise ValueError("worker returned a non-object result")
+    except (UnicodeDecodeError, ValueError) as exc:
+        return {
+            "available": False,
+            "untrusted_content": True,
+            "isolation": "worker_process",
+            "note": f"The isolated PDF parser failed safely ({exc}).",
+        }
+
     return {
-        **payload,
+        **result,
         "isolation": "worker_process",
         "timeout_seconds": timeout_seconds,
         "worker_memory_limit_bytes": max_memory_bytes,
