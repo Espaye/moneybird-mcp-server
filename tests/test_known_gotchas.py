@@ -310,3 +310,56 @@ class WidePeriodChunkingTests(unittest.TestCase):
         self.assertIsNone(
             self.client._period_month_chunks("state:unprocessed", self.too_many)
         )
+
+
+class ChunkedPeriodBoundaryTests(unittest.TestCase):
+    """Splitting a period must not widen it.
+
+    A partial range covers three months but not all of the first or last one.
+    Retrying on whole months would return records outside the range the caller
+    asked for, which reads as data rather than as an error.
+    """
+
+    def setUp(self) -> None:
+        self.client = client_module.MoneybirdClient.__new__(
+            client_module.MoneybirdClient
+        )
+        self.too_many = client_module.MoneybirdHTTPError(
+            "Moneybird reported: Too many financial mutations to return",
+            status_code=400,
+        )
+
+    def test_partial_months_keep_the_requested_day_endpoints(self) -> None:
+        self.assertEqual(
+            self.client._period_month_chunks(
+                "period:20260115..20260310", self.too_many
+            ),
+            [
+                "period:20260115..20260131",
+                "period:20260201..20260228",
+                "period:20260301..20260310",
+            ],
+        )
+
+    def test_whole_month_ranges_are_unchanged(self) -> None:
+        self.assertEqual(
+            self.client._period_month_chunks(
+                "period:20260101..20260228", self.too_many
+            ),
+            ["period:20260101..20260131", "period:20260201..20260228"],
+        )
+
+    def test_a_later_page_explains_itself_instead_of_repeating_moneybird(
+        self,
+    ) -> None:
+        client = client_module.MoneybirdClient.__new__(client_module.MoneybirdClient)
+        client.administration_id = "1"
+
+        def _fail(*args, **kwargs):
+            raise self.too_many
+
+        client._request = _fail
+        with self.assertRaises(client_module.MoneybirdHTTPError) as caught:
+            client.list_financial_mutations(period="this_year", page=2)
+        self.assertIn("one month at a time", str(caught.exception))
+        self.assertEqual(caught.exception.status_code, 400)

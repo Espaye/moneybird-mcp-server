@@ -395,3 +395,50 @@ class HiddenUnprocessedMutationTests(unittest.TestCase):
     def test_the_advisory_lookup_never_breaks_the_scan(self) -> None:
         client = self._Client([], fail=True)
         self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", []), [])
+
+
+class HiddenUnprocessedPaginationTests(unittest.TestCase):
+    """A settled mutation past the caller's page is not a hidden one.
+
+    The match scan reads a limited page, while the hidden-mutation check reads
+    up to 100. Deciding membership by absence from that page would label every
+    ordinary settled mutation beyond it as a failed collection needing no
+    booking, which is worse than reporting nothing.
+    """
+
+    class _Client:
+        def __init__(self, everything):
+            self._everything = everything
+
+        def list_financial_mutations(self, **kwargs):
+            return self._everything
+
+    @staticmethod
+    def _mutation(identifier, settlement_state):
+        return {
+            "id": identifier,
+            "state": "unprocessed",
+            "settlement_state": settlement_state,
+            "date": "2026-08-04",
+            "amount": "-1.00",
+        }
+
+    def test_settled_rows_beyond_the_scanned_page_are_not_called_hidden(self) -> None:
+        everything = [self._mutation(str(n), "settled") for n in range(15)]
+        seen = everything[:10]
+        client = self._Client(everything)
+        self.assertEqual(
+            _unprocessed_hidden_by_state_filter(client, "", seen),
+            [],
+        )
+
+    def test_a_refused_row_beyond_the_page_is_still_reported(self) -> None:
+        everything = [self._mutation(str(n), "settled") for n in range(12)]
+        everything.append(self._mutation("refused-1", "refused"))
+        client = self._Client(everything)
+        hidden = _unprocessed_hidden_by_state_filter(client, "", everything[:10])
+        self.assertEqual([item["id"] for item in hidden], ["refused-1"])
+
+    def test_a_blank_settlement_state_is_unknown_not_failed(self) -> None:
+        client = self._Client([self._mutation("1", "")])
+        self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", []), [])

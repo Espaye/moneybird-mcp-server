@@ -284,7 +284,9 @@ def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[st
     with _approvals_connection() as connection:
         _purge_expired(connection)
         # Read collisions before inserting, so this approval never matches itself.
-        collisions = _pending_collisions(connection, _approval_target_ids(payload))
+        collisions = _pending_collisions(
+            connection, _approval_target_ids(payload, action), action
+        )
         try:
             connection.execute(
                 "INSERT INTO approvals ("
@@ -336,12 +338,23 @@ def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[st
 # only for invoice/document bookings: for a LedgerAccount booking it names the
 # category, which two unrelated mutations legitimately share.
 _TARGET_ID_KEYS = frozenset(
-    {"document_id", "financial_mutation_id", "contact_id", "sales_invoice_id"}
+    {"document_id", "financial_mutation_id", "sales_invoice_id"}
 )
 
 
-def _approval_target_ids(payload: Any) -> set[str]:
-    """Collect the ids of records a prepared payload would change."""
+def _approval_target_ids(payload: Any, action: str = "") -> set[str]:
+    """Collect the ids of records a prepared payload would change.
+
+    Only records the action *writes* count. A ``contact_id`` is usually a
+    foreign key — creating an invoice names a contact without pinning or
+    changing it — so it counts only for the actions whose subject is the
+    contact itself. Treating every occurrence as a target would report a
+    collision between a contact edit and any invoice that merely refers to that
+    contact, and tell the user to discard two approvals that can both apply.
+    """
+    keys = set(_TARGET_ID_KEYS)
+    if action.endswith("_contact") or "contacts" in action:
+        keys.add("contact_id")
     found: set[str] = set()
 
     def walk(node: Any) -> None:
@@ -352,7 +365,7 @@ def _approval_target_ids(payload: Any) -> set[str]:
         if not isinstance(node, dict):
             return
         for key, value in node.items():
-            if key in _TARGET_ID_KEYS and isinstance(value, (str, int)):
+            if key in keys and isinstance(value, (str, int)):
                 text = str(value).strip()
                 if text:
                     found.add(text)
@@ -370,6 +383,7 @@ def _approval_target_ids(payload: Any) -> set[str]:
 def _pending_collisions(
     connection: sqlite3.Connection,
     targets: set[str],
+    action: str = "",
 ) -> list[dict[str, Any]]:
     """Return pending approvals that would touch any of ``targets``."""
     if not targets:
@@ -385,7 +399,7 @@ def _pending_collisions(
             other = json.loads(payload_json)
         except (TypeError, ValueError):
             continue
-        shared = sorted(targets & _approval_target_ids(other))
+        shared = sorted(targets & _approval_target_ids(other, pending_action))
         if shared:
             collisions.append(
                 {

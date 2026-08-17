@@ -236,6 +236,13 @@ def _unprocessed_hidden_by_state_filter(
     that filter calls the feed empty. Re-reading the period without the filter
     is one extra request and is the only way to see them, so the backlog is
     reported rather than silently carried.
+
+    Membership is decided on ``settlement_state``, never on absence from
+    ``seen``: ``seen`` holds only the caller's page of matches, so a settled
+    mutation sitting past that page would otherwise be reported as a failed
+    collection that needs no booking — a far worse error than staying quiet.
+    ``seen`` is used only to subtract rows already shown, which can remove a
+    row from this list but never add one.
     """
     seen_ids = {str(item.get("id")) for item in seen}
     try:
@@ -253,6 +260,9 @@ def _unprocessed_hidden_by_state_filter(
         }
         for item in everything
         if str(item.get("state") or "") == "unprocessed"
+        # An explicit non-settled state is the evidence; a blank one is unknown
+        # rather than failed, so it is not claimed to be hidden.
+        and str(item.get("settlement_state") or "") not in ("", "settled")
         and str(item.get("id")) not in seen_ids
     ]
 

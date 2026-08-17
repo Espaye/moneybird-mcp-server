@@ -1569,8 +1569,24 @@ class MoneybirdClient:
             # the records the caller asked for instead of an error they have to
             # decompose by hand.
             chunks = self._period_month_chunks(filter_string, exc)
-            if chunks is None or max(1, page) != 1:
+            if chunks is None:
                 raise
+            if max(1, page) != 1:
+                # Page numbers cannot be carried across a split: each month is
+                # paginated by Moneybird independently, so page 2 of the whole
+                # period has no meaning here. Walking every chunk to discard the
+                # first page's worth would multiply requests against a rate
+                # limit to reach records a narrower period returns directly.
+                raise MoneybirdHTTPError(
+                    "Moneybird refuses this period because it holds too many "
+                    "financial mutations, and page "
+                    f"{page} cannot be served by splitting it into months: each "
+                    "month paginates separately. Ask for one month at a time "
+                    "(period:'20260701..20260731'), or run sync_search_index and "
+                    "search the local index for a period this wide.",
+                    status_code=exc.status_code,
+                    reported=exc.reported,
+                ) from exc
             collected: list[dict[str, Any]] = []
             wanted = max(1, min(limit, 100))
             for chunk in chunks:
@@ -1608,10 +1624,22 @@ class MoneybirdClient:
         if not months or len(months) < 2:
             return None
         others = [part for part in parts if not part.startswith("period:")]
-        return [
-            ",".join([*others, f"period:{normalize_list_period(month)}"])
-            for month in months
-        ]
+        # A partial range ('20260115..20260310') covers three months but not all
+        # of the first or last one. Splitting on whole months would widen the
+        # request and return records the caller never asked for, so the outer
+        # chunks keep the original day endpoints.
+        requested = normalize_list_period(period)
+        first_day, _, last_day = requested.partition("..")
+        chunks: list[str] = []
+        for month in months:
+            start, _, end = normalize_list_period(month).partition("..")
+            if last_day:
+                start = max(start, first_day)
+                end = min(end, last_day)
+            if start > end:
+                continue
+            chunks.append(",".join([*others, f"period:{start}..{end}"]))
+        return chunks or None
 
     def get_financial_mutation(self, mutation_id: str) -> dict[str, Any]:
         mutation_id = validate_moneybird_id(

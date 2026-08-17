@@ -893,3 +893,44 @@ class PendingApprovalCollisionTests(unittest.TestCase):
             "Reclassify",
         )
         self.assertNotIn("collides_with", first)
+
+
+class ApprovalTargetScopeTests(unittest.TestCase):
+    """A referenced contact is not a changed contact."""
+
+    def setUp(self) -> None:
+        set_active_administration_id("469360474352256236")
+        safety.clear_pending_approvals()
+        self.addCleanup(safety.clear_pending_approvals)
+
+    def test_an_invoice_naming_a_contact_does_not_collide_with_a_contact_edit(
+        self,
+    ) -> None:
+        safety.make_approval(
+            "update_contact",
+            {"contact_id": "470987057279271952", "fields": {"email": "a@b.c"}},
+            "Update contact",
+        )
+        second = safety.make_approval(
+            "create_sales_invoice_draft",
+            {"contact_id": "470987057279271952", "details": []},
+            "Create draft",
+        )
+        self.assertNotIn("collides_with", second)
+
+    def test_two_edits_of_the_same_contact_still_collide(self) -> None:
+        safety.make_approval(
+            "update_contact",
+            {"contact_id": "470987057279271952"},
+            "Update contact",
+        )
+        second = safety.make_approval(
+            "archive_contact",
+            {"contact_id": "470987057279271952"},
+            "Archive contact",
+        )
+        self.assertIn("collides_with", second)
+        self.assertEqual(
+            second["collides_with"][0]["shared_targets"],
+            ["470987057279271952"],
+        )
