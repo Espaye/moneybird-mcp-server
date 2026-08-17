@@ -34,8 +34,9 @@ Period = Annotated[
     Field(
         description=(
             "Period filter: 'this_month', 'prev_month', 'this_year', 'prev_year', "
-            "a month like '202601', or a range like '20260101..20260131'. "
-            "Empty string = no period filter."
+            "or a day range like '20260101..20260131'. A bare month ('202601') "
+            "is widened to that month's day range, because the collection "
+            "endpoints reject it. Empty string = no period filter."
         )
     ),
 ]

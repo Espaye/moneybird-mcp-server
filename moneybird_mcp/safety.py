@@ -283,6 +283,8 @@ def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[st
         )
     with _approvals_connection() as connection:
         _purge_expired(connection)
+        # Read collisions before inserting, so this approval never matches itself.
+        collisions = _pending_collisions(connection, _approval_target_ids(payload))
         try:
             connection.execute(
                 "INSERT INTO approvals ("
@@ -307,7 +309,7 @@ def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[st
                 "The approval could not be persisted because its identifier or "
                 "unresolved write fingerprint conflicted with durable state."
             ) from exc
-    return {
+    prepared = {
         "approval_id": approval_id,
         "action": action,
         "summary": summary,
@@ -319,6 +321,81 @@ def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[st
             "*_from_approval tool)."
         ),
     }
+    if collisions:
+        prepared["collides_with"] = collisions
+        prepared["collision_warning"] = (
+            "Another pending approval targets the same record. Each preview pins the "
+            "record's current version, so executing either one makes the other stale "
+            "and it will abort rather than apply. Execute them one at a time, "
+            "re-preparing the next after each, and re-check its preview."
+        )
+    return prepared
+
+
+# Payload keys naming the record an action changes. A booking_id is included
+# only for invoice/document bookings: for a LedgerAccount booking it names the
+# category, which two unrelated mutations legitimately share.
+_TARGET_ID_KEYS = frozenset(
+    {"document_id", "financial_mutation_id", "contact_id", "sales_invoice_id"}
+)
+
+
+def _approval_target_ids(payload: Any) -> set[str]:
+    """Collect the ids of records a prepared payload would change."""
+    found: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key, value in node.items():
+            if key in _TARGET_ID_KEYS and isinstance(value, (str, int)):
+                text = str(value).strip()
+                if text:
+                    found.add(text)
+            elif isinstance(value, (dict, list)):
+                walk(value)
+        booking_type = str(node.get("booking_type") or "")
+        booking_id = str(node.get("booking_id") or "").strip()
+        if booking_id and booking_type in {"Document", "SalesInvoice"}:
+            found.add(booking_id)
+
+    walk(payload)
+    return found
+
+
+def _pending_collisions(
+    connection: sqlite3.Connection,
+    targets: set[str],
+) -> list[dict[str, Any]]:
+    """Return pending approvals that would touch any of ``targets``."""
+    if not targets:
+        return []
+    rows = connection.execute(
+        "SELECT approval_id, action, summary, payload FROM approvals "
+        "WHERE state = ? ORDER BY created_at",
+        (PENDING_APPROVAL_STATE,),
+    ).fetchall()
+    collisions: list[dict[str, Any]] = []
+    for pending_id, pending_action, pending_summary, payload_json in rows:
+        try:
+            other = json.loads(payload_json)
+        except (TypeError, ValueError):
+            continue
+        shared = sorted(targets & _approval_target_ids(other))
+        if shared:
+            collisions.append(
+                {
+                    "approval_id": pending_id,
+                    "action": pending_action,
+                    "summary": pending_summary,
+                    "shared_targets": shared,
+                }
+            )
+    return collisions
 
 
 def pop_approval(

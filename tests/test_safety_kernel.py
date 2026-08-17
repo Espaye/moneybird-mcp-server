@@ -808,3 +808,88 @@ class SafetyKernelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PendingApprovalCollisionTests(unittest.TestCase):
+    """Two pending approvals on one record cannot both apply.
+
+    Every preview pins the record's current version, so executing either one
+    makes the other stale and it aborts. That is correct but arrives as a
+    surprise at execution time, after the user has already approved both, so
+    the overlap is reported while there is still time to sequence them.
+    """
+
+    def setUp(self) -> None:
+        set_active_administration_id("469360474352256236")
+        safety.clear_pending_approvals()
+        self.addCleanup(safety.clear_pending_approvals)
+
+    def test_reclassify_and_payment_link_on_one_document_collide(self) -> None:
+        safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "495626291993642938"}]},
+            "Reclassify 1 document line(s)",
+        )
+        second = safety.make_approval(
+            "link_bank_mutation_booking",
+            {
+                "financial_mutation_id": "494564174389577429",
+                "booking": {
+                    "booking_type": "Document",
+                    "booking_id": "495626291993642938",
+                },
+            },
+            "Link mutation to document",
+        )
+        self.assertIn("collides_with", second)
+        self.assertEqual(
+            second["collides_with"][0]["shared_targets"],
+            ["495626291993642938"],
+        )
+        self.assertIn("stale", second["collision_warning"])
+
+    def test_two_mutations_sharing_a_ledger_account_do_not_collide(self) -> None:
+        safety.make_approval(
+            "link_bank_mutation_booking",
+            {
+                "financial_mutation_id": "494519090817270843",
+                "booking": {
+                    "booking_type": "LedgerAccount",
+                    "booking_id": "469401605624562861",
+                },
+            },
+            "Book bank charge",
+        )
+        second = safety.make_approval(
+            "link_bank_mutation_booking",
+            {
+                "financial_mutation_id": "494790389687912139",
+                "booking": {
+                    "booking_type": "LedgerAccount",
+                    "booking_id": "469401605624562861",
+                },
+            },
+            "Book another bank charge",
+        )
+        self.assertNotIn("collides_with", second)
+
+    def test_an_unrelated_approval_is_not_flagged(self) -> None:
+        safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "111111111111111111"}]},
+            "Reclassify",
+        )
+        second = safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "222222222222222222"}]},
+            "Reclassify",
+        )
+        self.assertNotIn("collides_with", second)
+
+    def test_the_first_approval_never_collides_with_itself(self) -> None:
+        first = safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "333333333333333333"}]},
+            "Reclassify",
+        )
+        self.assertNotIn("collides_with", first)

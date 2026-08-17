@@ -17,6 +17,8 @@ from moneybird_mcp.bank_matching import (
     open_amount,
     score_candidate,
 )
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.tools.bank import _unprocessed_hidden_by_state_filter
 
 
 def mutation(**overrides):
@@ -343,3 +345,53 @@ class MatchMutationGroupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HiddenUnprocessedMutationTests(unittest.TestCase):
+    """Moneybird's own state filter does not return every unprocessed mutation.
+
+    A direct debit that was refused keeps state 'unprocessed' forever, but
+    filtering on state:unprocessed omits it. Every scan built on that filter
+    therefore calls the feed empty while the entry is still sitting there, so
+    the difference is reported rather than silently carried.
+    """
+
+    class _Client:
+        def __init__(self, everything, fail=False):
+            self._everything = everything
+            self._fail = fail
+            self.calls = 0
+
+        def list_financial_mutations(self, **kwargs):
+            self.calls += 1
+            if self._fail:
+                raise MoneybirdError("period rejected")
+            return self._everything
+
+    def test_a_refused_mutation_missing_from_the_filter_is_surfaced(self) -> None:
+        settled = {"id": "1", "state": "unprocessed", "settlement_state": "settled"}
+        refused = {
+            "id": "2",
+            "state": "unprocessed",
+            "settlement_state": "refused",
+            "date": "2026-07-03",
+            "amount": "-22.99",
+            "contra_account_name": "Moneybird B.V.",
+        }
+        client = self._Client([settled, refused])
+        hidden = _unprocessed_hidden_by_state_filter(client, "", [settled])
+        self.assertEqual([item["id"] for item in hidden], ["2"])
+        self.assertEqual(hidden[0]["settlement_state"], "refused")
+
+    def test_a_fully_visible_feed_reports_nothing_hidden(self) -> None:
+        seen = [{"id": "1", "state": "unprocessed", "settlement_state": "settled"}]
+        client = self._Client(list(seen))
+        self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", seen), [])
+
+    def test_processed_mutations_are_never_reported_as_hidden(self) -> None:
+        client = self._Client([{"id": "9", "state": "processed"}])
+        self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", []), [])
+
+    def test_the_advisory_lookup_never_breaks_the_scan(self) -> None:
+        client = self._Client([], fail=True)
+        self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", []), [])

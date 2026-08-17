@@ -131,14 +131,25 @@ def suggest_bank_mutation_matches(
             filter="state:unprocessed",
             period=period,
         )
+    hidden = (
+        []
+        if financial_mutation_id
+        else _unprocessed_hidden_by_state_filter(client, period, mutations)
+    )
     if not mutations:
         return {
             "matches": [],
             "count": 0,
+            "hidden_unprocessed": hidden,
             "note": (
-                "No unprocessed bank mutations found for this period. "
-                "list_financial_mutations rejects a wide period; query one month "
-                "at a time (period:'JJJJMM01..JJJJMMnn')."
+                "No unprocessed bank mutations found for this period."
+                + (
+                    f" {len(hidden)} unprocessed mutation(s) are excluded by "
+                    "Moneybird's own state filter because they never settled; "
+                    "see hidden_unprocessed."
+                    if hidden
+                    else ""
+                )
             ),
         }
 
@@ -200,9 +211,50 @@ def suggest_bank_mutation_matches(
             "suggestion 'none' usually belong on a ledger account rather than an invoice."
         ),
     }
+    if hidden:
+        result["hidden_unprocessed"] = hidden
+        result["next_step"] += (
+            f" Separately, {len(hidden)} unprocessed mutation(s) are invisible to "
+            "Moneybird's state filter because they never settled (a refused or "
+            "reversed direct debit); see hidden_unprocessed. They usually need no "
+            "booking, since no money moved, but nothing will ever surface them."
+        )
     if warnings:
         result["warnings"] = warnings
     return result
+
+
+def _unprocessed_hidden_by_state_filter(
+    client,
+    period: str,
+    seen: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return unprocessed mutations that ``state:unprocessed`` does not return.
+
+    Moneybird's state filter reports only mutations that settled, so a refused
+    direct debit stays ``state: unprocessed`` forever while every scan built on
+    that filter calls the feed empty. Re-reading the period without the filter
+    is one extra request and is the only way to see them, so the backlog is
+    reported rather than silently carried.
+    """
+    seen_ids = {str(item.get("id")) for item in seen}
+    try:
+        everything = client.list_financial_mutations(limit=100, page=1, period=period)
+    except MoneybirdError:
+        # Advisory only: never fail the match scan over the extra lookup.
+        return []
+    return [
+        {
+            "id": str(item.get("id") or ""),
+            "date": str(item.get("date") or ""),
+            "amount": str(item.get("amount") or ""),
+            "contra_account_name": str(item.get("contra_account_name") or ""),
+            "settlement_state": str(item.get("settlement_state") or ""),
+        }
+        for item in everything
+        if str(item.get("state") or "") == "unprocessed"
+        and str(item.get("id")) not in seen_ids
+    ]
 
 
 def _signed_amount(mutation: dict[str, Any]) -> Decimal | None:
@@ -1061,7 +1113,10 @@ def prepare_link_bank_mutation_booking(
             "A direct ledger booking does not accept tax_rate_id and creates no VAT "
             "posting: the full amount is booked to this profit-and-loss account. If "
             "the amount includes VAT, link it to an invoice/document or use an "
-            "explicit balanced journal with separate VAT lines."
+            "explicit balanced journal with separate VAT lines. For a VAT-exempt "
+            "cost this is the correct booking, not a compromise: bank charges, "
+            "interest and other financial services carry no input VAT "
+            "(see get_bookkeeping_guide('btw'))."
         )
     return stage_write(
         "link_bank_mutation_booking",

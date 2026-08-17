@@ -19,7 +19,12 @@ os.environ.setdefault(
 from moneybird_mcp import client as client_module
 from moneybird_mcp.client import normalize_generic_get_path
 from moneybird_mcp.config import MoneybirdError
-from moneybird_mcp.formatting import document_line_quantity, report_period_months
+from moneybird_mcp.formatting import (
+    build_filter_string,
+    document_line_quantity,
+    normalize_list_period,
+    report_period_months,
+)
 from moneybird_mcp.invoicing import document_detail_amount_excl_tax
 from moneybird_mcp.tools import _context as tool_context
 from moneybird_mcp.tools import sales as sales_tools
@@ -214,3 +219,94 @@ class SupplierSalesInvoiceNoteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ListPeriodNormalizationTests(unittest.TestCase):
+    """A bare month is valid on reports but rejected by every collection endpoint.
+
+    Moneybird answers 'period:202601' on a list route with HTTP 400 ('Period is
+    invalid', or 'Period must have both a start and end date' on sales
+    invoices), while the same value is fine on a report. Callers cannot be
+    expected to track which half of the API they are on, so the bare month is
+    widened to the day range it means.
+    """
+
+    def test_bare_month_becomes_that_months_day_range(self) -> None:
+        self.assertEqual(normalize_list_period("202601"), "20260101..20260131")
+        self.assertEqual(normalize_list_period("202607"), "20260701..20260731")
+
+    def test_month_length_follows_the_calendar(self) -> None:
+        self.assertEqual(normalize_list_period("202602"), "20260201..20260228")
+        self.assertEqual(normalize_list_period("202402"), "20240201..20240229")
+
+    def test_month_ranges_widen_to_cover_whole_end_months(self) -> None:
+        self.assertEqual(normalize_list_period("202604..202606"), "20260401..20260630")
+        self.assertEqual(normalize_list_period("202601..20260215"), "20260101..20260215")
+
+    def test_symbolic_and_day_periods_are_left_for_the_server(self) -> None:
+        for period in ("", "this_month", "prev_year", "20260101..20260131"):
+            with self.subTest(period=period):
+                self.assertEqual(normalize_list_period(period), period)
+
+    def test_unparseable_periods_pass_through_rather_than_guessing(self) -> None:
+        for period in ("abc", "202613", "2026013", "20260101.."):
+            with self.subTest(period=period):
+                self.assertEqual(normalize_list_period(period), period)
+
+    def test_a_period_inside_the_raw_filter_is_normalized_too(self) -> None:
+        self.assertEqual(
+            build_filter_string(filter="state:unprocessed,period:202607"),
+            "state:unprocessed,period:20260701..20260731",
+        )
+        self.assertEqual(
+            build_filter_string(filter="state:unprocessed", period="202607"),
+            "state:unprocessed,period:20260701..20260731",
+        )
+
+
+class WidePeriodChunkingTests(unittest.TestCase):
+    """Moneybird refuses a period holding too many mutations instead of truncating."""
+
+    def setUp(self) -> None:
+        self.client = client_module.MoneybirdClient.__new__(
+            client_module.MoneybirdClient
+        )
+        self.too_many = client_module.MoneybirdHTTPError(
+            "Moneybird returned HTTP 400 for operation /:id/financial_mutations.json. "
+            "Moneybird reported: Too many financial mutations to return, please use sync API",
+            status_code=400,
+        )
+
+    def test_a_year_splits_into_one_filter_per_month(self) -> None:
+        chunks = self.client._period_month_chunks("period:this_year", self.too_many)
+        self.assertIsNotNone(chunks)
+        self.assertTrue(all(part.startswith("period:") for part in chunks))
+        self.assertIn("..", chunks[0])
+
+    def test_other_filter_terms_survive_the_split(self) -> None:
+        chunks = self.client._period_month_chunks(
+            "state:unprocessed,period:20260101..20260331", self.too_many
+        )
+        self.assertEqual(
+            chunks,
+            [
+                "state:unprocessed,period:20260101..20260131",
+                "state:unprocessed,period:20260201..20260228",
+                "state:unprocessed,period:20260301..20260331",
+            ],
+        )
+
+    def test_a_different_rejection_is_not_silently_retried(self) -> None:
+        other = client_module.MoneybirdHTTPError(
+            "Moneybird returned HTTP 400. Moneybird reported: Period is invalid",
+            status_code=400,
+        )
+        self.assertIsNone(self.client._period_month_chunks("period:this_year", other))
+
+    def test_nothing_to_split_returns_none(self) -> None:
+        self.assertIsNone(
+            self.client._period_month_chunks("period:202607", self.too_many)
+        )
+        self.assertIsNone(
+            self.client._period_month_chunks("state:unprocessed", self.too_many)
+        )

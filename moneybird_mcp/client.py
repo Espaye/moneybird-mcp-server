@@ -41,6 +41,7 @@ from .formatting import (
     build_filter_string,
     document_kind_config,
     format_reported_error,
+    normalize_list_period,
     parse_reported_error,
     report_period_months,
 )
@@ -85,6 +86,24 @@ def _reject_over_month_period(report_name: str, period: str) -> None:
             f"'{text}' spans {len(months)} months. Call it once per month "
             f"({listed}) and sum the results."
         )
+
+
+def _symbolic_period_months(period: str) -> list[str] | None:
+    """Return the ``YYYYMM`` months a year-wide symbolic period covers.
+
+    ``report_period_months`` deliberately returns None for symbolic periods
+    because the server resolves them. Splitting a rejected request needs the
+    concrete months anyway, so the two year symbols are resolved here. Months
+    after the current one are dropped for the running year: they cannot hold
+    records yet, and each would still cost a request.
+    """
+    text = str(period or "").strip().casefold()
+    now = datetime.now()
+    if text == "this_year":
+        return [f"{now.year}{month:02d}" for month in range(1, now.month + 1)]
+    if text == "prev_year":
+        return [f"{now.year - 1}{month:02d}" for month in range(1, 13)]
+    return None
 
 
 def retry_delay_seconds(
@@ -1537,11 +1556,62 @@ class MoneybirdClient:
         filter_string = build_filter_string(filter=filter, period=period)
         if filter_string:
             query["filter"] = filter_string
-        return self._request(
-            "GET",
-            f"/{self.administration_id}/financial_mutations.json",
-            query=query,
+        try:
+            return self._request(
+                "GET",
+                f"/{self.administration_id}/financial_mutations.json",
+                query=query,
+            )
+        except MoneybirdHTTPError as exc:
+            # Moneybird refuses a period holding too many mutations rather than
+            # truncating it, so a year-wide scan fails outright on any busy
+            # administration. Walking the same period a month at a time returns
+            # the records the caller asked for instead of an error they have to
+            # decompose by hand.
+            chunks = self._period_month_chunks(filter_string, exc)
+            if chunks is None or max(1, page) != 1:
+                raise
+            collected: list[dict[str, Any]] = []
+            wanted = max(1, min(limit, 100))
+            for chunk in chunks:
+                if len(collected) >= wanted:
+                    break
+                chunk_query = dict(query)
+                chunk_query["filter"] = chunk
+                collected.extend(
+                    self._request(
+                        "GET",
+                        f"/{self.administration_id}/financial_mutations.json",
+                        query=chunk_query,
+                    )
+                )
+            return collected[:wanted]
+
+    def _period_month_chunks(
+        self,
+        filter_string: str,
+        error: MoneybirdHTTPError,
+    ) -> list[str] | None:
+        """Return per-month filter strings for a period Moneybird called too wide.
+
+        Returns None when the rejection was about something else, or when the
+        period is one Moneybird resolves itself and so cannot be split here.
+        """
+        if error.status_code != 400 or "too many" not in str(error).casefold():
+            return None
+        parts = [part for part in filter_string.split(",") if part.strip()]
+        period = next(
+            (part[len("period:") :] for part in parts if part.startswith("period:")),
+            "",
         )
+        months = report_period_months(period) or _symbolic_period_months(period)
+        if not months or len(months) < 2:
+            return None
+        others = [part for part in parts if not part.startswith("period:")]
+        return [
+            ",".join([*others, f"period:{normalize_list_period(month)}"])
+            for month in months
+        ]
 
     def get_financial_mutation(self, mutation_id: str) -> dict[str, Any]:
         mutation_id = validate_moneybird_id(

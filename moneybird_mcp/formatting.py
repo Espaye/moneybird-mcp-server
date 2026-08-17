@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from calendar import monthrange
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -167,10 +168,62 @@ def document_kind_config(kind: str) -> dict[str, str]:
 
 
 
+def normalize_list_period(period: str) -> str:
+    """Expand a bare ``YYYYMM`` period into the day range list endpoints accept.
+
+    Moneybird's *report* endpoints take a bare month ('202601'), but the
+    collection endpoints do not: they answer HTTP 400 ('Period is invalid', or
+    'Period must have both a start and end date' on sales invoices). Callers
+    reasonably assume one period syntax spans the whole API, so a bare month is
+    widened here to the equivalent explicit range rather than being sent on to
+    be rejected. Symbolic periods ('this_month'), day ranges, and anything
+    unparseable are returned untouched for the server to judge.
+    """
+    text = str(period or "").strip()
+    if not text:
+        return text
+    if ".." in text:
+        start_text, end_text = (side.strip() for side in text.split("..", 1))
+        start = _widen_month_endpoint(start_text, to_end=False)
+        end = _widen_month_endpoint(end_text, to_end=True)
+        if start is None or end is None:
+            return text
+        return f"{start}..{end}"
+    widened = _widen_month_endpoint(text, to_end=False)
+    if widened is None or not _YEAR_MONTH.fullmatch(text):
+        return text
+    return f"{widened}..{_widen_month_endpoint(text, to_end=True)}"
+
+
+def _widen_month_endpoint(text: str, *, to_end: bool) -> str | None:
+    """Return one period endpoint as ``YYYYMMDD``, or None when unparseable.
+
+    A day endpoint is already precise and passes through; a bare month opens on
+    the 1st and closes on its own last day, so a month range covers exactly the
+    months asked for.
+    """
+    if _YEAR_MONTH_DAY.fullmatch(text):
+        return text
+    endpoint = _period_endpoint_month(text)
+    if not endpoint or not _YEAR_MONTH.fullmatch(text):
+        return None
+    year, month = endpoint
+    day = monthrange(year, month)[1] if to_end else 1
+    return f"{year}{month:02d}{day:02d}"
+
+
 def build_filter_string(*, filter: str = "", period: str = "") -> str:
     parts = [part.strip() for part in str(filter or "").split(",") if part.strip()]
+    # A period passed inside the raw filter string reaches Moneybird just as a
+    # bare month does, so normalize both spellings, not only the keyword.
+    parts = [
+        f"period:{normalize_list_period(part[len('period:'):])}"
+        if part.startswith("period:")
+        else part
+        for part in parts
+    ]
     if period and not any(part.startswith("period:") for part in parts):
-        parts.append(f"period:{period}")
+        parts.append(f"period:{normalize_list_period(period)}")
     return ",".join(parts)
 
 
