@@ -218,3 +218,105 @@ class GroupSettlementTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BookDocumentThroughTests(unittest.TestCase):
+    """A linked payment must not leave the document unbooked.
+
+    Linking settles the money; the document stays in state 'new' until it is
+    saved. The grouped settlement path already finishes that job, so the
+    single-mutation path does too — otherwise two tools that both "link a
+    payment to an invoice" leave different states for no reason a caller can
+    see. That asymmetry left a paid invoice sitting in 'new' in production.
+    """
+
+    class _Client:
+        def __init__(self, *, state="new", open_amount="0.00", fail=False):
+            self._state = state
+            self._open_amount = open_amount
+            self._fail = fail
+            self.update_calls: list[dict] = []
+
+        def get_document(self, kind, document_id):
+            return {
+                "id": document_id,
+                "state": self._state,
+                "total_price_incl_tax": "25.99",
+                "total_price_paid": self._paid(),
+                "payments": [{"price": self._paid()}],
+            }
+
+        def _paid(self):
+            return f"{Decimal('25.99') - Decimal(self._open_amount):.2f}"
+
+        def update_document(self, kind, document_id, body):
+            if self._fail:
+                raise MoneybirdError("Moneybird rejected the save")
+            self.update_calls.append(body)
+            self._state = "paid"
+
+    @staticmethod
+    def _payload():
+        return {
+            "book_through": {
+                "document_kind": "purchase_invoice",
+                "document_id": "doc-1",
+                "prices_are_incl_tax": False,
+                "lines": [
+                    {
+                        "id": "line-1",
+                        "description": "Kantoorbenodigdheden",
+                        "price": "21.48",
+                        "amount": "1",
+                    }
+                ],
+            }
+        }
+
+    def test_a_fully_paid_new_document_is_booked_through(self) -> None:
+        client = self._Client()
+        outcome = bank._book_document_through(
+            client, self._payload(), link_verified=True
+        )
+        self.assertTrue(outcome["attempted"])
+        self.assertEqual(outcome["state_after"], "paid")
+        self.assertTrue(outcome["total_unchanged"])
+        self.assertEqual(len(client.update_calls), 1)
+
+    def test_a_partially_paid_document_is_left_in_new(self) -> None:
+        client = self._Client(open_amount="10.00")
+        outcome = bank._book_document_through(
+            client, self._payload(), link_verified=True
+        )
+        self.assertFalse(outcome["attempted"])
+        self.assertIn("full open amount", outcome["skipped_reason"])
+        self.assertEqual(client.update_calls, [])
+
+    def test_an_unverified_link_never_touches_the_document(self) -> None:
+        client = self._Client()
+        outcome = bank._book_document_through(
+            client, self._payload(), link_verified=False
+        )
+        self.assertFalse(outcome["attempted"])
+        self.assertEqual(client.update_calls, [])
+
+    def test_an_already_booked_document_is_not_saved_again(self) -> None:
+        client = self._Client(state="paid")
+        outcome = bank._book_document_through(
+            client, self._payload(), link_verified=True
+        )
+        self.assertEqual(outcome["state_after"], "paid")
+        self.assertEqual(client.update_calls, [])
+
+    def test_a_failed_save_reports_the_gap_instead_of_losing_the_link(self) -> None:
+        client = self._Client(fail=True)
+        outcome = bank._book_document_through(
+            client, self._payload(), link_verified=True
+        )
+        self.assertIn("error", outcome)
+        self.assertEqual(outcome["state_after"], "new")
+
+    def test_nothing_to_book_returns_nothing(self) -> None:
+        self.assertIsNone(
+            bank._book_document_through(self._Client(), {}, link_verified=True)
+        )
