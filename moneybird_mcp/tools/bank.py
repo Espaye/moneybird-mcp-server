@@ -26,6 +26,8 @@ from ..formatting import (
     invoice_title,
     money_decimal,
     purchase_document_title,
+    report_period_months,
+    symbolic_period_months,
 )
 from ..invoicing import (
     details_attributes_payload,
@@ -211,6 +213,13 @@ def suggest_bank_mutation_matches(
             "suggestion 'none' usually belong on a ledger account rather than an invoice."
         ),
     }
+    if not financial_mutation_id and _hidden_scan_skipped(period):
+        result["hidden_unprocessed_note"] = (
+            "Not checked for this period. Mutations that never settled are "
+            "invisible to Moneybird's state filter, and finding them costs a "
+            "request per month, so the check runs for a single month only. "
+            "Re-run per month to see them."
+        )
     if hidden:
         result["hidden_unprocessed"] = hidden
         result["next_step"] += (
@@ -222,6 +231,12 @@ def suggest_bank_mutation_matches(
     if warnings:
         result["warnings"] = warnings
     return result
+
+
+def _hidden_scan_skipped(period: str) -> bool:
+    """True when the period spans more than one month, so the advisory read is skipped."""
+    months = report_period_months(period) or symbolic_period_months(period)
+    return months is not None and len(months) > 1
 
 
 def _unprocessed_hidden_by_state_filter(
@@ -243,7 +258,14 @@ def _unprocessed_hidden_by_state_filter(
     collection that needs no booking — a far worse error than staying quiet.
     ``seen`` is used only to subtract rows already shown, which can remove a
     row from this list but never add one.
+
+    Skipped for a period spanning more than one month. A wide period is served
+    by splitting it into a request per month, so this advisory read would
+    silently double the request count of an already expensive scan; the caller
+    is told it was skipped rather than paying that without being asked.
     """
+    if _hidden_scan_skipped(period):
+        return []
     seen_ids = {str(item.get("id")) for item in seen}
     try:
         everything = client.list_financial_mutations(limit=100, page=1, period=period)

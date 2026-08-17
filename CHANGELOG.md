@@ -15,12 +15,18 @@ versioning while allowing pre-1.0 breaking changes.
   target the same record can never both apply, because each preview pins that record's
   version and the second aborts as stale. `prepare_*` now returns `collides_with` and a
   `collision_warning` naming the overlap, so the run can be sequenced instead of failing
-  halfway. Bookings that merely share a ledger account are not treated as a collision.
+  halfway. Only records an action actually writes count, and only within the same
+  administration: bookings that merely share a ledger account, and invoices that merely
+  reference a contact being edited, are not collisions.
 - **Unprocessed bank mutations that Moneybird's own state filter hides are now surfaced.**
   A refused direct debit keeps `state: unprocessed` forever but is omitted from
   `filter=state:unprocessed`, so `suggest_bank_mutation_matches` reported an empty feed
   while the entries accumulated unseen. The period is re-read without the filter and the
   difference is returned as `hidden_unprocessed`, including when no matches are found.
+  Membership is decided on an explicit non-settled `settlement_state`, so a mutation
+  beyond the scanned page is never mistaken for a failed collection. The check covers a
+  single month, since a wider period is served per month and the extra read would double
+  the request count; a skipped period says so rather than implying it found nothing.
 
 ### Fixed
 

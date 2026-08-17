@@ -285,7 +285,10 @@ def make_approval(action: str, payload: dict[str, Any], summary: str) -> dict[st
         _purge_expired(connection)
         # Read collisions before inserting, so this approval never matches itself.
         collisions = _pending_collisions(
-            connection, _approval_target_ids(payload, action), action
+            connection,
+            _approval_target_ids(payload, action),
+            str(administration_id),
+            action,
         )
         try:
             connection.execute(
@@ -365,7 +368,8 @@ def _approval_target_ids(payload: Any, action: str = "") -> set[str]:
         if not isinstance(node, dict):
             return
         for key, value in node.items():
-            if key in keys and isinstance(value, (str, int)):
+            # bool is a subclass of int, and a flag is never a record id.
+            if key in keys and isinstance(value, (str, int)) and not isinstance(value, bool):
                 text = str(value).strip()
                 if text:
                     found.add(text)
@@ -383,15 +387,21 @@ def _approval_target_ids(payload: Any, action: str = "") -> set[str]:
 def _pending_collisions(
     connection: sqlite3.Connection,
     targets: set[str],
+    administration_id: str,
     action: str = "",
 ) -> list[dict[str, Any]]:
-    """Return pending approvals that would touch any of ``targets``."""
+    """Return this administration's pending approvals that touch ``targets``.
+
+    Scoped to one administration for the same reason ``pop_approval`` refuses a
+    cross-tenant approval: the database holds every tenant's rows, and one
+    tenant must never learn another's pending action ids or summaries.
+    """
     if not targets:
         return []
     rows = connection.execute(
         "SELECT approval_id, action, summary, payload FROM approvals "
-        "WHERE state = ? ORDER BY created_at",
-        (PENDING_APPROVAL_STATE,),
+        "WHERE state = ? AND administration_id = ? ORDER BY created_at",
+        (PENDING_APPROVAL_STATE, str(administration_id)),
     ).fetchall()
     collisions: list[dict[str, Any]] = []
     for pending_id, pending_action, pending_summary, payload_json in rows:

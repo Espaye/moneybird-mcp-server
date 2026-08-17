@@ -934,3 +934,54 @@ class ApprovalTargetScopeTests(unittest.TestCase):
             second["collides_with"][0]["shared_targets"],
             ["470987057279271952"],
         )
+
+
+class CollisionTenantScopeTests(unittest.TestCase):
+    """Collision reporting must not cross administrations.
+
+    The approvals database holds every tenant's rows, so an unscoped scan would
+    let one administration learn another's pending action ids and summaries —
+    the same boundary pop_approval refuses to cross.
+    """
+
+    def setUp(self) -> None:
+        safety.clear_pending_approvals()
+        self.addCleanup(safety.clear_pending_approvals)
+        self.addCleanup(set_active_administration_id, "469360474352256236")
+
+    def test_an_identical_target_in_another_administration_is_not_reported(
+        self,
+    ) -> None:
+        set_active_administration_id("111111111111111111")
+        safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "999999999999999999"}]},
+            "Tenant A reclassify",
+        )
+        set_active_administration_id("222222222222222222")
+        second = safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "999999999999999999"}]},
+            "Tenant B reclassify",
+        )
+        self.assertNotIn("collides_with", second)
+
+    def test_the_same_administration_still_collides(self) -> None:
+        set_active_administration_id("333333333333333333")
+        safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "888888888888888888"}]},
+            "First",
+        )
+        second = safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "888888888888888888"}]},
+            "Second",
+        )
+        self.assertIn("collides_with", second)
+
+    def test_a_boolean_flag_is_never_treated_as_a_record_id(self) -> None:
+        self.assertEqual(
+            safety._approval_target_ids({"document_id": True}),
+            set(),
+        )

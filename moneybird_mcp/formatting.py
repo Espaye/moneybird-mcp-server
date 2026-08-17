@@ -726,6 +726,24 @@ def report_period_months(period: str) -> list[str] | None:
     return months
 
 
+def symbolic_period_months(period: str) -> list[str] | None:
+    """Return the ``YYYYMM`` months a year-wide symbolic period covers.
+
+    ``report_period_months`` deliberately returns None for symbolic periods
+    because the server resolves them. Splitting a rejected request needs the
+    concrete months anyway, so the two year symbols are resolved here. Months
+    after the current one are dropped for the running year: they cannot hold
+    records yet, and each would still cost a request.
+    """
+    text = str(period or "").strip().casefold()
+    now = datetime.now()
+    if text == "this_year":
+        return [f"{now.year}{month:02d}" for month in range(1, now.month + 1)]
+    if text == "prev_year":
+        return [f"{now.year - 1}{month:02d}" for month in range(1, 13)]
+    return None
+
+
 def normalized_text(value: str) -> str:
     return " ".join(value.casefold().split())
 

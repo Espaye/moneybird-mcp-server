@@ -44,6 +44,7 @@ from .formatting import (
     normalize_list_period,
     parse_reported_error,
     report_period_months,
+    symbolic_period_months,
 )
 from .http_transport import get_shared_http_client
 from .safety import record_applied_write
@@ -86,24 +87,6 @@ def _reject_over_month_period(report_name: str, period: str) -> None:
             f"'{text}' spans {len(months)} months. Call it once per month "
             f"({listed}) and sum the results."
         )
-
-
-def _symbolic_period_months(period: str) -> list[str] | None:
-    """Return the ``YYYYMM`` months a year-wide symbolic period covers.
-
-    ``report_period_months`` deliberately returns None for symbolic periods
-    because the server resolves them. Splitting a rejected request needs the
-    concrete months anyway, so the two year symbols are resolved here. Months
-    after the current one are dropped for the running year: they cannot hold
-    records yet, and each would still cost a request.
-    """
-    text = str(period or "").strip().casefold()
-    now = datetime.now()
-    if text == "this_year":
-        return [f"{now.year}{month:02d}" for month in range(1, now.month + 1)]
-    if text == "prev_year":
-        return [f"{now.year - 1}{month:02d}" for month in range(1, 13)]
-    return None
 
 
 def retry_delay_seconds(
@@ -1620,7 +1603,7 @@ class MoneybirdClient:
             (part[len("period:") :] for part in parts if part.startswith("period:")),
             "",
         )
-        months = report_period_months(period) or _symbolic_period_months(period)
+        months = report_period_months(period) or symbolic_period_months(period)
         if not months or len(months) < 2:
             return None
         others = [part for part in parts if not part.startswith("period:")]

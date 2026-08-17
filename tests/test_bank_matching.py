@@ -18,7 +18,10 @@ from moneybird_mcp.bank_matching import (
     score_candidate,
 )
 from moneybird_mcp.config import MoneybirdError
-from moneybird_mcp.tools.bank import _unprocessed_hidden_by_state_filter
+from moneybird_mcp.tools.bank import (
+    _hidden_scan_skipped,
+    _unprocessed_hidden_by_state_filter,
+)
 
 
 def mutation(**overrides):
@@ -442,3 +445,30 @@ class HiddenUnprocessedPaginationTests(unittest.TestCase):
     def test_a_blank_settlement_state_is_unknown_not_failed(self) -> None:
         client = self._Client([self._mutation("1", "")])
         self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", []), [])
+
+
+class HiddenScanAffordabilityTests(unittest.TestCase):
+    """A wide period is served per month, so the advisory read is skipped.
+
+    Running it anyway would silently double the request count of an already
+    expensive scan, against a documented rate limit.
+    """
+
+    def test_a_multi_month_period_skips_the_extra_read(self) -> None:
+        self.assertTrue(_hidden_scan_skipped("this_year"))
+        self.assertTrue(_hidden_scan_skipped("20260101..20260331"))
+
+    def test_a_single_month_or_blank_period_still_checks(self) -> None:
+        for period in ("", "this_month", "202607", "20260701..20260731"):
+            with self.subTest(period=period):
+                self.assertFalse(_hidden_scan_skipped(period))
+
+    def test_a_skipped_period_makes_no_request_at_all(self) -> None:
+        class _Exploding:
+            def list_financial_mutations(self, **kwargs):
+                raise AssertionError("no request should be made for a wide period")
+
+        self.assertEqual(
+            _unprocessed_hidden_by_state_filter(_Exploding(), "this_year", []),
+            [],
+        )
