@@ -17,6 +17,11 @@ from moneybird_mcp.bank_matching import (
     open_amount,
     score_candidate,
 )
+from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.tools.bank import (
+    _hidden_scan_skipped,
+    _unprocessed_hidden_by_state_filter,
+)
 
 
 def mutation(**overrides):
@@ -343,3 +348,127 @@ class MatchMutationGroupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HiddenUnprocessedMutationTests(unittest.TestCase):
+    """Moneybird's own state filter does not return every unprocessed mutation.
+
+    A direct debit that was refused keeps state 'unprocessed' forever, but
+    filtering on state:unprocessed omits it. Every scan built on that filter
+    therefore calls the feed empty while the entry is still sitting there, so
+    the difference is reported rather than silently carried.
+    """
+
+    class _Client:
+        def __init__(self, everything, fail=False):
+            self._everything = everything
+            self._fail = fail
+            self.calls = 0
+
+        def list_financial_mutations(self, **kwargs):
+            self.calls += 1
+            if self._fail:
+                raise MoneybirdError("period rejected")
+            return self._everything
+
+    def test_a_refused_mutation_missing_from_the_filter_is_surfaced(self) -> None:
+        settled = {"id": "1", "state": "unprocessed", "settlement_state": "settled"}
+        refused = {
+            "id": "2",
+            "state": "unprocessed",
+            "settlement_state": "refused",
+            "date": "2026-07-03",
+            "amount": "-22.99",
+            "contra_account_name": "Moneybird B.V.",
+        }
+        client = self._Client([settled, refused])
+        hidden = _unprocessed_hidden_by_state_filter(client, "", [settled])
+        self.assertEqual([item["id"] for item in hidden], ["2"])
+        self.assertEqual(hidden[0]["settlement_state"], "refused")
+
+    def test_a_fully_visible_feed_reports_nothing_hidden(self) -> None:
+        seen = [{"id": "1", "state": "unprocessed", "settlement_state": "settled"}]
+        client = self._Client(list(seen))
+        self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", seen), [])
+
+    def test_processed_mutations_are_never_reported_as_hidden(self) -> None:
+        client = self._Client([{"id": "9", "state": "processed"}])
+        self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", []), [])
+
+    def test_the_advisory_lookup_never_breaks_the_scan(self) -> None:
+        client = self._Client([], fail=True)
+        self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", []), [])
+
+
+class HiddenUnprocessedPaginationTests(unittest.TestCase):
+    """A settled mutation past the caller's page is not a hidden one.
+
+    The match scan reads a limited page, while the hidden-mutation check reads
+    up to 100. Deciding membership by absence from that page would label every
+    ordinary settled mutation beyond it as a failed collection needing no
+    booking, which is worse than reporting nothing.
+    """
+
+    class _Client:
+        def __init__(self, everything):
+            self._everything = everything
+
+        def list_financial_mutations(self, **kwargs):
+            return self._everything
+
+    @staticmethod
+    def _mutation(identifier, settlement_state):
+        return {
+            "id": identifier,
+            "state": "unprocessed",
+            "settlement_state": settlement_state,
+            "date": "2026-08-04",
+            "amount": "-1.00",
+        }
+
+    def test_settled_rows_beyond_the_scanned_page_are_not_called_hidden(self) -> None:
+        everything = [self._mutation(str(n), "settled") for n in range(15)]
+        seen = everything[:10]
+        client = self._Client(everything)
+        self.assertEqual(
+            _unprocessed_hidden_by_state_filter(client, "", seen),
+            [],
+        )
+
+    def test_a_refused_row_beyond_the_page_is_still_reported(self) -> None:
+        everything = [self._mutation(str(n), "settled") for n in range(12)]
+        everything.append(self._mutation("refused-1", "refused"))
+        client = self._Client(everything)
+        hidden = _unprocessed_hidden_by_state_filter(client, "", everything[:10])
+        self.assertEqual([item["id"] for item in hidden], ["refused-1"])
+
+    def test_a_blank_settlement_state_is_unknown_not_failed(self) -> None:
+        client = self._Client([self._mutation("1", "")])
+        self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", []), [])
+
+
+class HiddenScanAffordabilityTests(unittest.TestCase):
+    """A wide period is served per month, so the advisory read is skipped.
+
+    Running it anyway would silently double the request count of an already
+    expensive scan, against a documented rate limit.
+    """
+
+    def test_a_multi_month_period_skips_the_extra_read(self) -> None:
+        self.assertTrue(_hidden_scan_skipped("this_year"))
+        self.assertTrue(_hidden_scan_skipped("20260101..20260331"))
+
+    def test_a_single_month_or_blank_period_still_checks(self) -> None:
+        for period in ("", "this_month", "202607", "20260701..20260731"):
+            with self.subTest(period=period):
+                self.assertFalse(_hidden_scan_skipped(period))
+
+    def test_a_skipped_period_makes_no_request_at_all(self) -> None:
+        class _Exploding:
+            def list_financial_mutations(self, **kwargs):
+                raise AssertionError("no request should be made for a wide period")
+
+        self.assertEqual(
+            _unprocessed_hidden_by_state_filter(_Exploding(), "this_year", []),
+            [],
+        )

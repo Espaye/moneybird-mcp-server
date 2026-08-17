@@ -26,6 +26,8 @@ from ..formatting import (
     invoice_title,
     money_decimal,
     purchase_document_title,
+    report_period_months,
+    symbolic_period_months,
 )
 from ..invoicing import (
     details_attributes_payload,
@@ -131,14 +133,25 @@ def suggest_bank_mutation_matches(
             filter="state:unprocessed",
             period=period,
         )
+    hidden = (
+        []
+        if financial_mutation_id
+        else _unprocessed_hidden_by_state_filter(client, period, mutations)
+    )
     if not mutations:
         return {
             "matches": [],
             "count": 0,
+            "hidden_unprocessed": hidden,
             "note": (
-                "No unprocessed bank mutations found for this period. "
-                "list_financial_mutations rejects a wide period; query one month "
-                "at a time (period:'JJJJMM01..JJJJMMnn')."
+                "No unprocessed bank mutations found for this period."
+                + (
+                    f" {len(hidden)} unprocessed mutation(s) are excluded by "
+                    "Moneybird's own state filter because they never settled; "
+                    "see hidden_unprocessed."
+                    if hidden
+                    else ""
+                )
             ),
         }
 
@@ -200,9 +213,80 @@ def suggest_bank_mutation_matches(
             "suggestion 'none' usually belong on a ledger account rather than an invoice."
         ),
     }
+    if not financial_mutation_id and _hidden_scan_skipped(period):
+        result["hidden_unprocessed_note"] = (
+            "Not checked for this period. Mutations that never settled are "
+            "invisible to Moneybird's state filter, and finding them costs a "
+            "request per month, so the check runs for a single month only. "
+            "Re-run per month to see them."
+        )
+    if hidden:
+        result["hidden_unprocessed"] = hidden
+        result["next_step"] += (
+            f" Separately, {len(hidden)} unprocessed mutation(s) are invisible to "
+            "Moneybird's state filter because they never settled (a refused or "
+            "reversed direct debit); see hidden_unprocessed. They usually need no "
+            "booking, since no money moved, but nothing will ever surface them."
+        )
     if warnings:
         result["warnings"] = warnings
     return result
+
+
+def _hidden_scan_skipped(period: str) -> bool:
+    """True when the period spans more than one month, so the advisory read is skipped."""
+    months = report_period_months(period) or symbolic_period_months(period)
+    return months is not None and len(months) > 1
+
+
+def _unprocessed_hidden_by_state_filter(
+    client,
+    period: str,
+    seen: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return unprocessed mutations that ``state:unprocessed`` does not return.
+
+    Moneybird's state filter reports only mutations that settled, so a refused
+    direct debit stays ``state: unprocessed`` forever while every scan built on
+    that filter calls the feed empty. Re-reading the period without the filter
+    is one extra request and is the only way to see them, so the backlog is
+    reported rather than silently carried.
+
+    Membership is decided on ``settlement_state``, never on absence from
+    ``seen``: ``seen`` holds only the caller's page of matches, so a settled
+    mutation sitting past that page would otherwise be reported as a failed
+    collection that needs no booking — a far worse error than staying quiet.
+    ``seen`` is used only to subtract rows already shown, which can remove a
+    row from this list but never add one.
+
+    Skipped for a period spanning more than one month. A wide period is served
+    by splitting it into a request per month, so this advisory read would
+    silently double the request count of an already expensive scan; the caller
+    is told it was skipped rather than paying that without being asked.
+    """
+    if _hidden_scan_skipped(period):
+        return []
+    seen_ids = {str(item.get("id")) for item in seen}
+    try:
+        everything = client.list_financial_mutations(limit=100, page=1, period=period)
+    except MoneybirdError:
+        # Advisory only: never fail the match scan over the extra lookup.
+        return []
+    return [
+        {
+            "id": str(item.get("id") or ""),
+            "date": str(item.get("date") or ""),
+            "amount": str(item.get("amount") or ""),
+            "contra_account_name": str(item.get("contra_account_name") or ""),
+            "settlement_state": str(item.get("settlement_state") or ""),
+        }
+        for item in everything
+        if str(item.get("state") or "") == "unprocessed"
+        # An explicit non-settled state is the evidence; a blank one is unknown
+        # rather than failed, so it is not claimed to be hidden.
+        and str(item.get("settlement_state") or "") not in ("", "settled")
+        and str(item.get("id")) not in seen_ids
+    ]
 
 
 def _signed_amount(mutation: dict[str, Any]) -> Decimal | None:
@@ -1061,7 +1145,10 @@ def prepare_link_bank_mutation_booking(
             "A direct ledger booking does not accept tax_rate_id and creates no VAT "
             "posting: the full amount is booked to this profit-and-loss account. If "
             "the amount includes VAT, link it to an invoice/document or use an "
-            "explicit balanced journal with separate VAT lines."
+            "explicit balanced journal with separate VAT lines. For a VAT-exempt "
+            "cost this is the correct booking, not a compromise: bank charges, "
+            "interest and other financial services carry no input VAT "
+            "(see get_bookkeeping_guide('btw'))."
         )
     return stage_write(
         "link_bank_mutation_booking",

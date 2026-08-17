@@ -123,10 +123,17 @@ wordt bij tussentijdse wijzigingen veilig geweigerd.
 | Export/intracommunautair, verlegd | **0% / btw verlegd** |
 | Privé-uitgave of onttrekking | **Geen btw** (je trekt geen voorbelasting terug) |
 | Verzekeringen, postzegels, sommige vrijgestelde diensten | **Geen / vrijgesteld** |
+| Bankkosten, pakketkosten, rente en andere financiële diensten | **Geen btw** (vrijgesteld) |
 
 Vuistregels:
 - Op een **privé-deel** of een **onttrekking** boek je **Geen btw** — anders zou je ten
   onrechte voorbelasting terugvragen.
+- **Bankkosten zijn altijd vrijgesteld van btw.** Financiële diensten vallen onder de
+  btw-vrijstelling, dus een bankafschrijving voor pakket- of transactiekosten kent geen
+  voorbelasting. Zo'n mutatie hoort daarom **rechtstreeks op het grootboek Bankkosten**
+  (`prepare_link_bank_mutation_booking` met `booking_type: LedgerAccount`); de waarschuwing
+  dat een directe grootboekboeking geen btw-post aanmaakt is hier dus juist het gewenste
+  gedrag, en geen reden om alsnog een factuur of memoriaal te zoeken.
 - `prices_are_incl_tax` moet **binnen vergelijkbare facturen consistent** zijn. Bij "Geen btw"
   maakt incl/excl rekenkundig niets uit, maar zet het gelijk voor uniformiteit. Reken bij een
   omzetting van excl→incl de btw-belaste regels om (× (1 + tarief)) zodat het totaal gelijk blijft.

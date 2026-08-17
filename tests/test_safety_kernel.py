@@ -808,3 +808,180 @@ class SafetyKernelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PendingApprovalCollisionTests(unittest.TestCase):
+    """Two pending approvals on one record cannot both apply.
+
+    Every preview pins the record's current version, so executing either one
+    makes the other stale and it aborts. That is correct but arrives as a
+    surprise at execution time, after the user has already approved both, so
+    the overlap is reported while there is still time to sequence them.
+    """
+
+    def setUp(self) -> None:
+        set_active_administration_id("469360474352256236")
+        safety.clear_pending_approvals()
+        self.addCleanup(safety.clear_pending_approvals)
+
+    def test_reclassify_and_payment_link_on_one_document_collide(self) -> None:
+        safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "495626291993642938"}]},
+            "Reclassify 1 document line(s)",
+        )
+        second = safety.make_approval(
+            "link_bank_mutation_booking",
+            {
+                "financial_mutation_id": "494564174389577429",
+                "booking": {
+                    "booking_type": "Document",
+                    "booking_id": "495626291993642938",
+                },
+            },
+            "Link mutation to document",
+        )
+        self.assertIn("collides_with", second)
+        self.assertEqual(
+            second["collides_with"][0]["shared_targets"],
+            ["495626291993642938"],
+        )
+        self.assertIn("stale", second["collision_warning"])
+
+    def test_two_mutations_sharing_a_ledger_account_do_not_collide(self) -> None:
+        safety.make_approval(
+            "link_bank_mutation_booking",
+            {
+                "financial_mutation_id": "494519090817270843",
+                "booking": {
+                    "booking_type": "LedgerAccount",
+                    "booking_id": "469401605624562861",
+                },
+            },
+            "Book bank charge",
+        )
+        second = safety.make_approval(
+            "link_bank_mutation_booking",
+            {
+                "financial_mutation_id": "494790389687912139",
+                "booking": {
+                    "booking_type": "LedgerAccount",
+                    "booking_id": "469401605624562861",
+                },
+            },
+            "Book another bank charge",
+        )
+        self.assertNotIn("collides_with", second)
+
+    def test_an_unrelated_approval_is_not_flagged(self) -> None:
+        safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "111111111111111111"}]},
+            "Reclassify",
+        )
+        second = safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "222222222222222222"}]},
+            "Reclassify",
+        )
+        self.assertNotIn("collides_with", second)
+
+    def test_the_first_approval_never_collides_with_itself(self) -> None:
+        first = safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "333333333333333333"}]},
+            "Reclassify",
+        )
+        self.assertNotIn("collides_with", first)
+
+
+class ApprovalTargetScopeTests(unittest.TestCase):
+    """A referenced contact is not a changed contact."""
+
+    def setUp(self) -> None:
+        set_active_administration_id("469360474352256236")
+        safety.clear_pending_approvals()
+        self.addCleanup(safety.clear_pending_approvals)
+
+    def test_an_invoice_naming_a_contact_does_not_collide_with_a_contact_edit(
+        self,
+    ) -> None:
+        safety.make_approval(
+            "update_contact",
+            {"contact_id": "470987057279271952", "fields": {"email": "a@b.c"}},
+            "Update contact",
+        )
+        second = safety.make_approval(
+            "create_sales_invoice_draft",
+            {"contact_id": "470987057279271952", "details": []},
+            "Create draft",
+        )
+        self.assertNotIn("collides_with", second)
+
+    def test_two_edits_of_the_same_contact_still_collide(self) -> None:
+        safety.make_approval(
+            "update_contact",
+            {"contact_id": "470987057279271952"},
+            "Update contact",
+        )
+        second = safety.make_approval(
+            "archive_contact",
+            {"contact_id": "470987057279271952"},
+            "Archive contact",
+        )
+        self.assertIn("collides_with", second)
+        self.assertEqual(
+            second["collides_with"][0]["shared_targets"],
+            ["470987057279271952"],
+        )
+
+
+class CollisionTenantScopeTests(unittest.TestCase):
+    """Collision reporting must not cross administrations.
+
+    The approvals database holds every tenant's rows, so an unscoped scan would
+    let one administration learn another's pending action ids and summaries —
+    the same boundary pop_approval refuses to cross.
+    """
+
+    def setUp(self) -> None:
+        safety.clear_pending_approvals()
+        self.addCleanup(safety.clear_pending_approvals)
+        self.addCleanup(set_active_administration_id, "469360474352256236")
+
+    def test_an_identical_target_in_another_administration_is_not_reported(
+        self,
+    ) -> None:
+        set_active_administration_id("111111111111111111")
+        safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "999999999999999999"}]},
+            "Tenant A reclassify",
+        )
+        set_active_administration_id("222222222222222222")
+        second = safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "999999999999999999"}]},
+            "Tenant B reclassify",
+        )
+        self.assertNotIn("collides_with", second)
+
+    def test_the_same_administration_still_collides(self) -> None:
+        set_active_administration_id("333333333333333333")
+        safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "888888888888888888"}]},
+            "First",
+        )
+        second = safety.make_approval(
+            "reclassify_document_lines",
+            {"document_updates": [{"document_id": "888888888888888888"}]},
+            "Second",
+        )
+        self.assertIn("collides_with", second)
+
+    def test_a_boolean_flag_is_never_treated_as_a_record_id(self) -> None:
+        self.assertEqual(
+            safety._approval_target_ids({"document_id": True}),
+            set(),
+        )

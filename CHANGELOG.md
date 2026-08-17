@@ -11,8 +11,41 @@ versioning while allowing pre-1.0 breaking changes.
   `suggest_bank_mutation_matches` can now be linked and the invoice processed through
   `prepare_settle_purchase_invoice_from_bank_mutations`; stale or ambiguous groups fail closed.
 
+- **Colliding approvals are reported before you approve them.** Two pending approvals that
+  target the same record can never both apply, because each preview pins that record's
+  version and the second aborts as stale. `prepare_*` now returns `collides_with` and a
+  `collision_warning` naming the overlap, so the run can be sequenced instead of failing
+  halfway. Only records an action actually writes count, and only within the same
+  administration: bookings that merely share a ledger account, and invoices that merely
+  reference a contact being edited, are not collisions.
+- **Unprocessed bank mutations that Moneybird's own state filter hides are now surfaced.**
+  A refused direct debit keeps `state: unprocessed` forever but is omitted from
+  `filter=state:unprocessed`, so `suggest_bank_mutation_matches` reported an empty feed
+  while the entries accumulated unseen. The period is re-read without the filter and the
+  difference is returned as `hidden_unprocessed`, including when no matches are found.
+  Membership is decided on an explicit non-settled `settlement_state`, so a mutation
+  beyond the scanned page is never mistaken for a failed collection. The check covers a
+  single month, since a wider period is served per month and the extra read would double
+  the request count; a skipped period says so rather than implying it found nothing.
+
 ### Fixed
 
+- **A bare month period (`202601`) was rejected by every collection endpoint.** Moneybird
+  accepts it on reports but answers list routes with HTTP 400 (`Period is invalid`, or
+  `Period must have both a start and end date` on sales invoices), while the shared tool
+  schema advertised it as valid. Bare months and month ranges are now widened to the day
+  range they mean — for the `period` argument and for a `period:` inside a raw filter
+  string alike — so one period syntax works across the whole API. Symbolic and
+  unparseable values are still left for the server to resolve.
+- **A wide period no longer fails a bank-mutation listing outright.** Moneybird refuses a
+  period holding too many mutations (`Too many financial mutations to return`) rather than
+  truncating it, which made a year-wide scan unusable on a busy administration.
+  `list_financial_mutations` now retries that specific rejection month by month, preserving
+  the other filter terms; unrelated rejections still propagate.
+- **Bank charges are documented as VAT-exempt.** The `btw` playbook topic now states that
+  bank costs, interest and other financial services carry no input VAT, and the direct
+  ledger-booking warning says that booking them straight to a ledger account is the correct
+  treatment rather than a compromise.
 - **`read_document_attachment` could hang an MCP session forever (Windows).** The PDF parser
   ran in a `multiprocessing` spawn worker, which re-runs the parent's `__main__` module inside
   the child and ships the payload over a pipe whose read end the parent keeps open. A child
