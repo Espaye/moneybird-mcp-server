@@ -17,6 +17,7 @@ from ..config import (
     UNPAID_SALES_INVOICE_STATES,
     VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
     MoneybirdError,
+    MoneybirdHTTPError,
 )
 from ..formatting import (
     clean_dict,
@@ -305,7 +306,12 @@ def _link_target_contract(
     booking_type: str,
     booking_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return a durable target snapshot and the human-facing preview."""
+    """Return a durable target snapshot, the human-facing preview, and the record.
+
+    The record is handed back so a caller can read fields that do not belong in
+    the equality-compared snapshot — the document lines needed to book a still
+    unbooked document through after its payment is linked.
+    """
 
     if booking_type == "SalesInvoice":
         record = client.get_sales_invoice(booking_id)
@@ -380,7 +386,7 @@ def _link_target_contract(
             "open_amount": _open_amount(record),
             "state": record.get("state"),
         }
-    return snapshot, preview
+    return snapshot, preview, record
 
 
 def _mutation_link_state(record: dict[str, Any]) -> dict[str, Any]:
@@ -1076,7 +1082,13 @@ def prepare_link_bank_mutation_booking(
     (booking_type SalesInvoice or Document) or directly to a ledger category (LedgerAccount).
     This is the manual counterpart of Moneybird's bank reconciliation. When price is empty, the
     preview explicitly fills it from the mutation's current amount_open; Moneybird never receives
-    a nil price. Do not execute the write until the user explicitly confirms."""
+    a nil price.
+
+    A Document still in state 'new' is not booked by a payment link alone, so once the
+    link verifies the document is saved unchanged to book it through to 'paid' — unless
+    the payment leaves an open balance, in which case it stays 'new' on purpose. The
+    result reports the resulting state under 'document'. Do not execute the write until
+    the user explicitly confirms."""
     booking_type = str(booking_type).strip()
     if booking_type not in FINANCIAL_MUTATION_LINK_BOOKING_TYPES:
         supported = ", ".join(sorted(FINANCIAL_MUTATION_LINK_BOOKING_TYPES))
@@ -1094,7 +1106,7 @@ def prepare_link_bank_mutation_booking(
 
     client = ctx.get_client()
     mutation = client.get_financial_mutation(financial_mutation_id)
-    target_snapshot, target_preview = _link_target_contract(
+    target_snapshot, target_preview, target_record = _link_target_contract(
         client,
         booking_type,
         str(booking_id).strip(),
@@ -1150,6 +1162,28 @@ def prepare_link_bank_mutation_booking(
             "interest and other financial services carry no input VAT "
             "(see get_bookkeeping_guide('btw'))."
         )
+    # Linking a payment settles the money but does not book an unbooked document:
+    # it stays in state 'new' and keeps surfacing in review_purchase_invoices as
+    # "not booked yet". The grouped settlement tool already finishes the job, so
+    # the single-mutation path does too rather than leaving a half-processed
+    # document behind for a difference no caller can see.
+    book_through = None
+    if booking_type == "Document" and str(target_record.get("state") or "") == "new":
+        book_through = {
+            "document_kind": str(target_snapshot.get("document_kind") or ""),
+            "document_id": str(booking_id).strip(),
+            "prices_are_incl_tax": bool(target_record.get("prices_are_incl_tax")),
+            "lines": _processing_details(target_record.get("details") or []),
+        }
+        warnings.append(
+            "This document is still in state 'new' (not booked yet). Linking the "
+            "payment alone would settle it while leaving it unbooked, so after the "
+            "link is verified the document is saved unchanged to book it through "
+            "to 'paid'. No ledger account, tax rate, description or amount is "
+            "altered, and the booking is skipped if the payment does not close "
+            "the document's full open amount."
+        )
+
     return stage_write(
         "link_bank_mutation_booking",
         summary=f"Link financial mutation {financial_mutation_id} to {booking_type} {booking_id}",
@@ -1159,6 +1193,7 @@ def prepare_link_bank_mutation_booking(
             "expected_mutation_version": mutation_version,
             "expected_mutation_state": _mutation_link_state(mutation),
             "expected_target": target_snapshot,
+            "book_through": book_through,
         },
         preview={
             "financial_mutation": {
@@ -1210,7 +1245,7 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
             f"Financial mutation {mutation_id} booking state changed after preview. "
             "Prepare again."
         )
-    current_target, _target_preview = _link_target_contract(
+    current_target, _target_preview, _target_record = _link_target_contract(
         client,
         str(payload["booking"]["booking_type"]),
         str(payload["booking"]["booking_id"]),
@@ -1288,10 +1323,22 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
     }
     fully_verified = all(verification.values())
     write_effect_observed = after != before
+    document = _book_document_through(client, payload, link_verified=fully_verified)
+    # Only a save that was actually attempted can succeed or fail. Skipping one
+    # on purpose — a partial payment, or a document Moneybird already booked — is
+    # a correct outcome, and folding it in would report a legitimate link as a
+    # verification failure.
+    if document is not None and document.get("attempted"):
+        verification["document_booked_out_of_new"] = (
+            document.get("state_after") == "paid"
+        )
+        verification["document_total_unchanged"] = bool(document.get("total_unchanged"))
+        verification["document_lines_unchanged"] = bool(document.get("lines_unchanged"))
+        fully_verified = all(verification.values())
     status = (
         "linked" if fully_verified else "completed_with_errors" if write_effect_observed else "failed"
     )
-    return {
+    result = {
         "_status": status,
         "_audit_result": "success" if fully_verified else "verification_failed",
         "_audit": {
@@ -1307,6 +1354,108 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
             "fully_verified": fully_verified,
         },
     }
+    if document is not None:
+        result["document"] = document
+    return result
+
+
+def _book_document_through(
+    client,
+    payload: dict[str, Any],
+    *,
+    link_verified: bool,
+) -> dict[str, Any] | None:
+    """Save a linked-but-unbooked document so Moneybird books it through to 'paid'.
+
+    A payment link settles the money; it does not book a document that is still
+    in state 'new'. Re-saving it with its own current lines is the same
+    status-triggering save the grouped settlement path performs, and changes no
+    ledger account, tax rate, description or amount.
+
+    Returns None when there was nothing to book. The save is skipped unless the
+    link itself verified and the document's open amount actually reached zero,
+    because booking a partially paid document through would assert a settlement
+    that did not happen.
+    """
+    book_through = payload.get("book_through")
+    if not book_through:
+        return None
+    kind = str(book_through.get("document_kind") or "purchase_invoice")
+    document_id = str(book_through.get("document_id") or "")
+    outcome: dict[str, Any] = {
+        "document_kind": kind,
+        "document_id": document_id,
+        "state_before": "new",
+        "attempted": False,
+    }
+    if not link_verified:
+        outcome["skipped_reason"] = (
+            "The payment link did not verify, so the document was left untouched."
+        )
+        return outcome
+    save_dispatched = False
+    try:
+        before_save = client.get_document(kind, document_id)
+        open_amount = money_decimal(_open_amount(before_save))
+        if str(before_save.get("state") or "") == "paid":
+            outcome["state_after"] = "paid"
+            outcome["skipped_reason"] = "Moneybird already booked it through."
+            return outcome
+        if open_amount != Decimal("0.00"):
+            outcome["state_after"] = str(before_save.get("state") or "")
+            outcome["open_amount"] = f"{open_amount:.2f}"
+            outcome["skipped_reason"] = (
+                "The payment does not close the document's full open amount, so it "
+                "stays in 'new' until the remainder is settled."
+            )
+            return outcome
+        outcome["attempted"] = True
+        total_before = f"{money_decimal(before_save.get('total_price_incl_tax')):.2f}"
+        lines_before = _purchase_invoice_lines(before_save)
+        save_dispatched = True
+        client.update_document(
+            kind,
+            document_id,
+            {
+                "prices_are_incl_tax": book_through["prices_are_incl_tax"],
+                "details_attributes": details_attributes_payload(
+                    book_through["lines"]
+                ),
+            },
+        )
+        after_save = client.get_document(kind, document_id)
+        total_after = f"{money_decimal(after_save.get('total_price_incl_tax')):.2f}"
+        outcome["state_after"] = str(after_save.get("state") or "")
+        outcome["total_before"] = total_before
+        outcome["total_after"] = total_after
+        # The save exists only to trigger the status change. Whether the amounts
+        # and the booking fields survived it is the whole promise, so both are
+        # compared here and folded into the action's verification by the caller.
+        outcome["total_unchanged"] = total_before == total_after
+        outcome["lines_unchanged"] = _purchase_invoice_lines(after_save) == lines_before
+    except Exception as exc:  # noqa: BLE001 - the payment link is already durable
+        # The money is settled either way; report the gap rather than failing the
+        # whole action and implying the link did not happen.
+        outcome["error"] = str(exc)
+        # Once the save has been dispatched its result is genuinely unknown: it
+        # may well have landed and only the confirming read failed. Reporting
+        # 'new' here would state as fact the very thing that could not be read,
+        # and a caller following state_after would call a finished invoice
+        # unfinished.
+        # A refusal Moneybird answered with is proof nothing was applied, so the
+        # document is still 'new'. Anything else — a network failure, or a read
+        # that died after the save landed — leaves the result genuinely unknown.
+        refused = isinstance(exc, MoneybirdHTTPError) and exc.is_definitive_rejection
+        if save_dispatched and not refused:
+            outcome["state_after"] = "unknown"
+            outcome["verification_gap"] = (
+                "The save was sent but its result could not be read back. The "
+                "document may already be booked through. Re-read it before acting "
+                "on this field, and do not re-save blindly."
+            )
+        else:
+            outcome["state_after"] = "new"
+    return outcome
 
 
 # Not registered as an MCP tool: every approved action executes through the single

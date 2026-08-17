@@ -7,6 +7,23 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Added
 
+- **Linking a payment now finishes an unbooked document.** A purchase invoice or receipt in
+  state `new` is not booked by a payment link: the money settles while the document stays
+  unbooked and keeps surfacing in `review_purchase_invoices` as "not booked yet". The
+  grouped settlement path already booked such an invoice through to `paid`, so two tools
+  that both link a payment left different states for a reason no caller could see — which
+  left a paid invoice sitting in `new` in real use. `prepare_link_bank_mutation_booking`
+  now saves the document unchanged after the link verifies, altering no ledger account,
+  tax rate, description or amount, and reports the resulting state under `document`. The
+  save is skipped when the payment leaves an open balance, since booking a partially paid
+  document through would assert a settlement that did not happen, and a save that fails is
+  reported as a gap rather than failing the already durable link. The document's total and
+  its full booking-field signature are compared across the save and folded into the
+  action's verification, so a Moneybird-side recalculation cannot be reported as a clean
+  link. When the save was sent but its result could not be read back, the state is
+  reported as `unknown` rather than `new`: only a refusal Moneybird answered with proves
+  nothing was applied.
+
 - **One-approval grouped purchase-invoice settlements.** Exact, unique groups from
   `suggest_bank_mutation_matches` can now be linked and the invoice processed through
   `prepare_settle_purchase_invoice_from_bank_mutations`; stale or ambiguous groups fail closed.

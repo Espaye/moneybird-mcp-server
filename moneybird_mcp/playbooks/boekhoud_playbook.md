@@ -364,6 +364,18 @@ Een veelgestelde vraag. Een bankmutatie is "verwerkt" als hij gekoppeld is aan e
 > boekingsregels of btw te veranderen, en verifieert de eindstatus `paid`. Bij een
 > alternatieve subset of concurrerende factuur blijft de uitkomst `ambiguous`.
 
+> **Betaling gekoppeld is niet hetzelfde als factuur geboekt.** Een document blijft in
+> status `new` (nog niet geboekt) totdat het wordt opgeslagen; het koppelen van een
+> betaling verrekent alleen het geld. Een factuur die je zo behandelt, is wél betaald maar
+> blijft in `review_purchase_invoices` opduiken als "state is 'new' (not booked yet)".
+> `prepare_link_bank_mutation_booking` slaat het document daarom na een geverifieerde
+> koppeling ongewijzigd op, zodat het doorboekt naar `paid` — dezelfde
+> statusopslag die de groepsafhandeling doet, zonder grootboek, btw, omschrijving of
+> bedrag te wijzigen. Dat gebeurt alleen als de betaling het volledige openstaande bedrag
+> sluit: bij een deelbetaling blijft de factuur terecht in `new` staan. Controleer na
+> afloop `document.state_after` in het resultaat, en meld een factuur die nog in `new`
+> staat als onafgerond in plaats van als verwerkt.
+
 Voor de diagnose van één blijvend onverwerkte mutatie werk je zo:
 
 1. **Haal de mutatie op** en lees de sleutelvelden:
