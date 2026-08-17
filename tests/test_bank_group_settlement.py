@@ -231,28 +231,64 @@ class BookDocumentThroughTests(unittest.TestCase):
     """
 
     class _Client:
-        def __init__(self, *, state="new", open_amount="0.00", fail=False):
+        def __init__(
+            self,
+            *,
+            state="new",
+            open_amount="0.00",
+            fail=None,
+            fail_read_after_save=False,
+            fail_first_read=False,
+            total_after="25.99",
+            drop_line_after=False,
+        ):
             self._state = state
             self._open_amount = open_amount
             self._fail = fail
+            self._fail_read_after_save = fail_read_after_save
+            self._fail_first_read = fail_first_read
+            self._total_after = total_after
+            self._drop_line_after = drop_line_after
+            self._saved = False
             self.update_calls: list[dict] = []
 
         def get_document(self, kind, document_id):
+            if self._fail_first_read and not self._saved:
+                raise MoneybirdError("read failed before the save")
+            if self._fail_read_after_save and self._saved:
+                raise MoneybirdError("read timed out after the save")
+            details = [
+                {
+                    "id": "line-1",
+                    "description": "Kantoorbenodigdheden",
+                    "price": "21.48",
+                    "amount": "1",
+                    "ledger_account_id": "led-1",
+                    "tax_rate_id": "tax-1",
+                    "row_order": 0,
+                }
+            ]
+            if self._saved and self._drop_line_after:
+                details[0]["ledger_account_id"] = "led-CHANGED"
             return {
                 "id": document_id,
                 "state": self._state,
-                "total_price_incl_tax": "25.99",
+                "total_price_incl_tax": (
+                    self._total_after if self._saved else "25.99"
+                ),
                 "total_price_paid": self._paid(),
                 "payments": [{"price": self._paid()}],
+                "details": details,
             }
 
         def _paid(self):
             return f"{Decimal('25.99') - Decimal(self._open_amount):.2f}"
 
         def update_document(self, kind, document_id, body):
-            if self._fail:
-                raise MoneybirdError("Moneybird rejected the save")
+            if self._fail is not None:
+                raise self._fail
             self.update_calls.append(body)
+            self._saved = True
             self._state = "paid"
 
     @staticmethod
@@ -308,13 +344,61 @@ class BookDocumentThroughTests(unittest.TestCase):
         self.assertEqual(outcome["state_after"], "paid")
         self.assertEqual(client.update_calls, [])
 
-    def test_a_failed_save_reports_the_gap_instead_of_losing_the_link(self) -> None:
-        client = self._Client(fail=True)
+    def test_a_refused_save_is_reported_as_still_new(self) -> None:
+        from moneybird_mcp.config import MoneybirdHTTPError
+
+        client = self._Client(
+            fail=MoneybirdHTTPError("refused", status_code=422)
+        )
         outcome = bank._book_document_through(
             client, self._payload(), link_verified=True
         )
         self.assertIn("error", outcome)
+        # Moneybird answered "no", so nothing was applied: 'new' is a fact here.
         self.assertEqual(outcome["state_after"], "new")
+        self.assertNotIn("verification_gap", outcome)
+
+    def test_an_ambiguous_save_failure_is_not_reported_as_new(self) -> None:
+        client = self._Client(fail=MoneybirdError("connection reset"))
+        outcome = bank._book_document_through(
+            client, self._payload(), link_verified=True
+        )
+        self.assertEqual(outcome["state_after"], "unknown")
+        self.assertIn("verification_gap", outcome)
+
+    def test_a_read_failing_after_the_save_leaves_the_state_unknown(self) -> None:
+        client = self._Client(fail_read_after_save=True)
+        outcome = bank._book_document_through(
+            client, self._payload(), link_verified=True
+        )
+        # The save landed; only the confirming read died. Calling it 'new' would
+        # report a finished invoice as unfinished.
+        self.assertEqual(outcome["state_after"], "unknown")
+        self.assertIn("verification_gap", outcome)
+        self.assertEqual(len(client.update_calls), 1)
+
+    def test_a_read_failing_before_the_save_is_still_new(self) -> None:
+        client = self._Client(fail_first_read=True)
+        outcome = bank._book_document_through(
+            client, self._payload(), link_verified=True
+        )
+        self.assertEqual(outcome["state_after"], "new")
+        self.assertEqual(client.update_calls, [])
+
+    def test_a_recalculated_total_is_reported_as_changed(self) -> None:
+        client = self._Client(total_after="30.00")
+        outcome = bank._book_document_through(
+            client, self._payload(), link_verified=True
+        )
+        self.assertFalse(outcome["total_unchanged"])
+
+    def test_altered_booking_fields_are_reported_as_changed(self) -> None:
+        client = self._Client(drop_line_after=True)
+        outcome = bank._book_document_through(
+            client, self._payload(), link_verified=True
+        )
+        self.assertTrue(outcome["total_unchanged"])
+        self.assertFalse(outcome["lines_unchanged"])
 
     def test_nothing_to_book_returns_nothing(self) -> None:
         self.assertIsNone(

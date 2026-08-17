@@ -655,3 +655,143 @@ class WriteContractRegressionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LinkBooksUnbookedDocumentThroughTests(unittest.TestCase):
+    """End-to-end: linking a payment must finish an unbooked document.
+
+    Covers the caller side of the book-through, which the unit tests around
+    _book_document_through cannot see: which outcomes are folded into the
+    action's verification, and which are correct outcomes that must not be.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory(
+            prefix="moneybird_book_through_"
+        )
+        self._env = mock.patch.dict(
+            os.environ,
+            {
+                "MONEYBIRD_MCP_DATA_DIR": self._temp_dir.name,
+                "MONEYBIRD_CAPABILITY_MODE": "write_enabled",
+            },
+        )
+        self._env.start()
+        set_active_administration_id("contract-admin")
+
+    def tearDown(self) -> None:
+        set_active_administration_id(None)
+        self._env.stop()
+        self._temp_dir.cleanup()
+
+    @staticmethod
+    def _patch_client(module, client):
+        return mock.patch.object(module.ctx, "get_client", return_value=client)
+
+    class _Client:
+        administration_id = "contract-admin"
+
+        def __init__(self, *, total_unpaid="0.00", total_after="25.99"):
+            self._total_unpaid = total_unpaid
+            self._total_after = total_after
+            self._saved = False
+            self.update_calls = 0
+            self.mutation = {
+                "id": "mutation-1",
+                "version": 1,
+                "state": "unprocessed",
+                "amount": "-25.99",
+                "amount_open": "-25.99",
+                "payments": [],
+                "ledger_account_bookings": [],
+            }
+
+        def get_financial_mutation(self, _mutation_id):
+            return copy.deepcopy(self.mutation)
+
+        def get_document(self, kind, document_id):
+            if kind != "purchase_invoice":
+                raise MoneybirdError("not a receipt")
+            return {
+                "id": document_id,
+                "version": 7,
+                "state": "paid" if self._saved else "new",
+                "currency": "EUR",
+                "prices_are_incl_tax": False,
+                "total_price_incl_tax": (
+                    self._total_after if self._saved else "25.99"
+                ),
+                "total_unpaid": "0.00" if self._saved else self._total_unpaid,
+                "details": [
+                    {
+                        "id": "line-1",
+                        "description": "Kantoorbenodigdheden",
+                        "price": "21.48",
+                        "amount": "1",
+                        "ledger_account_id": "led-1",
+                        "tax_rate_id": "tax-1",
+                        "row_order": 0,
+                    }
+                ],
+                "contact": {"company_name": "Amazon EU SARL"},
+            }
+
+        def link_financial_mutation_booking(self, _mutation_id, _booking):
+            self.mutation["payments"] = [
+                {
+                    "id": "payment-1",
+                    "invoice_id": "doc-1",
+                    "invoice_type": "Document",
+                    "price": "25.99",
+                }
+            ]
+            self.mutation["amount_open"] = "0.00"
+            self.mutation["state"] = "processed"
+            self.mutation["version"] += 1
+
+        def update_document(self, _kind, _document_id, _body):
+            self.update_calls += 1
+            self._saved = True
+
+    def _run(self, client):
+        with self._patch_client(bank, client):
+            prepared = bank.prepare_link_bank_mutation_booking(
+                "mutation-1", "Document", "doc-1", "-25.99"
+            )
+            return prepared, bank.link_bank_mutation_booking_from_approval(
+                prepared["approval_id"]
+            )
+
+    def test_a_fully_paid_new_document_is_booked_and_verified(self) -> None:
+        client = self._Client()
+        prepared, result = self._run(client)
+
+        self.assertTrue(
+            any("state 'new'" in w for w in prepared["preview"]["warnings"])
+        )
+        self.assertEqual(client.update_calls, 1)
+        self.assertEqual(result["document"]["state_after"], "paid")
+        self.assertTrue(result["verification"]["document_booked_out_of_new"])
+        self.assertTrue(result["verification"]["document_total_unchanged"])
+        self.assertTrue(result["verification"]["fully_verified"])
+        self.assertEqual(result["status"], "linked")
+
+    def test_a_partial_payment_skips_the_save_without_failing_the_link(self) -> None:
+        client = self._Client(total_unpaid="10.00")
+        _prepared, result = self._run(client)
+
+        self.assertEqual(client.update_calls, 0)
+        self.assertIn("full open amount", result["document"]["skipped_reason"])
+        # Skipping on purpose is a correct outcome, not a verification failure.
+        self.assertNotIn("document_booked_out_of_new", result["verification"])
+        self.assertTrue(result["verification"]["fully_verified"])
+        self.assertEqual(result["status"], "linked")
+
+    def test_a_recalculated_total_fails_the_action(self) -> None:
+        client = self._Client(total_after="30.00")
+        _prepared, result = self._run(client)
+
+        self.assertEqual(client.update_calls, 1)
+        self.assertFalse(result["verification"]["document_total_unchanged"])
+        self.assertFalse(result["verification"]["fully_verified"])
+        self.assertEqual(result["status"], "completed_with_errors")

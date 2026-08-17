@@ -17,7 +17,12 @@ versioning while allowing pre-1.0 breaking changes.
   tax rate, description or amount, and reports the resulting state under `document`. The
   save is skipped when the payment leaves an open balance, since booking a partially paid
   document through would assert a settlement that did not happen, and a save that fails is
-  reported as a gap rather than failing the already durable link.
+  reported as a gap rather than failing the already durable link. The document's total and
+  its full booking-field signature are compared across the save and folded into the
+  action's verification, so a Moneybird-side recalculation cannot be reported as a clean
+  link. When the save was sent but its result could not be read back, the state is
+  reported as `unknown` rather than `new`: only a refusal Moneybird answered with proves
+  nothing was applied.
 
 - **One-approval grouped purchase-invoice settlements.** Exact, unique groups from
   `suggest_bank_mutation_matches` can now be linked and the invoice processed through

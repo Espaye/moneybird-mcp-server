@@ -17,6 +17,7 @@ from ..config import (
     UNPAID_SALES_INVOICE_STATES,
     VERIFIABLE_FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
     MoneybirdError,
+    MoneybirdHTTPError,
 )
 from ..formatting import (
     clean_dict,
@@ -1323,10 +1324,16 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
     fully_verified = all(verification.values())
     write_effect_observed = after != before
     document = _book_document_through(client, payload, link_verified=fully_verified)
-    if document is not None:
-        verification["document_booked_out_of_new"] = bool(
+    # Only a save that was actually attempted can succeed or fail. Skipping one
+    # on purpose — a partial payment, or a document Moneybird already booked — is
+    # a correct outcome, and folding it in would report a legitimate link as a
+    # verification failure.
+    if document is not None and document.get("attempted"):
+        verification["document_booked_out_of_new"] = (
             document.get("state_after") == "paid"
         )
+        verification["document_total_unchanged"] = bool(document.get("total_unchanged"))
+        verification["document_lines_unchanged"] = bool(document.get("lines_unchanged"))
         fully_verified = all(verification.values())
     status = (
         "linked" if fully_verified else "completed_with_errors" if write_effect_observed else "failed"
@@ -1386,6 +1393,7 @@ def _book_document_through(
             "The payment link did not verify, so the document was left untouched."
         )
         return outcome
+    save_dispatched = False
     try:
         before_save = client.get_document(kind, document_id)
         open_amount = money_decimal(_open_amount(before_save))
@@ -1402,7 +1410,9 @@ def _book_document_through(
             )
             return outcome
         outcome["attempted"] = True
-        total_before = str(before_save.get("total_price_incl_tax") or "")
+        total_before = f"{money_decimal(before_save.get('total_price_incl_tax')):.2f}"
+        lines_before = _purchase_invoice_lines(before_save)
+        save_dispatched = True
         client.update_document(
             kind,
             document_id,
@@ -1414,18 +1424,37 @@ def _book_document_through(
             },
         )
         after_save = client.get_document(kind, document_id)
-        total_after = str(after_save.get("total_price_incl_tax") or "")
+        total_after = f"{money_decimal(after_save.get('total_price_incl_tax')):.2f}"
         outcome["state_after"] = str(after_save.get("state") or "")
         outcome["total_before"] = total_before
         outcome["total_after"] = total_after
-        outcome["total_unchanged"] = (
-            money_decimal(total_before) == money_decimal(total_after)
-        )
+        # The save exists only to trigger the status change. Whether the amounts
+        # and the booking fields survived it is the whole promise, so both are
+        # compared here and folded into the action's verification by the caller.
+        outcome["total_unchanged"] = total_before == total_after
+        outcome["lines_unchanged"] = _purchase_invoice_lines(after_save) == lines_before
     except Exception as exc:  # noqa: BLE001 - the payment link is already durable
         # The money is settled either way; report the gap rather than failing the
         # whole action and implying the link did not happen.
         outcome["error"] = str(exc)
-        outcome["state_after"] = "new"
+        # Once the save has been dispatched its result is genuinely unknown: it
+        # may well have landed and only the confirming read failed. Reporting
+        # 'new' here would state as fact the very thing that could not be read,
+        # and a caller following state_after would call a finished invoice
+        # unfinished.
+        # A refusal Moneybird answered with is proof nothing was applied, so the
+        # document is still 'new'. Anything else — a network failure, or a read
+        # that died after the save landed — leaves the result genuinely unknown.
+        refused = isinstance(exc, MoneybirdHTTPError) and exc.is_definitive_rejection
+        if save_dispatched and not refused:
+            outcome["state_after"] = "unknown"
+            outcome["verification_gap"] = (
+                "The save was sent but its result could not be read back. The "
+                "document may already be booked through. Re-read it before acting "
+                "on this field, and do not re-save blindly."
+            )
+        else:
+            outcome["state_after"] = "new"
     return outcome
 
 
