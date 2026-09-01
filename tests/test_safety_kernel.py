@@ -820,23 +820,23 @@ class PendingApprovalCollisionTests(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        set_active_administration_id("469360474352256236")
+        set_active_administration_id("100000000000000205")
         safety.clear_pending_approvals()
         self.addCleanup(safety.clear_pending_approvals)
 
     def test_reclassify_and_payment_link_on_one_document_collide(self) -> None:
         safety.make_approval(
             "reclassify_document_lines",
-            {"document_updates": [{"document_id": "495626291993642938"}]},
+            {"document_updates": [{"document_id": "100000000000000206"}]},
             "Reclassify 1 document line(s)",
         )
         second = safety.make_approval(
             "link_bank_mutation_booking",
             {
-                "financial_mutation_id": "494564174389577429",
+                "financial_mutation_id": "100000000000000207",
                 "booking": {
                     "booking_type": "Document",
-                    "booking_id": "495626291993642938",
+                    "booking_id": "100000000000000206",
                 },
             },
             "Link mutation to document",
@@ -844,7 +844,7 @@ class PendingApprovalCollisionTests(unittest.TestCase):
         self.assertIn("collides_with", second)
         self.assertEqual(
             second["collides_with"][0]["shared_targets"],
-            ["495626291993642938"],
+            ["100000000000000206"],
         )
         self.assertIn("stale", second["collision_warning"])
 
@@ -852,10 +852,10 @@ class PendingApprovalCollisionTests(unittest.TestCase):
         safety.make_approval(
             "link_bank_mutation_booking",
             {
-                "financial_mutation_id": "494519090817270843",
+                "financial_mutation_id": "100000000000000208",
                 "booking": {
                     "booking_type": "LedgerAccount",
-                    "booking_id": "469401605624562861",
+                    "booking_id": "100000000000000209",
                 },
             },
             "Book bank charge",
@@ -863,10 +863,10 @@ class PendingApprovalCollisionTests(unittest.TestCase):
         second = safety.make_approval(
             "link_bank_mutation_booking",
             {
-                "financial_mutation_id": "494790389687912139",
+                "financial_mutation_id": "100000000000000210",
                 "booking": {
                     "booking_type": "LedgerAccount",
-                    "booking_id": "469401605624562861",
+                    "booking_id": "100000000000000209",
                 },
             },
             "Book another bank charge",
@@ -899,7 +899,7 @@ class ApprovalTargetScopeTests(unittest.TestCase):
     """A referenced contact is not a changed contact."""
 
     def setUp(self) -> None:
-        set_active_administration_id("469360474352256236")
+        set_active_administration_id("100000000000000205")
         safety.clear_pending_approvals()
         self.addCleanup(safety.clear_pending_approvals)
 
@@ -908,12 +908,12 @@ class ApprovalTargetScopeTests(unittest.TestCase):
     ) -> None:
         safety.make_approval(
             "update_contact",
-            {"contact_id": "470987057279271952", "fields": {"email": "a@b.c"}},
+            {"contact_id": "100000000000000211", "fields": {"email": "a@b.c"}},
             "Update contact",
         )
         second = safety.make_approval(
             "create_sales_invoice_draft",
-            {"contact_id": "470987057279271952", "details": []},
+            {"contact_id": "100000000000000211", "details": []},
             "Create draft",
         )
         self.assertNotIn("collides_with", second)
@@ -921,18 +921,18 @@ class ApprovalTargetScopeTests(unittest.TestCase):
     def test_two_edits_of_the_same_contact_still_collide(self) -> None:
         safety.make_approval(
             "update_contact",
-            {"contact_id": "470987057279271952"},
+            {"contact_id": "100000000000000211"},
             "Update contact",
         )
         second = safety.make_approval(
             "archive_contact",
-            {"contact_id": "470987057279271952"},
+            {"contact_id": "100000000000000211"},
             "Archive contact",
         )
         self.assertIn("collides_with", second)
         self.assertEqual(
             second["collides_with"][0]["shared_targets"],
-            ["470987057279271952"],
+            ["100000000000000211"],
         )
 
 
@@ -947,7 +947,7 @@ class CollisionTenantScopeTests(unittest.TestCase):
     def setUp(self) -> None:
         safety.clear_pending_approvals()
         self.addCleanup(safety.clear_pending_approvals)
-        self.addCleanup(set_active_administration_id, "469360474352256236")
+        self.addCleanup(set_active_administration_id, "100000000000000205")
 
     def test_an_identical_target_in_another_administration_is_not_reported(
         self,
