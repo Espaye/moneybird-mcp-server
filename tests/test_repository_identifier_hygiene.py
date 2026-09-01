@@ -14,6 +14,11 @@ placeholders" requires nothing. So every 18-digit number in a tracked file has
 to match a documented placeholder shape, and anything else fails whether or not
 this project has ever seen that administration.
 
+Paths are checked as well as contents. This project's own working files are
+named after the administration they came from -- sync caches, audit logs and
+search indexes all carry the id in the filename -- so a committed dump would
+publish an identifier in the file listing while its contents stayed clean.
+
 Only tracked files are scanned. A developer checkout also holds ignored working
 material -- synchronisation caches, audit logs, generated dumps -- which is full
 of real ids by design and is never published.
@@ -73,6 +78,14 @@ class RepositoryIdentifierHygieneTests(unittest.TestCase):
 
         offenders: list[str] = []
         for path in tracked:
+            relative = path.relative_to(ROOT).as_posix()
+
+            # A filename leaks as effectively as a line does, and it leaks from
+            # a binary too, so the path is checked before anything is decoded.
+            for found in MONEYBIRD_ID_RE.findall(relative):
+                if not SYNTHETIC_ID_RE.match(found):
+                    offenders.append(f"{relative}: {found} (in the path)")
+
             if path.suffix.lower() in SKIPPED_SUFFIXES or not path.is_file():
                 continue
             try:
@@ -81,7 +94,6 @@ class RepositoryIdentifierHygieneTests(unittest.TestCase):
                 continue
             if not MONEYBIRD_ID_RE.search(text):
                 continue
-            relative = path.relative_to(ROOT).as_posix()
             for number, line in enumerate(text.splitlines(), start=1):
                 for found in MONEYBIRD_ID_RE.findall(line):
                     if not SYNTHETIC_ID_RE.match(found):
