@@ -1,5 +1,5 @@
 {
-  "id": "494537722772326285",
+  "id": "100000000000000201",
   "administration_id": 123,
   "description": "My product description",
   "title": null,
@@ -8,8 +8,8 @@
   "currency": "EUR",
   "frequency": null,
   "frequency_type": null,
-  "tax_rate_id": "494537637003003018",
-  "ledger_account_id": "494537636859348090",
+  "tax_rate_id": "100000000000000202",
+  "ledger_account_id": "100000000000000203",
   "created_at": "2026-08-04T12:52:26.423Z",
   "updated_at": "2026-08-04T12:52:26.423Z"
 }
