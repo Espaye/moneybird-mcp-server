@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from .. import __version__
+from .._registration import Registry
 from ..config import MoneybirdError
 from ..performance_middleware import ToolTelemetryMiddleware
 
@@ -177,22 +178,32 @@ def _as_expected_tool_error(fn: Callable[..., Any]) -> Callable[..., Any]:
 
 _register_tool = mcp.tool
 
+#: Every tool name on the server, with the distribution that registered it. The
+#: FastMCP instance keeps its own table; this one exists because that table
+#: cannot say where a tool came from, and because a second distribution silently
+#: replacing a core tool is the failure this boundary has to make impossible.
+TOOL_REGISTRY = Registry("tool")
+
 
 def _tool(*args: Any, **kwargs: Any) -> Any:
     """``mcp.tool`` that registers the error-translating wrapper.
 
-    The decorator returns the *undecorated* function, so direct Python callers
-    (tests, scripts, one-off flows) keep seeing MoneybirdError exactly as before;
-    only the MCP-facing callable is wrapped.
+    Every tool reaches MCP through here, including one an extension registers,
+    because this is the only registration entry point published. The decorator
+    returns the *undecorated* function, so direct Python callers (tests, scripts,
+    one-off flows) keep seeing MoneybirdError exactly as before; only the
+    MCP-facing callable is wrapped.
     """
     if args and callable(args[0]) and not kwargs:  # bare @mcp.tool
         fn = args[0]
+        TOOL_REGISTRY.register(kwargs.get("name") or fn.__name__, fn)
         _register_tool(_as_expected_tool_error(fn), *args[1:])
         return fn
 
     decorate = _register_tool(*args, **kwargs)
 
     def register(fn: Callable[..., Any]) -> Callable[..., Any]:
+        TOOL_REGISTRY.register(kwargs.get("name") or fn.__name__, fn)
         decorate(_as_expected_tool_error(fn))
         return fn
 

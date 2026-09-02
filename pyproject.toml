@@ -87,4 +87,8 @@ select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]
 # Registration must finish before compact discovery transforms the tool catalog.
-"moneybird_mcp/tools/__init__.py" = ["E402"]
+# The extension loader and the validation pass are imported below the built-in
+# tool modules on purpose: the file's import order *is* the server's assembly
+# order, so sorting it would run discovery before the surface it discovers into
+# exists. E402 allows the placement; I001 stops isort merging it back up.
+"moneybird_mcp/tools/__init__.py" = ["E402", "I001"]

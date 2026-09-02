@@ -6,10 +6,12 @@ every caller-controlled field while deliberately ignoring provider metadata.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Iterable
 
+from ._registration import Registry
 from .config import MoneybirdError
 from .formatting import money_decimal
 
@@ -34,7 +36,9 @@ def _spec(
     return WriteSpec(1, precondition, verifier, idempotency, reconciliation)
 
 
-WRITE_SPECS: dict[str, WriteSpec] = {
+#: Every guarded action this distribution declares itself. An out-of-tree
+#: distribution adds its own through :func:`register_write_spec`.
+_CORE_WRITE_SPECS: dict[str, WriteSpec] = {
     "archive_contact": _spec(
         "contact version/updated_at/archive state",
         "independent contact GET proves archived",
@@ -184,6 +188,31 @@ WRITE_SPECS: dict[str, WriteSpec] = {
         "inspect contact id and requested fields",
     ),
 }
+
+
+WRITE_SPEC_REGISTRY = Registry("write spec")
+for _action, _write_spec in _CORE_WRITE_SPECS.items():
+    WRITE_SPEC_REGISTRY.register(_action, _write_spec)
+
+#: Live read-only view. Existing callers read it exactly as they read the dict it
+#: replaced; writing to it raises, which is the point.
+WRITE_SPECS: Mapping[str, WriteSpec] = WRITE_SPEC_REGISTRY.as_mapping()
+
+
+def register_write_spec(action: str, spec: WriteSpec) -> None:
+    """Declare the write contract for one guarded action.
+
+    Refuses an action another distribution already declared, and refuses
+    anything at all once validation has sealed the registry.
+
+    There is deliberately no way to state which distribution is registering.
+    Provenance comes from the loader, which knows whose entry point it is
+    importing; letting the caller supply it would let an extension file its
+    contract under this distribution's name and inherit trust it was never
+    granted. Tests that need a specific origin construct a
+    :class:`~moneybird_mcp._registration.Registry` instead.
+    """
+    WRITE_SPEC_REGISTRY.register(action, spec)
 
 
 def _attribute_rows(value: Any) -> list[dict[str, Any]]:
