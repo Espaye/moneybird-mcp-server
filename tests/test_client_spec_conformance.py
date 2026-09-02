@@ -120,7 +120,7 @@ class ClientSpecConformanceTests(unittest.TestCase):
         dedicated = sum("✅" in status for _, status in rows)
         generic = sum("🔎" in status for _, status in rows)
         unexposed = sum(status.strip() == "—" for _, status in rows)
-        self.assertEqual((dedicated, generic, unexposed), (81, 52, 163))
+        self.assertEqual((dedicated, generic, unexposed), (83, 52, 161))
         self.assertIn(
             "| PATCH | `/products/{id}` | Updates a product | ✅ `prepare_bulk_update_product_prices` |",
             coverage,

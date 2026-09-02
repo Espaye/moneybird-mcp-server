@@ -1198,6 +1198,46 @@ class MoneybirdClient:
             f"/{self.administration_id}/ledger_accounts/{ledger_account_id}.json",
         )
 
+    # Asset reads exist here so a destructive ledger-account cleanup can prove no
+    # asset still references the account. The asset *capability* -- the asset
+    # tools, value changes, sources and migration -- is deliberately not part of
+    # this distribution; these two methods are the whole of what the ledger
+    # preflight needs.
+    def list_assets(
+        self,
+        *,
+        limit: int = 25,
+        page: int = 1,
+        ledger_account_id: str = "",
+        active: bool | None = None,
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {
+            "per_page": max(1, min(limit, 100)),
+            "page": max(1, page),
+        }
+        if ledger_account_id:
+            query["ledger_account_id"] = validate_moneybird_id(
+                ledger_account_id, "ledger_account_id"
+            )
+        if active is not None:
+            query["active"] = active
+        return self._request(
+            "GET",
+            f"/{self.administration_id}/assets.json",
+            query=query,
+        )
+
+    def list_all_assets(self, *, active: bool | None = None) -> list[dict[str, Any]]:
+        assets: list[dict[str, Any]] = []
+        for page in range(1, 101):
+            batch = self.list_assets(limit=100, page=page, active=active)
+            assets.extend(batch)
+            if len(batch) < 100:
+                return assets
+        raise MoneybirdError(
+            "Asset listing exceeded 10,000 records; narrow the request before continuing."
+        )
+
     def list_financial_accounts(
         self,
         *,
@@ -1850,6 +1890,40 @@ class MoneybirdClient:
             "POST",
             f"/{self.administration_id}/ledger_accounts.json",
             body=body,
+        )
+
+    def update_ledger_account(
+        self,
+        ledger_account_id: str,
+        ledger_account: dict[str, Any] | None = None,
+        *,
+        rgs_code: str = "",
+    ) -> dict[str, Any]:
+        ledger_account_id = validate_moneybird_id(
+            ledger_account_id, "ledger_account_id"
+        )
+        normalized_rgs = str(rgs_code or "").strip()
+        if not ledger_account and not normalized_rgs:
+            raise MoneybirdError("Provide ledger_account fields and/or rgs_code.")
+        # Despite the OpenAPI schema marking ledger_account optional for PATCH,
+        # the live provider returns HTTP 400 "Ledger Account is required" for
+        # an RGS-only body. Preserve the empty wrapper for taxonomy-only updates.
+        body: dict[str, Any] = {"ledger_account": ledger_account or {}}
+        if normalized_rgs:
+            body["rgs_code"] = normalized_rgs
+        return self._request(
+            "PATCH",
+            f"/{self.administration_id}/ledger_accounts/{ledger_account_id}.json",
+            body=body,
+        )
+
+    def delete_ledger_account(self, ledger_account_id: str) -> None:
+        ledger_account_id = validate_moneybird_id(
+            ledger_account_id, "ledger_account_id"
+        )
+        self._request(
+            "DELETE",
+            f"/{self.administration_id}/ledger_accounts/{ledger_account_id}.json",
         )
 
     def create_general_journal_document(

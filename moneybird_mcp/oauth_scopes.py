@@ -182,6 +182,8 @@ CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
             "prepare_bulk_update_product_prices",
             "list_projects",
             "prepare_create_ledger_account",
+            "prepare_update_ledger_account",
+            "prepare_delete_empty_ledger_account",
         ),
         endpoints=(
             "GET /financial_accounts",
@@ -189,6 +191,8 @@ CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
             "PATCH /products/*",
             "GET /projects",
             "POST /ledger_accounts",
+            "PATCH /ledger_accounts/*",
+            "DELETE /ledger_accounts/*",
         ),
     ),
     # Reports are listed separately per scope group because Moneybird assigns
