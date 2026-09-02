@@ -1,13 +1,14 @@
 """One stable executor for every guarded approval action."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Callable
 
+from .._registration import Registry
 from ..capabilities import require_write_capability
 from ..config import WRITE_ANNOTATIONS, MoneybirdError
 from ..credentials import CREDENTIAL_MODE_HOSTED_REQUEST_ONLY, get_credential_mode
 from ..safety import peek_approval
-from ..write_contracts import WRITE_SPECS
 from . import _context as ctx
 from ._params import ApprovalId
 from ._registry import mcp
@@ -48,7 +49,9 @@ from .workflows import bookkeeping_correction_batch_from_approval
 
 ApprovalExecutor = Callable[[str], dict[str, Any]]
 
-APPROVAL_EXECUTORS: dict[str, ApprovalExecutor] = {
+#: Every guarded action this distribution can execute. An out-of-tree
+#: distribution adds its own through :func:`register_approval_executor`.
+_CORE_APPROVAL_EXECUTORS: dict[str, ApprovalExecutor] = {
     "archive_contact": archive_contact_from_approval,
     "batch_create_sales_invoices": batch_create_sales_invoices_from_approval,
     "batch_schedule_sales_invoices": batch_schedule_sales_invoices_from_approval,
@@ -85,13 +88,27 @@ APPROVAL_EXECUTORS: dict[str, ApprovalExecutor] = {
     "update_contact": update_contact_from_approval,
 }
 
-if set(APPROVAL_EXECUTORS) != set(WRITE_SPECS):
-    missing_specs = sorted(set(APPROVAL_EXECUTORS) - set(WRITE_SPECS))
-    orphan_specs = sorted(set(WRITE_SPECS) - set(APPROVAL_EXECUTORS))
-    raise RuntimeError(
-        "Approval executor / WriteSpec registry mismatch: "
-        f"missing_specs={missing_specs}, orphan_specs={orphan_specs}"
-    )
+APPROVAL_EXECUTOR_REGISTRY = Registry("approval executor")
+for _action, _executor in _CORE_APPROVAL_EXECUTORS.items():
+    APPROVAL_EXECUTOR_REGISTRY.register(_action, _executor)
+
+#: Live read-only view, so existing callers read it as they read the dict it
+#: replaced.
+APPROVAL_EXECUTORS: Mapping[str, ApprovalExecutor] = APPROVAL_EXECUTOR_REGISTRY.as_mapping()
+
+
+def register_approval_executor(action: str, executor: ApprovalExecutor) -> None:
+    """Bind the executor that carries out one guarded action.
+
+    Every action needs both this and a matching write contract, from the same
+    distribution. That pairing used to be asserted here, at import time; it now
+    lives in :func:`moneybird_mcp.tools._validation.validate_registries`, which
+    runs once every extension has been imported. Asserting it here would fire on
+    the first extension to register a spec before its executor -- an ordering no
+    caller controls -- and would fire before the surface is complete, so it could
+    only ever have been checking the core against itself.
+    """
+    APPROVAL_EXECUTOR_REGISTRY.register(action, executor)
 
 
 @mcp.tool(

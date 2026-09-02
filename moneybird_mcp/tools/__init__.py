@@ -3,6 +3,12 @@
 Importing this package registers every tool on the shared ``mcp`` instance and
 the guidance layer (playbook resource + scenario prompts). All public tool
 functions are re-exported here so ``from moneybird_mcp import tools`` keeps working.
+
+Import order is the assembly order of the server: the built-in domain modules
+first, then any tool modules installed distributions contribute through the
+``moneybird_mcp.tools`` entry-point group, then one validation pass that seals
+the registries. Nothing here knows the name of any extension, and with none
+installed the result is exactly the surface this distribution defines.
 """
 from __future__ import annotations
 
@@ -26,6 +32,18 @@ from .reports import *  # noqa: F401,F403
 from .sales import *  # noqa: F401,F403
 from .sales_batches import *  # noqa: F401,F403
 from .workflows import *  # noqa: F401,F403
+
+# Extensions register by importing, so they load after every built-in module and
+# before anything inspects the result. A failure here propagates and this package
+# fails to import: a partly loaded guarded-write surface must not become a server.
+from ._extensions import load_extensions  # noqa: E402
+from ._validation import validate_registries  # noqa: E402
+
+LOADED_EXTENSIONS = load_extensions()
+
+# The surface is complete; check it once and seal it. Nothing may register after
+# this line, which is what makes the check hold for the life of the process.
+validate_registries()
 
 register_guidance(mcp)
 
