@@ -296,22 +296,43 @@ class PublicApiSurfaceTests(unittest.TestCase):
     EXPECTED = (
         "API_VERSION",
         "ApprovalId",
+        "DateString",
+        "Limit",
+        "MONTH_CAPPED_REPORTS",
         "MoneybirdError",
+        "MoneybirdHTTPError",
         "MoneybirdId",
+        "OptionalDateString",
+        "PAGINATED_REPORTS",
         "PREPARE_ANNOTATIONS",
+        "Page",
+        "Period",
+        "PriceString",
         "READ_ONLY_ANNOTATIONS",
         "Registration",
+        "ReportName",
         "WRITE_ANNOTATIONS",
         "WriteSpec",
+        "clean_dict",
+        "compact_general_journal_summary",
+        "details_attributes_payload",
         "duplicate_fingerprint",
         "get_client",
         "mark_write_dispatch_started",
         "mark_write_verifying",
+        "money_decimal",
+        "prepare_general_journal_entries",
+        "provider_request",
+        "rate_budget_affordable_batches",
+        "rate_budget_reset_seconds",
         "register_approval_executor",
         "register_write_spec",
+        "report_period_months",
         "run_approved_write",
         "stage_write",
+        "symbolic_period_months",
         "tool",
+        "verify_general_journal_payload",
     )
 
     def test_the_declared_surface_is_exactly_this(self) -> None:
@@ -326,6 +347,39 @@ class PublicApiSurfaceTests(unittest.TestCase):
         for name in api.__all__:
             with self.subTest(name=name):
                 self.assertTrue(hasattr(api, name))
+
+    def test_the_seam_re_exports_the_same_object_the_core_uses(self) -> None:
+        """A re-export that drifted into a copy would validate differently.
+
+        These names exist so an extension's parameters, money parsing and payload
+        building behave exactly as the built-in tools' do. That guarantee is
+        identity, not similarity.
+        """
+        from moneybird_mcp import api, config, formatting, invoicing, write_contracts
+        from moneybird_mcp.tools import _params
+
+        for name, source in (
+            ("MoneybirdHTTPError", config),
+            ("MONTH_CAPPED_REPORTS", config),
+            ("PAGINATED_REPORTS", config),
+            ("clean_dict", formatting),
+            ("money_decimal", formatting),
+            ("report_period_months", formatting),
+            ("symbolic_period_months", formatting),
+            ("details_attributes_payload", invoicing),
+            ("prepare_general_journal_entries", invoicing),
+            ("compact_general_journal_summary", formatting),
+            ("DateString", _params),
+            ("OptionalDateString", _params),
+            ("Limit", _params),
+            ("Page", _params),
+            ("Period", _params),
+            ("PriceString", _params),
+            ("ReportName", _params),
+            ("verify_general_journal_payload", write_contracts),
+        ):
+            with self.subTest(name=name):
+                self.assertIs(getattr(api, name), getattr(source, name))
 
     def test_registration_helpers_do_not_accept_a_caller_supplied_origin(self) -> None:
         """Provenance is the loader's to state, never the extension's to claim."""
@@ -789,6 +843,99 @@ class BrokenExtensionTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("lonely_executor", result.stderr)
         self.assertIn("no write contract", result.stderr)
+
+
+class ProviderRequestTests(unittest.TestCase):
+    """The transport an extension gets for endpoints this distribution does not wrap.
+
+    The built-in client covers what the built-in tools need. An extension that
+    implements a capability this distribution deliberately does not implement
+    still has to reach Moneybird, and the alternative to a seam is that it
+    reaches into ``client._request`` -- or builds its own HTTP client, and loses
+    the shared rate budget, the retry rules and the tenant confinement with it.
+    """
+
+    class FakeClient:
+        administration_id = "9001"
+
+        def __init__(self) -> None:
+            self.calls: list[tuple] = []
+
+        def _request(self, method, path, query=None, body=None, retry_safe=None):
+            self.calls.append((method, path, query, body, retry_safe))
+            return {"ok": True}
+
+    def test_the_path_is_confined_to_the_current_administration(self) -> None:
+        from moneybird_mcp import api
+
+        client = self.FakeClient()
+        api.provider_request(client, "POST", "assets.json", body={"a": 1})
+
+        method, path, _query, body, _retry = client.calls[0]
+        self.assertEqual(method, "POST")
+        self.assertEqual(path, "/9001/assets.json")
+        self.assertEqual(body, {"a": 1})
+
+    def test_a_leading_slash_cannot_escape_the_administration(self) -> None:
+        from moneybird_mcp import api
+
+        client = self.FakeClient()
+        api.provider_request(client, "GET", "/assets.json")
+        self.assertEqual(client.calls[0][1], "/9001/assets.json")
+
+    def test_the_json_suffix_is_added_when_omitted(self) -> None:
+        from moneybird_mcp import api
+
+        client = self.FakeClient()
+        api.provider_request(client, "GET", "assets")
+        self.assertEqual(client.calls[0][1], "/9001/assets.json")
+
+    def test_the_method_is_normalised(self) -> None:
+        from moneybird_mcp import api
+
+        client = self.FakeClient()
+        api.provider_request(client, " delete ", "assets/1.json")
+        self.assertEqual(client.calls[0][0], "DELETE")
+
+    def test_retry_safety_defaults_to_the_transport_rather_than_the_seam(self) -> None:
+        """Never guess that a mutation is repeatable; let the client decide."""
+        from moneybird_mcp import api
+
+        client = self.FakeClient()
+        api.provider_request(client, "POST", "assets.json", body={})
+        self.assertIsNone(client.calls[0][4])
+
+        api.provider_request(client, "POST", "assets/sync.json", retry_safe=True)
+        self.assertIs(client.calls[1][4], True)
+
+    def test_an_empty_path_or_method_is_refused(self) -> None:
+        from moneybird_mcp import api
+
+        client = self.FakeClient()
+        for method, path in ((" ", "assets.json"), ("GET", "  "), ("GET", "/")):
+            with self.subTest(method=method, path=path):
+                with self.assertRaises(api.MoneybirdError):
+                    api.provider_request(client, method, path)
+        self.assertEqual(client.calls, [])
+
+    def test_a_client_without_an_administration_is_refused(self) -> None:
+        from moneybird_mcp import api
+
+        class Unbound:
+            administration_id = None
+
+            def _request(self, *args, **kwargs):  # pragma: no cover - must not run
+                raise AssertionError("no request may be sent without an administration")
+
+        with self.assertRaisesRegex(api.MoneybirdError, "administration id"):
+            api.provider_request(Unbound(), "GET", "assets.json")
+
+    def test_it_is_a_seam_function_not_a_client_method(self) -> None:
+        """Keeping it off the client means the client still describes this
+        distribution's own supported surface."""
+        from moneybird_mcp.client import MoneybirdClient
+
+        self.assertFalse(hasattr(MoneybirdClient, "provider_request"))
 
 
 if __name__ == "__main__":

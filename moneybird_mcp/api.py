@@ -54,13 +54,30 @@ from typing import TYPE_CHECKING, Any
 
 from ._registration import Registration
 from .config import (
+    MONTH_CAPPED_REPORTS,
+    PAGINATED_REPORTS,
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
     WRITE_ANNOTATIONS,
     MoneybirdError,
+    MoneybirdHTTPError,
 )
-from .formatting import duplicate_fingerprint
-from .write_contracts import WriteSpec, register_write_spec
+from .formatting import (
+    clean_dict,
+    compact_general_journal_summary,
+    duplicate_fingerprint,
+    money_decimal,
+    report_period_months,
+    symbolic_period_months,
+)
+from .invoicing import details_attributes_payload, prepare_general_journal_entries
+from .rate_budget import affordable_batches as rate_budget_affordable_batches
+from .rate_budget import reset_seconds as rate_budget_reset_seconds
+from .write_contracts import (
+    WriteSpec,
+    register_write_spec,
+    verify_general_journal_payload,
+)
 
 #: Version of this seam. Bumped when something is removed or changes meaning;
 #: additions do not bump it.
@@ -78,7 +95,14 @@ API_VERSION = 1
 # By then the package is fully imported, or importing it is the right thing to do.
 _LAZY_EXPORTS = {
     "ApprovalId": ("moneybird_mcp.tools._params", "ApprovalId"),
+    "DateString": ("moneybird_mcp.tools._params", "DateString"),
+    "Limit": ("moneybird_mcp.tools._params", "Limit"),
     "MoneybirdId": ("moneybird_mcp.tools._params", "MoneybirdId"),
+    "OptionalDateString": ("moneybird_mcp.tools._params", "OptionalDateString"),
+    "Page": ("moneybird_mcp.tools._params", "Page"),
+    "Period": ("moneybird_mcp.tools._params", "Period"),
+    "PriceString": ("moneybird_mcp.tools._params", "PriceString"),
+    "ReportName": ("moneybird_mcp.tools._params", "ReportName"),
     "mark_write_dispatch_started": (
         "moneybird_mcp.tools._writes",
         "mark_write_dispatch_started",
@@ -89,7 +113,17 @@ _LAZY_EXPORTS = {
 }
 
 if TYPE_CHECKING:  # never executed: the names above exist for readers and linters
-    from .tools._params import ApprovalId, MoneybirdId
+    from .tools._params import (
+        ApprovalId,
+        DateString,
+        Limit,
+        MoneybirdId,
+        OptionalDateString,
+        Page,
+        Period,
+        PriceString,
+        ReportName,
+    )
     from .tools._writes import (
         mark_write_dispatch_started,
         mark_write_verifying,
@@ -139,6 +173,57 @@ def get_client() -> Any:
     return _context.get_client()
 
 
+def provider_request(
+    client: Any,
+    method: str,
+    path: str,
+    *,
+    query: dict[str, Any] | None = None,
+    body: dict[str, Any] | None = None,
+    retry_safe: bool | None = None,
+) -> Any:
+    """Send one authenticated request for an endpoint this distribution does not wrap.
+
+    The built-in client covers the endpoints the built-in tools need, and it will
+    never cover every endpoint an extension might: adding a typed method for one
+    would mean this distribution advertising a capability it does not implement.
+    So the seam offers the transport rather than the vocabulary.
+
+    ``path`` is relative to the current administration -- ``"assets.json"``, not a
+    full URL -- and is confined to that administration by the same check every
+    built-in call goes through. Everything else the client does still applies:
+    the shared per-IP rate budget, retry policy, redirect refusal, error mapping
+    and the rule that only a provably repeatable request is retried. Passing
+    ``retry_safe=True`` for something that mutates would be a way to lose money,
+    so it defaults to the method's own semantics and should be set only for a
+    read expressed as a POST, which is how Moneybird models batch fetches.
+
+    This is deliberately not a method on the client: it is an extension seam, and
+    keeping it here means the client's own surface still describes exactly what
+    this distribution supports.
+    """
+    if not isinstance(method, str) or not method.strip():
+        raise MoneybirdError("An HTTP method is required.")
+    raw = str(path or "").strip().lstrip("/")
+    if not raw:
+        raise MoneybirdError("A request path is required.")
+    administration_id = getattr(client, "administration_id", None)
+    if administration_id is None:
+        raise MoneybirdError(
+            "An administration id is required for an extension provider request."
+        )
+    endpoint = f"/{administration_id}/{raw}"
+    if not endpoint.endswith(".json"):
+        endpoint = f"{endpoint}.json"
+    return client._request(
+        method.strip().upper(),
+        endpoint,
+        query=query,
+        body=body,
+        retry_safe=retry_safe,
+    )
+
+
 def register_approval_executor(action: str, executor: Any) -> None:
     """Bind the executor that carries out one guarded action.
 
@@ -155,20 +240,41 @@ def register_approval_executor(action: str, executor: Any) -> None:
 __all__ = [
     "API_VERSION",
     "ApprovalId",
+    "DateString",
+    "Limit",
+    "MONTH_CAPPED_REPORTS",
     "MoneybirdError",
+    "MoneybirdHTTPError",
     "MoneybirdId",
+    "OptionalDateString",
+    "PAGINATED_REPORTS",
     "PREPARE_ANNOTATIONS",
+    "Page",
+    "Period",
+    "PriceString",
     "READ_ONLY_ANNOTATIONS",
     "Registration",
+    "ReportName",
     "WRITE_ANNOTATIONS",
     "WriteSpec",
+    "clean_dict",
+    "compact_general_journal_summary",
+    "details_attributes_payload",
     "duplicate_fingerprint",
     "get_client",
     "mark_write_dispatch_started",
     "mark_write_verifying",
+    "money_decimal",
+    "prepare_general_journal_entries",
+    "provider_request",
+    "rate_budget_affordable_batches",
+    "rate_budget_reset_seconds",
     "register_approval_executor",
     "register_write_spec",
+    "report_period_months",
     "run_approved_write",
     "stage_write",
+    "symbolic_period_months",
     "tool",
+    "verify_general_journal_payload",
 ]
