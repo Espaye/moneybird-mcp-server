@@ -149,6 +149,36 @@ def list_sales_invoices(
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
+def get_sales_invoices_by_ids(
+    sales_invoice_ids: Annotated[
+        list[str],
+        Field(
+            min_length=1,
+            max_length=100,
+            description="One to 100 Moneybird sales-invoice ids from search or list_sales_invoices.",
+        ),
+    ],
+) -> dict[str, Any]:
+    """Fetch up to 100 complete sales invoices in one typed synchronization call.
+
+    Use this instead of calling fetch once per invoice when payments, details, versions, or
+    historical status evidence must be joined for a reconciliation.
+    """
+    client = ctx.get_client()
+    requested = [str(item) for item in sales_invoice_ids]
+    invoices = client.fetch_sales_invoices_by_ids(requested)
+    by_id = {str(item.get("id") or ""): item for item in invoices}
+    missing = [item for item in requested if item not in by_id]
+    return {
+        "items": [by_id[item] for item in requested if item in by_id],
+        "count": len(invoices),
+        "requested_count": len(requested),
+        "missing_ids": missing,
+        "api_calls": 1,
+    }
+
+
+@mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def audit_recent_sales_invoice_send_methods(
     limit: Annotated[int, Field(ge=1, le=200, description="How many recent sent invoices to audit.")] = 30,
     page_scan_limit: Annotated[int, Field(ge=1, le=50, description="Maximum invoice pages to scan while collecting them.")] = 10,
