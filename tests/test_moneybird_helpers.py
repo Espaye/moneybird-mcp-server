@@ -126,13 +126,13 @@ class MoneybirdHelperTests(unittest.TestCase):
             {
                 "id": "bank-1",
                 "name": "",
-                "identifier": "NL91ABNA0417164300",
+                "identifier": "NL00BANK0000000002",
             },
         )
 
         self.assertEqual(
             summary["financial_account_name"],
-            "NL91ABNA0417164300",
+            "NL00BANK0000000002",
         )
 
     def test_ledger_account_summary_exposes_rgs_taxonomy(self) -> None:

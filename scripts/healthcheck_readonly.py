@@ -60,7 +60,7 @@ check("moneybird_request('administrations')", lambda: T.moneybird_request("admin
 pis = check("list_purchase_documents(purchase_invoice)", lambda: T.list_purchase_documents("purchase_invoice", limit=5))
 check("list_purchase_documents(receipt)", lambda: T.list_purchase_documents("receipt", limit=5))
 check("suggest_bank_mutation_matches", lambda: T.suggest_bank_mutation_matches(limit=5))
-check("search('KPN')", lambda: T.search("KPN", limit=5))
+check("search('factuur')", lambda: T.search("factuur", limit=5))
 
 # fetch one real record discovered above (read-only)
 def _fetch_first_contact():

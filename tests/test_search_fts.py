@@ -23,42 +23,42 @@ def _index(updated_at: str = "2026-07-11T12:00:00+00:00") -> dict:
     index["contacts"]["records"] = {
         "1": {
             "id": "contact:1",
-            "title": "Vitens N.V.",
+            "title": "Aquabron N.V.",
             "url": "https://example/contacts/1",
-            "search_text": "vitens n.v. water leverancier zwolle",
+            "search_text": "aquabron n.v. water leverancier",
         },
         "2": {
             "id": "contact:2",
-            "title": "KPN B.V.",
+            "title": "Telecom Voorbeeld B.V.",
             "url": "https://example/contacts/2",
-            "search_text": "kpn b.v. telecom internet den haag",
+            "search_text": "telecom voorbeeld b.v. telecom internet",
         },
     }
     index["purchase_invoices"]["records"] = {
         "10": {
             "id": "purchase_invoice:10",
-            "title": "Vitens factuur juni",
+            "title": "Aquabron factuur juni",
             "url": "https://example/documents/10",
-            "search_text": "vitens factuur juni water voorschot 12,34",
+            "search_text": "aquabron factuur juni water voorschot 12,34",
         }
     }
     # Two debits to the same counterparty, told apart only by the bank narrative.
     index["financial_mutations"]["records"] = {
         "20": {
             "id": "financial_mutation:20",
-            "title": "Financial mutation Interpolis (2026-02-02, -1818.59)",
+            "title": "Financial mutation Zeker Verzekeringen (2026-02-02, -1234.56)",
             "url": "https://example/financial_mutations/20",
-            "amount": "-1818.59",
-            "description": "ZIB polis 350259527 Periode 01.02.2026 - 01.05.2026",
-            "search_text": "interpolis zib polis 350259527 periode 01.02.2026 - 01.05.2026",
+            "amount": "-1234.56",
+            "description": "POL polis 000000000111 Periode 01.02.2026 - 01.05.2026",
+            "search_text": "zeker verzekeringen pol polis 000000000111 periode 01.02.2026 - 01.05.2026",
         },
         "21": {
             "id": "financial_mutation:21",
-            "title": "Financial mutation Interpolis (2026-03-20, -1355.79)",
+            "title": "Financial mutation Zeker Verzekeringen (2026-03-20, -2345.67)",
             "url": "https://example/financial_mutations/21",
-            "amount": "-1355.79",
-            "description": "Risicoverzekering 00040391362 Overlijdensrisicoverzekering",
-            "search_text": "interpolis risicoverzekering 00040391362 overlijdensrisicoverzekering",
+            "amount": "-2345.67",
+            "description": "Risicoverzekering 000000000222 Overlijdensrisicoverzekering",
+            "search_text": "zeker verzekeringen risicoverzekering 000000000222 overlijdensrisicoverzekering",
         },
     }
     return index
@@ -74,9 +74,9 @@ class FtsSearchTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_policy_number_selects_one_of_two_debits_to_the_same_payee(self) -> None:
-        """The whole point: 'Interpolis' alone cannot tell these two apart."""
+        """The whole point: 'Zeker Verzekeringen' alone cannot tell these two apart."""
         self.assertTrue(search_fts.refresh_fts_index(_index(), ADMIN))
-        results = search_fts.search_fts(ADMIN, "350259527", limit=5)
+        results = search_fts.search_fts(ADMIN, "000000000111", limit=5)
         self.assertEqual([hit["id"] for hit in results], ["financial_mutation:20"])
 
     def test_hit_carries_the_bank_narrative_so_no_fetch_is_needed(self) -> None:
@@ -84,12 +84,12 @@ class FtsSearchTests(unittest.TestCase):
         results = search_fts.search_fts(ADMIN, "overlijdensrisicoverzekering", limit=5)
         self.assertEqual(
             results[0]["description"],
-            "Risicoverzekering 00040391362 Overlijdensrisicoverzekering",
+            "Risicoverzekering 000000000222 Overlijdensrisicoverzekering",
         )
 
     def test_multi_word_out_of_order_query_matches(self) -> None:
         self.assertTrue(search_fts.refresh_fts_index(_index(), ADMIN))
-        results = search_fts.search_fts(ADMIN, "water vitens", limit=5)
+        results = search_fts.search_fts(ADMIN, "water aquabron", limit=5)
         self.assertEqual(
             {item["id"] for item in results},
             {"contact:1", "purchase_invoice:10"},
@@ -97,14 +97,14 @@ class FtsSearchTests(unittest.TestCase):
 
     def test_prefix_matching_and_ranking(self) -> None:
         search_fts.refresh_fts_index(_index(), ADMIN)
-        results = search_fts.search_fts(ADMIN, "vit", limit=5)
+        results = search_fts.search_fts(ADMIN, "aqu", limit=5)
         self.assertEqual(len(results), 2)
         results = search_fts.search_fts(ADMIN, "telecom", limit=5)
         self.assertEqual([item["id"] for item in results], ["contact:2"])
 
     def test_or_fallback_when_not_all_words_match(self) -> None:
         search_fts.refresh_fts_index(_index(), ADMIN)
-        results = search_fts.search_fts(ADMIN, "vitens bestaatnietxyz", limit=5)
+        results = search_fts.search_fts(ADMIN, "aquabron bestaatnietxyz", limit=5)
         self.assertEqual(
             {item["id"] for item in results},
             {"contact:1", "purchase_invoice:10"},
@@ -171,7 +171,7 @@ class FtsSearchTests(unittest.TestCase):
 
     def test_special_characters_in_query_do_not_break_match_syntax(self) -> None:
         search_fts.refresh_fts_index(_index(), ADMIN)
-        for query in ('vitens "water"', "vitens*", "vitens:water", "12,34"):
+        for query in ('aquabron "water"', "aquabron*", "aquabron:water", "12,34"):
             results = search_fts.search_fts(ADMIN, query, limit=5)
             self.assertIsInstance(results, list, msg=f"query {query!r}")
 

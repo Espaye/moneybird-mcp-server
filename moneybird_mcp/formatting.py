@@ -383,7 +383,7 @@ def bank_description(mutation: dict[str, Any]) -> str:
     """The bank's own narrative for a mutation, untruncated.
 
     Moneybird keeps the SEPA remittance information in ``sepa_fields.remi``: the
-    text the statement shows, e.g. ``"ZIB polis 350259527 Periode 01.02.2026 -
+    text the statement shows, e.g. ``"POL polis 000000000111 Periode 01.02.2026 -
     01.05.2026"``. For a recurring direct debit that is routinely the *only*
     field naming the contract and the period it covers — ``contra_account_name``
     is just the insurer, and two unrelated policies from one insurer are
