@@ -542,6 +542,56 @@ class ExtensionIntegrationSeamTests(unittest.TestCase):
         self.assertTrue(raised.startswith("ToolError:"), raised)
         self.assertIn("canary refusal", raised)
 
+    def test_importing_the_seam_before_the_tools_package_still_works(self) -> None:
+        """The order an extension author reaches for first must not be the broken one.
+
+        `import moneybird_mcp.api` is line one of any extension, and it is just as
+        likely to be line one of the process. If the seam pulled the tools package
+        in while executing, that import would load the installed extensions, whose
+        own first line reaches back into this half-built module -- so the seam has
+        to resolve everything behind that package on use instead of at import.
+        """
+        result = run_with_extensions(
+            f'''
+            import json
+
+            import moneybird_mcp.api as api  # deliberately before moneybird_mcp.tools
+
+            names = {{name: hasattr(api, name) for name in api.__all__}}
+            import moneybird_mcp.tools  # noqa: E402 - the order is the point
+            from moneybird_mcp.tools._registry import TOOL_REGISTRY
+
+            print("RESULT:" + json.dumps({{
+                "api_version": api.API_VERSION,
+                "every_name_resolves": all(names.values()),
+                "missing": sorted(n for n, ok in names.items() if not ok),
+                "tool_is_callable": callable(api.tool),
+                "extension_registered": "{TOOL_NAME}" in TOOL_REGISTRY,
+            }}))
+            ''',
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = payload_of(result)
+        self.assertEqual(payload["missing"], [])
+        self.assertTrue(payload["every_name_resolves"])
+        self.assertTrue(payload["tool_is_callable"])
+        self.assertTrue(payload["extension_registered"])
+
+    def test_the_seam_imports_nothing_from_the_tools_package_at_module_level(self) -> None:
+        """The property behind the test above, asserted where it can regress."""
+        import ast
+
+        source = (ROOT / "moneybird_mcp" / "api.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        offenders = []
+        for node in tree.body:  # module level only; function-local imports are fine
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("tools"):
+                offenders.append(f"api.py:{node.lineno}: from {node.module}")
+            if isinstance(node, ast.ImportFrom) and node.level and (node.module or "").startswith("tools"):
+                offenders.append(f"api.py:{node.lineno}: relative tools import")
+        self.assertEqual(offenders, [], "\n".join(offenders))
+
     def test_an_extension_resolves_its_client_through_the_supported_seam(self) -> None:
         """Pitfall B: a direct client would bypass credentials and the patch point.
 
