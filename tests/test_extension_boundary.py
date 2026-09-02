@@ -314,6 +314,7 @@ class PublicApiSurfaceTests(unittest.TestCase):
         "WRITE_ANNOTATIONS",
         "WriteSpec",
         "clean_dict",
+        "compact_general_journal_summary",
         "details_attributes_payload",
         "duplicate_fingerprint",
         "get_client",
@@ -322,6 +323,8 @@ class PublicApiSurfaceTests(unittest.TestCase):
         "money_decimal",
         "prepare_general_journal_entries",
         "provider_request",
+        "rate_budget_affordable_batches",
+        "rate_budget_reset_seconds",
         "register_approval_executor",
         "register_write_spec",
         "report_period_months",
@@ -329,6 +332,7 @@ class PublicApiSurfaceTests(unittest.TestCase):
         "stage_write",
         "symbolic_period_months",
         "tool",
+        "verify_general_journal_payload",
     )
 
     def test_the_declared_surface_is_exactly_this(self) -> None:
@@ -351,7 +355,7 @@ class PublicApiSurfaceTests(unittest.TestCase):
         building behave exactly as the built-in tools' do. That guarantee is
         identity, not similarity.
         """
-        from moneybird_mcp import api, config, formatting, invoicing
+        from moneybird_mcp import api, config, formatting, invoicing, write_contracts
         from moneybird_mcp.tools import _params
 
         for name, source in (
@@ -364,6 +368,7 @@ class PublicApiSurfaceTests(unittest.TestCase):
             ("symbolic_period_months", formatting),
             ("details_attributes_payload", invoicing),
             ("prepare_general_journal_entries", invoicing),
+            ("compact_general_journal_summary", formatting),
             ("DateString", _params),
             ("OptionalDateString", _params),
             ("Limit", _params),
@@ -371,6 +376,7 @@ class PublicApiSurfaceTests(unittest.TestCase):
             ("Period", _params),
             ("PriceString", _params),
             ("ReportName", _params),
+            ("verify_general_journal_payload", write_contracts),
         ):
             with self.subTest(name=name):
                 self.assertIs(getattr(api, name), getattr(source, name))

@@ -64,13 +64,20 @@ from .config import (
 )
 from .formatting import (
     clean_dict,
+    compact_general_journal_summary,
     duplicate_fingerprint,
     money_decimal,
     report_period_months,
     symbolic_period_months,
 )
 from .invoicing import details_attributes_payload, prepare_general_journal_entries
-from .write_contracts import WriteSpec, register_write_spec
+from .rate_budget import affordable_batches as rate_budget_affordable_batches
+from .rate_budget import reset_seconds as rate_budget_reset_seconds
+from .write_contracts import (
+    WriteSpec,
+    register_write_spec,
+    verify_general_journal_payload,
+)
 
 #: Version of this seam. Bumped when something is removed or changes meaning;
 #: additions do not bump it.
@@ -251,6 +258,7 @@ __all__ = [
     "WRITE_ANNOTATIONS",
     "WriteSpec",
     "clean_dict",
+    "compact_general_journal_summary",
     "details_attributes_payload",
     "duplicate_fingerprint",
     "get_client",
@@ -259,6 +267,8 @@ __all__ = [
     "money_decimal",
     "prepare_general_journal_entries",
     "provider_request",
+    "rate_budget_affordable_batches",
+    "rate_budget_reset_seconds",
     "register_approval_executor",
     "register_write_spec",
     "report_period_months",
@@ -266,4 +276,5 @@ __all__ = [
     "stage_write",
     "symbolic_period_months",
     "tool",
+    "verify_general_journal_payload",
 ]
