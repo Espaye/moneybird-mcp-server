@@ -20,7 +20,8 @@ A minimal extension looks like this, in a distribution declaring
 
     from moneybird_mcp.api import (
         MoneybirdError, PREPARE_ANNOTATIONS, WriteSpec, ApprovalId,
-        get_client, register_approval_executor, register_write_spec,
+        get_client, mark_write_dispatch_started, mark_write_verifying,
+        register_approval_executor, register_write_spec,
         run_approved_write, stage_write, tool,
     )
 
@@ -31,7 +32,11 @@ A minimal extension looks like this, in a distribution declaring
         ...
         return stage_write("example", summary=..., payload=..., preview=...)
 
-    def _execute(client, payload): ...
+    def _execute(client, payload):
+        mark_write_dispatch_started()   # the last safe retry boundary
+        ...                             # the mutation
+        mark_write_verifying()          # everything after this is a read-back
+        ...
 
     def example_from_approval(approval_id: ApprovalId) -> dict:
         return run_approved_write(get_client(), approval_id, "example", _execute)
@@ -74,13 +79,23 @@ API_VERSION = 1
 _LAZY_EXPORTS = {
     "ApprovalId": ("moneybird_mcp.tools._params", "ApprovalId"),
     "MoneybirdId": ("moneybird_mcp.tools._params", "MoneybirdId"),
+    "mark_write_dispatch_started": (
+        "moneybird_mcp.tools._writes",
+        "mark_write_dispatch_started",
+    ),
+    "mark_write_verifying": ("moneybird_mcp.tools._writes", "mark_write_verifying"),
     "run_approved_write": ("moneybird_mcp.tools._writes", "run_approved_write"),
     "stage_write": ("moneybird_mcp.tools._writes", "stage_write"),
 }
 
 if TYPE_CHECKING:  # never executed: the names above exist for readers and linters
     from .tools._params import ApprovalId, MoneybirdId
-    from .tools._writes import run_approved_write, stage_write
+    from .tools._writes import (
+        mark_write_dispatch_started,
+        mark_write_verifying,
+        run_approved_write,
+        stage_write,
+    )
 
 
 def __getattr__(name: str) -> Any:
@@ -149,6 +164,8 @@ __all__ = [
     "WriteSpec",
     "duplicate_fingerprint",
     "get_client",
+    "mark_write_dispatch_started",
+    "mark_write_verifying",
     "register_approval_executor",
     "register_write_spec",
     "run_approved_write",

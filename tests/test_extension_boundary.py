@@ -49,17 +49,29 @@ PACKAGE = "mb_boundary_canary"
 TOOL_NAME = "canary_probe"
 ACTION = "canary_action"
 
-#: A complete extension: one tool, one contract, one executor, nothing private.
+#: A complete extension: a read tool, a guarded write, nothing private.
+#:
+#: The guarded half is written the way a real one has to be -- staged, dispatched
+#: between the two phase markers, verified, then run through the kernel. That is
+#: the only way this file proves the seam is *sufficient* rather than merely
+#: importable: an extension that could register an action but never execute one
+#: would satisfy a registration-only test and fail on first use.
 CANARY_MODULE = f'''
 from moneybird_mcp.api import (
     MoneybirdError,
     PREPARE_ANNOTATIONS,
     WriteSpec,
     get_client,
+    mark_write_dispatch_started,
+    mark_write_verifying,
     register_approval_executor,
     register_write_spec,
+    run_approved_write,
+    stage_write,
     tool,
 )
+
+APPLIED = []
 
 
 @tool(annotations=PREPARE_ANNOTATIONS, tags={{"domain:canary"}})
@@ -72,8 +84,30 @@ def {TOOL_NAME}(fail: bool = False, resolve_client: bool = False) -> dict:
     return {{"ok": True}}
 
 
+@tool(annotations=PREPARE_ANNOTATIONS, tags={{"domain:canary"}})
+def prepare_{ACTION}(note: str) -> dict:
+    """Stage the synthetic write; nothing is applied until it is approved."""
+    return stage_write(
+        "{ACTION}",
+        summary="Record the synthetic note " + repr(note),
+        payload={{"note": note}},
+        preview={{"note": note, "effect": "append one row in memory"}},
+    )
+
+
+def _apply_{ACTION}(client, payload):
+    mark_write_dispatch_started()
+    APPLIED.append(payload["note"])
+    mark_write_verifying()
+    return {{
+        "recorded": payload["note"],
+        "rows": len(APPLIED),
+        "_audit_result": "success",
+    }}
+
+
 def {ACTION}_from_approval(approval_id):
-    return {{"approval_id": approval_id}}
+    return run_approved_write(get_client(), approval_id, "{ACTION}", _apply_{ACTION})
 
 
 register_write_spec(
@@ -112,12 +146,16 @@ def install_extension(
     return root
 
 
-def run_with_extensions(script: str, *roots: pathlib.Path) -> subprocess.CompletedProcess:
+def run_with_extensions(
+    script: str,
+    *roots: pathlib.Path,
+    capability_mode: str = "read_only",
+) -> subprocess.CompletedProcess:
     """Run ``script`` in a fresh interpreter that can see the given distributions."""
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([str(ROOT), *(str(root) for root in roots)])
     env["MONEYBIRD_MCP_DATA_DIR"] = tempfile.mkdtemp(prefix="moneybird_boundary_")
-    env.setdefault("MONEYBIRD_CAPABILITY_MODE", "read_only")
+    env["MONEYBIRD_CAPABILITY_MODE"] = capability_mode
     env.pop("MONEYBIRD_TOOL_DISCOVERY", None)
     return subprocess.run(
         [sys.executable, "-c", textwrap.dedent(script)],
@@ -262,6 +300,8 @@ class PublicApiSurfaceTests(unittest.TestCase):
         "WriteSpec",
         "duplicate_fingerprint",
         "get_client",
+        "mark_write_dispatch_started",
+        "mark_write_verifying",
         "register_approval_executor",
         "register_write_spec",
         "run_approved_write",
@@ -499,13 +539,77 @@ class ExtensionEndToEndTests(unittest.TestCase):
         self.assertTrue(self.payload["core_tool_still_visible"])
 
     def test_the_surface_grows_by_exactly_what_the_extension_added(self) -> None:
-        self.assertEqual(self.payload["tool_count"], 59)
+        self.assertEqual(self.payload["tool_count"], 60)
         self.assertEqual(self.payload["spec_count"], 25)
         self.assertEqual(self.payload["spec_origins"], [CORE_ORIGIN, DISTRIBUTION])
 
     def test_validation_sealed_every_registry(self) -> None:
         self.assertEqual(self.payload["frozen"], [True, True, True])
         self.assertIn("after validation sealed", self.payload["frozen_refusal"])
+
+
+class ExtensionGuardedWriteTests(unittest.TestCase):
+    """The seam has to be enough to run a guarded write, not just declare one.
+
+    An extension that can register an action but cannot execute one would pass a
+    registration-only test and fail the first time somebody approved something.
+    So this drives the whole flow -- stage, approve, execute -- through the public
+    dispatcher, using an extension that imports from ``moneybird_mcp.api`` and
+    nothing else.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="moneybird_boundary_write_")
+        self.addCleanup(self._tmp.cleanup)
+        self.root = install_extension(pathlib.Path(self._tmp.name), CANARY_MODULE)
+
+    def test_a_write_declared_through_the_seam_can_actually_be_executed(self) -> None:
+        result = run_with_extensions(
+            f'''
+            import json
+            from unittest import mock
+
+            import moneybird_mcp.tools
+            from moneybird_mcp.credentials import set_active_administration_id
+            from moneybird_mcp.tools import _context
+            from moneybird_mcp.tools.approvals import execute_approved_action
+
+            from {PACKAGE}.tools import APPLIED, prepare_{ACTION}
+
+
+            class SyntheticClient:
+                administration_id = "100000000000000401"
+
+
+            set_active_administration_id("100000000000000401")
+            with mock.patch.object(_context, "get_client", return_value=SyntheticClient()):
+                staged = prepare_{ACTION}("canary note")
+                applied_before = list(APPLIED)
+                executed = execute_approved_action(staged["approval_id"])
+                try:
+                    execute_approved_action(staged["approval_id"])
+                    replay = ""
+                except Exception as exc:
+                    replay = str(exc)
+
+            print("RESULT:" + json.dumps({{
+                "staged_nothing": applied_before == [],
+                "recorded": executed.get("recorded"),
+                "rows": len(APPLIED),
+                "status": executed.get("status"),
+                "replay_refused": replay != "",
+            }}))
+            ''',
+            self.root,
+            capability_mode="write_enabled",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = payload_of(result)
+        self.assertTrue(payload["staged_nothing"], "prepare must not apply anything")
+        self.assertEqual(payload["recorded"], "canary note")
+        self.assertEqual(payload["rows"], 1)
+        self.assertEqual(payload["status"], "done")
+        self.assertTrue(payload["replay_refused"], "a consumed approval must not run twice")
 
 
 class ExtensionIntegrationSeamTests(unittest.TestCase):
