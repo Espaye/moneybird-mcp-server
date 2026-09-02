@@ -44,7 +44,8 @@ Growing this surface is a compatible change; removing or renaming anything in
 """
 from __future__ import annotations
 
-from typing import Any
+import importlib
+from typing import TYPE_CHECKING, Any
 
 from ._registration import Registration
 from .config import (
@@ -54,20 +55,59 @@ from .config import (
     MoneybirdError,
 )
 from .formatting import duplicate_fingerprint
-from .tools._params import ApprovalId, MoneybirdId
-from .tools._registry import mcp as _mcp
-from .tools._writes import run_approved_write, stage_write
 from .write_contracts import WriteSpec, register_write_spec
 
 #: Version of this seam. Bumped when something is removed or changes meaning;
 #: additions do not bump it.
 API_VERSION = 1
 
-#: Register an MCP tool. This is the wrapped decorator the built-in tools use:
-#: it installs the error translation that reports a ``MoneybirdError`` as a
-#: handled refusal rather than a server crash, and it records the tool name
-#: against the registering distribution so two of them cannot claim one name.
-tool = _mcp.tool
+# Nothing under `moneybird_mcp.tools` may be imported while this module is
+# executing. Importing any submodule of that package runs its `__init__`, which
+# loads installed extensions -- and an extension's first line is
+# `from moneybird_mcp.api import ...`, reaching this module while it is still
+# half-built. A process that imported the seam before the tools package would
+# then fail on any machine with an extension installed, which is to say: on
+# exactly the installations this seam exists to serve.
+#
+# So every name that lives behind the tools package is resolved on use instead.
+# By then the package is fully imported, or importing it is the right thing to do.
+_LAZY_EXPORTS = {
+    "ApprovalId": ("moneybird_mcp.tools._params", "ApprovalId"),
+    "MoneybirdId": ("moneybird_mcp.tools._params", "MoneybirdId"),
+    "run_approved_write": ("moneybird_mcp.tools._writes", "run_approved_write"),
+    "stage_write": ("moneybird_mcp.tools._writes", "stage_write"),
+}
+
+if TYPE_CHECKING:  # never executed: the names above exist for readers and linters
+    from .tools._params import ApprovalId, MoneybirdId
+    from .tools._writes import run_approved_write, stage_write
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve the tools-backed names on first use (PEP 562)."""
+    try:
+        module_name, attribute = _LAZY_EXPORTS[name]
+    except KeyError:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+    return getattr(importlib.import_module(module_name), attribute)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
+
+
+def tool(*args: Any, **kwargs: Any) -> Any:
+    """Register an MCP tool.
+
+    Forwards to the wrapped decorator the built-in tools use, which installs the
+    error translation that reports a ``MoneybirdError`` as a handled refusal
+    rather than a server crash, and records the tool name against the registering
+    distribution so two of them cannot claim one name. Both the bare
+    ``@tool`` and the parametrised ``@tool(...)`` forms work.
+    """
+    from .tools._registry import mcp
+
+    return mcp.tool(*args, **kwargs)
 
 
 def get_client() -> Any:
