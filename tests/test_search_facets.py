@@ -44,7 +44,7 @@ PURCHASE = {
     "date": "2026-06-02",
     "state": "late",
     "total_price_incl_tax": "242.00",
-    "contact": {"id": "88", "company_name": "Vitens NV"},
+    "contact": {"id": "88", "company_name": "Aquabron NV"},
     "details": [{"description": "Water"}],
 }
 
@@ -85,15 +85,15 @@ class FacetTests(unittest.TestCase):
 MUTATION = {
     "id": "7001",
     "date": "2026-02-02",
-    "amount": "-1818.59",
+    "amount": "-1234.56",
     "state": "processed",
     "message": "",
-    "contra_account_name": "Interpolis",
-    "contra_account_number": "NL60RABO0300281390",
+    "contra_account_name": "Zeker Verzekeringen",
+    "contra_account_number": "NL00BANK0123456789",
     "sepa_fields": {
-        "eref": "052756910762",
-        "remi": "ZIB polis 350259527 Periode 01.02.2026 - 01.05.2026 Interpolis",
-        "sref": "c469e376-ba32-4b6c-a829-1af7887e1a8f",
+        "eref": "000000000333",
+        "remi": "POL polis 000000000111 Periode 01.02.2026 - 01.05.2026 Zeker Verzekeringen",
+        "sref": "feedface-0000-4000-8000-000000000000",
     },
 }
 
@@ -103,20 +103,20 @@ class BankDescriptionTests(unittest.TestCase):
         record = financial_mutation_search_record(MUTATION, "1")
         self.assertEqual(
             record["description"],
-            "ZIB polis 350259527 Periode 01.02.2026 - 01.05.2026 Interpolis",
+            "POL polis 000000000111 Periode 01.02.2026 - 01.05.2026 Zeker Verzekeringen",
         )
         self.assertIn("description", search_hit(record))
 
     def test_policy_number_and_period_are_matchable(self):
         text = financial_mutation_search_record(MUTATION, "1")["search_text"]
-        for token in ("zib", "350259527", "01.05.2026"):
+        for token in ("pol", "000000000111", "01.05.2026"):
             self.assertIn(token, text)
 
     def test_end_to_end_reference_matches_but_scheme_uuid_does_not(self):
         text = financial_mutation_search_record(MUTATION, "1")["search_text"]
-        self.assertIn("052756910762", text)
+        self.assertIn("000000000333", text)
         # sref is opaque scheme plumbing; indexing it would only add noise.
-        self.assertNotIn("c469e376", text)
+        self.assertNotIn("feedface", text)
 
     def test_message_is_the_fallback_when_a_feed_has_no_sepa_fields(self):
         self.assertEqual(

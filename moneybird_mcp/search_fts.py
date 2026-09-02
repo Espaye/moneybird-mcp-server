@@ -140,8 +140,8 @@ def _match_expressions(query: str) -> list[str]:
     """FTS5 MATCH expressions to try in order: all words first, then any word.
 
     Every token matches as a prefix. The AND form keeps multi-word queries
-    precise; the OR form is the recall fallback so e.g. 'vitens water' still
-    surfaces Vitens records when no record contains both words.
+    precise; the OR form is the recall fallback so e.g. 'aquabron water' still
+    surfaces Aquabron records when no record contains both words.
     """
     tokens = re.findall(r"[^\s\"'()*:^]+", query)
     if not tokens:
