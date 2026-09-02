@@ -3,6 +3,19 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning while allowing pre-1.0 breaking changes.
 
+### Fixed
+
+- **A renamed ledger account no longer keeps its old name in previews.** Creating and
+  removing a ledger account both dropped the cached reference data immediately;
+  updating one did not. Since `list_ledger_accounts` is cached for ten minutes and is
+  resolved by every `prepare_*`, every categorisation and both ledger-labelled reports,
+  a rename or RGS correction could be followed by up to ten minutes of previews
+  confidently showing the old name — the more misleading because the update's own
+  verification correctly reported the new one. `prepare_update_ledger_account` now
+  invalidates the same cache at the same point in the flow the create and delete paths
+  use: as soon as Moneybird accepts the write, before anything is read back, so a write
+  that landed but failed to verify also stops being served from a stale snapshot.
+
 ## Unreleased
 
 ### Added
