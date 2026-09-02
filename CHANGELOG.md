@@ -3,22 +3,26 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning while allowing pre-1.0 breaking changes.
 
-### Fixed
-
-- **A renamed ledger account no longer keeps its old name in previews.** Creating and
-  removing a ledger account both dropped the cached reference data immediately;
-  updating one did not. Since `list_ledger_accounts` is cached for ten minutes and is
-  resolved by every `prepare_*`, every categorisation and both ledger-labelled reports,
-  a rename or RGS correction could be followed by up to ten minutes of previews
-  confidently showing the old name — the more misleading because the update's own
-  verification correctly reported the new one. `prepare_update_ledger_account` now
-  invalidates the same cache at the same point in the flow the create and delete paths
-  use: as soon as Moneybird accepts the write, before anything is read back, so a write
-  that landed but failed to verify also stops being served from a stale snapshot.
-
 ## Unreleased
 
 ### Added
+
+- **The extension seam carries what a real out-of-tree tool package needs.**
+  `moneybird_mcp.api` exposed the registration and guarded-write entry points but not
+  the vocabulary around them, so an extension defining its own tools had no supported
+  way to reach the validated parameter types, exact-decimal money parsing, report
+  period helpers or journal/document payload builders the built-in tools use — the only
+  routes were a private module path or a copy that would drift. Those are re-exported
+  now, as the same objects rather than equivalents. `provider_request` is new: one
+  transport primitive for endpoints this distribution does not wrap. The built-in
+  client covers what the built-in tools need and will never cover every endpoint an
+  extension might, and a typed method per endpoint would mean advertising capabilities
+  this distribution does not implement. The path is confined to the current
+  administration exactly as every built-in call is; the shared per-IP rate budget,
+  retry policy and error mapping still apply; and retry-safety still defaults to the
+  transport's own judgement rather than the caller's. It is a seam function and not a
+  client method, so the client's surface still describes only what this distribution
+  supports. Adding names to the seam is a compatible change; `API_VERSION` stays 1.
 
 - **Ledger-account taxonomy corrections and empty test-ledger cleanup.**
   `prepare_update_ledger_account` sets an existing Dutch RGS 3.5 code, and optionally a new
@@ -83,6 +87,18 @@ versioning while allowing pre-1.0 breaking changes.
   the request count; a skipped period says so rather than implying it found nothing.
 
 ### Fixed
+
+- **A renamed ledger account no longer keeps its old name in previews.** Creating and
+  removing a ledger account both dropped the cached reference data immediately;
+  updating one did not. Since `list_ledger_accounts` is cached for ten minutes and is
+  resolved by every `prepare_*`, every categorisation and both ledger-labelled reports,
+  a rename or RGS correction could be followed by up to ten minutes of previews
+  confidently showing the old name — the more misleading because the update's own
+  verification correctly reported the new one. `prepare_update_ledger_account` now
+  invalidates the same cache at the same point in the flow the create and delete paths
+  use: as soon as Moneybird accepts the write, before anything is read back, so a write
+  that landed but failed to verify also stops being served from a stale snapshot.
+
 
 - **A bare month period (`202601`) was rejected by every collection endpoint.** Moneybird
   accepts it on reports but answers list routes with HTTP 400 (`Period is invalid`, or
