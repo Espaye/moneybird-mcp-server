@@ -18,8 +18,11 @@ Three properties make this safe to keep this simple:
   process-local cache. Local and single-user deployments own their own token.
 * **The TTL is short and bounded**, so a stale entry self-heals without any
   invalidation path having to be complete. ``invalidate_administration`` exists
-  for the one write that predictably changes reference data (creating a ledger
-  account); it is an optimisation, not a correctness requirement.
+  for the writes that predictably change reference data -- creating, updating and
+  removing a ledger account -- and each calls it as soon as Moneybird accepts the
+  write, before reading anything back. It is an optimisation, not a correctness
+  requirement, but an incomplete one is still a ten-minute window of confidently
+  wrong ledger names.
 
 Set ``MONEYBIRD_REFERENCE_CACHE_SECONDS=0`` to turn the whole thing off.
 """

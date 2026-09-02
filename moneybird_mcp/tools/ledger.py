@@ -494,6 +494,14 @@ def _execute_update_ledger_account(
         payload.get("ledger_account") or None,
         rgs_code=str(payload["rgs_code"]),
     )
+    # A rename or RGS change makes the cached reference list wrong for every
+    # later read and preview, so drop it as soon as the provider accepted the
+    # write -- not after verification, because a write that landed but failed to
+    # verify is exactly when the next read must not come from cache. Same
+    # placement as the create and delete flows.
+    reference_cache.invalidate_administration(
+        getattr(client, "administration_id", None)
+    )
     mark_write_verifying()
     record = client.get_ledger_account(ledger_account_id)
     after = _ledger_account_occurrence(record)
