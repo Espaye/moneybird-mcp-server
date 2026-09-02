@@ -156,7 +156,7 @@ class ClientEndpointCoverageTests(unittest.TestCase):
                 )
 
     def test_the_scope_that_only_settings_can_satisfy_is_what_we_claim(self) -> None:
-        """Pins the four settings-only endpoints named in the module docstring."""
+        """Pins the settings-only endpoints named in the module docstring."""
         others = set(oauth_scopes.KNOWN_SCOPES) - {"settings"}
         settings_only = {
             key
@@ -173,6 +173,8 @@ class ClientEndpointCoverageTests(unittest.TestCase):
                 "GET /products/identifier/*",
                 "GET /projects",
                 "POST /ledger_accounts",
+                "PATCH /ledger_accounts/*",
+                "DELETE /ledger_accounts/*",
             },
         )
 

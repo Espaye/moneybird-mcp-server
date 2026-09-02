@@ -105,6 +105,12 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "canonical complete invoice payload",
         "match returned id or exact draft signature",
     ),
+    "delete_empty_ledger_account": _spec(
+        "complete ledger occurrence, exact creation date/name, zero journal entries since creation, and zero asset references",
+        "independent ledger GET proves HTTP 404 deletion or provider-documented inactive state with invariant identity",
+        "exact ledger occurrence plus complete empty-state and test-provenance evidence",
+        "re-read the exact id; accept only 404 or inactive with all identity fields unchanged",
+    ),
     "link_bank_mutation_booking": _spec(
         "mutation occurrence/booking state and exact target occurrence",
         "independent GET proves one new matching booking id/type and amount-open delta",
@@ -180,6 +186,12 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "independent GET proves that exact booking id is absent",
         "mutation occurrence plus booking id",
         "inspect the mutation and adopt/absent/manual",
+    ),
+    "update_ledger_account": _spec(
+        "complete ledger identity, taxonomy, hierarchy, active state, and updated_at occurrence",
+        "independent GET proves the exact RGS/name change and all other controlled fields unchanged",
+        "ledger occurrence plus exact target RGS/name",
+        "re-read the exact ledger id and compare target taxonomy plus invariant fields",
     ),
     "update_contact": _spec(
         "contact version/updated_at and targeted fields",

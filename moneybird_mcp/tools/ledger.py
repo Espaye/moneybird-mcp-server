@@ -1,6 +1,7 @@
 """Ledger writes: ledger accounts, general journal documents, document-line reclassification."""
 from __future__ import annotations
 
+from datetime import date as date_type
 from typing import Annotated, Any
 
 from pydantic import Field
@@ -11,6 +12,7 @@ from ..config import (
     PREPARE_ANNOTATIONS,
     READ_ONLY_ANNOTATIONS,
     MoneybirdError,
+    MoneybirdHTTPError,
 )
 from ..formatting import (
     clean_dict,
@@ -183,6 +185,361 @@ def create_ledger_account_from_approval(approval_id: ApprovalId) -> dict[str, An
     client = ctx.get_client()
     return run_approved_write(
         client, approval_id, "create_ledger_account", _execute_create_ledger_account
+    )
+
+
+def _ledger_account_occurrence(record: dict[str, Any]) -> dict[str, Any]:
+    taxonomy = record.get("taxonomy_item") or {}
+    return {
+        "id": str(record.get("id") or ""),
+        "name": record.get("name"),
+        "account_type": record.get("account_type"),
+        "account_id": str(record.get("account_id") or ""),
+        "parent_id": str(record.get("parent_id") or ""),
+        "active": bool(record.get("active", True)),
+        "rgs_code": str(taxonomy.get("code") or ""),
+        "created_at": str(record.get("created_at") or ""),
+        "updated_at": str(record.get("updated_at") or ""),
+    }
+
+
+def _ledger_account_active_months(record: dict[str, Any]) -> list[str]:
+    created_at = str(record.get("created_at") or "")
+    try:
+        cursor = date_type.fromisoformat(created_at[:10]).replace(day=1)
+    except ValueError as exc:
+        raise MoneybirdError(
+            "Ledger account has no valid created_at date; refuse destructive cleanup."
+        ) from exc
+    end = date_type.today().replace(day=1)
+    periods: list[str] = []
+    while cursor <= end:
+        periods.append(f"{cursor.year:04d}{cursor.month:02d}")
+        if len(periods) > 12:
+            raise MoneybirdError(
+                "Empty-ledger deletion supports at most 12 months of complete booking "
+                "evidence; audit this older account separately."
+            )
+        cursor = (
+            cursor.replace(year=cursor.year + 1, month=1)
+            if cursor.month == 12
+            else cursor.replace(month=cursor.month + 1)
+        )
+    return periods
+
+
+def _empty_ledger_account_evidence(
+    client: Any, record: dict[str, Any]
+) -> dict[str, Any]:
+    ledger_account_id = str(record.get("id") or "")
+    referencing_assets = [
+        {
+            "id": str(asset.get("id") or ""),
+            "name": asset.get("name"),
+        }
+        for asset in client.list_all_assets(active=False)
+        if str(asset.get("ledger_account_id") or "") == ledger_account_id
+    ]
+    periods = _ledger_account_active_months(record)
+    entries_by_period: dict[str, list[dict[str, Any]]] = {}
+    for period in periods:
+        entries = client.get_report(
+            "journal_entries",
+            period=period,
+            page=1,
+            extra_query={"ledger_account_id": ledger_account_id},
+        )
+        entries_by_period[period] = list(entries or [])
+    entry_count = sum(len(items) for items in entries_by_period.values())
+    return {
+        "periods_checked": periods,
+        "entries_by_period": entries_by_period,
+        "entry_count": entry_count,
+        "balance": "0.00" if entry_count == 0 else None,
+        "balance_is_exact_zero": entry_count == 0,
+        "referencing_assets": referencing_assets,
+        "referencing_asset_count": len(referencing_assets),
+    }
+
+
+@mcp.tool(annotations=PREPARE_ANNOTATIONS)
+def prepare_delete_empty_ledger_account(
+    ledger_account_id: Annotated[
+        str, Field(description="Exact Moneybird ledger-account id to remove or deactivate.")
+    ],
+    expected_name: Annotated[
+        str, Field(description="Exact current account name, required as an identity guard.")
+    ],
+    expected_created_date: DateString,
+    test_provenance: Annotated[
+        str,
+        Field(description="Audit evidence explaining why this account is test-only."),
+    ],
+) -> dict[str, Any]:
+    """Preview provider-supported removal of an empty, recently created test ledger.
+
+    The preflight proves zero journal entries over every month since creation and no
+    asset references. Moneybird may physically delete or merely deactivate a ledger;
+    either outcome is read back independently and reported exactly.
+    """
+    client = ctx.get_client()
+    record = client.get_ledger_account(ledger_account_id.strip())
+    occurrence = _ledger_account_occurrence(record)
+    if str(record.get("name") or "") != expected_name.strip():
+        raise MoneybirdError("Ledger account name does not match expected_name.")
+    if str(record.get("created_at") or "")[:10] != expected_created_date:
+        raise MoneybirdError(
+            "Ledger account creation date does not match expected_created_date."
+        )
+    if not test_provenance.strip():
+        raise MoneybirdError("test_provenance is required.")
+    evidence = _empty_ledger_account_evidence(client, record)
+    if evidence["referencing_asset_count"]:
+        raise MoneybirdError("Ledger account is still referenced by one or more assets.")
+    if evidence["entry_count"]:
+        raise MoneybirdError(
+            "Ledger account has journal entries and is not eligible for empty cleanup."
+        )
+    payload = {
+        "ledger_account_occurrence": occurrence,
+        "evidence": evidence,
+        "expected_created_date": expected_created_date,
+        "test_provenance": test_provenance.strip(),
+    }
+    return stage_write(
+        "delete_empty_ledger_account",
+        summary=(
+            f"Remove or deactivate empty test ledger '{record.get('name')}' "
+            f"({occurrence['id']})"
+        ),
+        payload=payload,
+        preview={
+            "ledger_account": record,
+            "eligibility": {
+                **evidence,
+                "created_date_matches": True,
+                "test_provenance": test_provenance.strip(),
+            },
+            "planned_api_actions": [
+                "GET /ledger_accounts/{id} precondition",
+                "GET /assets complete reference check",
+                "GET /reports/journal_entries for every month since creation",
+                "DELETE /ledger_accounts/{id}",
+                "GET /ledger_accounts/{id} independent removal/deactivation read-back",
+            ],
+        },
+        fingerprint=duplicate_fingerprint("delete_empty_ledger_account", payload),
+    )
+
+
+def _execute_delete_empty_ledger_account(
+    client: Any, payload: dict[str, Any]
+) -> dict[str, Any]:
+    occurrence = payload["ledger_account_occurrence"]
+    ledger_account_id = str(occurrence["id"])
+    current = client.get_ledger_account(ledger_account_id)
+    if _ledger_account_occurrence(current) != occurrence:
+        return {
+            "_status": "precondition_failed",
+            "_audit_result": "failed_pre_write",
+            "_audit": {"ledger_account_id": ledger_account_id},
+            "error": "The ledger account changed after preview; no write was sent.",
+        }
+    evidence = _empty_ledger_account_evidence(client, current)
+    if evidence != payload["evidence"]:
+        return {
+            "_status": "precondition_failed",
+            "_audit_result": "failed_pre_write",
+            "_audit": {"ledger_account_id": ledger_account_id},
+            "error": "Empty-ledger evidence changed after preview; no write was sent.",
+        }
+
+    mark_write_dispatch_started()
+    client.delete_ledger_account(ledger_account_id)
+    reference_cache.invalidate_administration(
+        getattr(client, "administration_id", None)
+    )
+    mark_write_verifying()
+    try:
+        after = client.get_ledger_account(ledger_account_id)
+    except MoneybirdHTTPError as exc:
+        if exc.status_code != 404:
+            raise
+        outcome = "deleted"
+        after_summary = None
+        fully_verified = True
+    else:
+        after_occurrence = _ledger_account_occurrence(after)
+        invariant_keys = (
+            "id",
+            "name",
+            "account_type",
+            "account_id",
+            "parent_id",
+            "rgs_code",
+            "created_at",
+        )
+        invariants_match = all(
+            after_occurrence[key] == occurrence[key] for key in invariant_keys
+        )
+        fully_verified = invariants_match and not after_occurrence["active"]
+        outcome = "deactivated" if fully_verified else "verification_failed"
+        after_summary = compact_ledger_account_summary(after)
+    return {
+        "_status": outcome,
+        "_audit_result": "success" if fully_verified else "verification_failed",
+        "_audit": {
+            "ledger_account_id": ledger_account_id,
+            "name": occurrence.get("name"),
+            "outcome": outcome,
+            "fully_verified": fully_verified,
+        },
+        "ledger_account": after_summary,
+        "verification": {
+            "independent_post_read": True,
+            "provider_outcome": outcome,
+            "asset_reference_count_before_delete": evidence[
+                "referencing_asset_count"
+            ],
+            "journal_entry_count_before_delete": evidence["entry_count"],
+            "balance_before_delete": evidence["balance"],
+            "fully_verified": fully_verified,
+        },
+    }
+
+
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point.
+def delete_empty_ledger_account_from_approval(
+    approval_id: ApprovalId,
+) -> dict[str, Any]:
+    """Execute one approved empty test-ledger cleanup."""
+    return run_approved_write(
+        ctx.get_client(),
+        approval_id,
+        "delete_empty_ledger_account",
+        _execute_delete_empty_ledger_account,
+    )
+
+
+@mcp.tool(annotations=PREPARE_ANNOTATIONS)
+def prepare_update_ledger_account(
+    ledger_account_id: Annotated[
+        str, Field(description="Exact Moneybird ledger-account id to update.")
+    ],
+    rgs_code: Annotated[
+        str,
+        Field(
+            description="Existing Dutch RGS 3.5 code to assign, for example BMvaBegVvp."
+        ),
+    ],
+    name: Annotated[
+        str, Field(description="Optional replacement name; leave empty to preserve it.")
+    ] = "",
+) -> dict[str, Any]:
+    """Preview a guarded ledger-account taxonomy/name correction."""
+    if not ledger_account_id.strip():
+        raise MoneybirdError("ledger_account_id is required.")
+    if not rgs_code.strip():
+        raise MoneybirdError("rgs_code is required.")
+    client = ctx.get_client()
+    current = client.get_ledger_account(ledger_account_id.strip())
+    occurrence = _ledger_account_occurrence(current)
+    ledger_patch = {"name": name.strip()} if name.strip() else {}
+    payload = {
+        "ledger_account_occurrence": occurrence,
+        "ledger_account": ledger_patch,
+        "rgs_code": rgs_code.strip(),
+    }
+    return stage_write(
+        "update_ledger_account",
+        summary=(
+            f"Update ledger account '{current.get('name')}' RGS code from "
+            f"{occurrence['rgs_code'] or '(missing)'} to {rgs_code.strip()}"
+        ),
+        payload=payload,
+        preview={
+            "before": compact_ledger_account_summary(current),
+            "changes": {
+                "rgs_code": rgs_code.strip(),
+                **({"name": name.strip()} if name.strip() else {}),
+            },
+            "planned_api_actions": [
+                "GET /ledger_accounts/{id} precondition",
+                "PATCH /ledger_accounts/{id}",
+                "GET /ledger_accounts/{id} read-after-write",
+            ],
+        },
+        fingerprint=duplicate_fingerprint("update_ledger_account", payload),
+    )
+
+
+def _execute_update_ledger_account(
+    client: Any, payload: dict[str, Any]
+) -> dict[str, Any]:
+    occurrence = payload["ledger_account_occurrence"]
+    ledger_account_id = str(occurrence["id"])
+    before = client.get_ledger_account(ledger_account_id)
+    if _ledger_account_occurrence(before) != occurrence:
+        return {
+            "_status": "precondition_failed",
+            "_audit_result": "failed_pre_write",
+            "_audit": {"ledger_account_id": ledger_account_id},
+            "error": "The ledger account changed after preview; no write was sent.",
+        }
+
+    mark_write_dispatch_started()
+    client.update_ledger_account(
+        ledger_account_id,
+        payload.get("ledger_account") or None,
+        rgs_code=str(payload["rgs_code"]),
+    )
+    mark_write_verifying()
+    record = client.get_ledger_account(ledger_account_id)
+    after = _ledger_account_occurrence(record)
+    expected_name = (payload.get("ledger_account") or {}).get(
+        "name", occurrence["name"]
+    )
+    controlled_matches = (
+        after["id"] == ledger_account_id
+        and after["name"] == expected_name
+        and after["rgs_code"] == str(payload["rgs_code"])
+    )
+    unchanged_fields = {
+        key: after[key] == occurrence[key]
+        for key in ("account_type", "account_id", "parent_id", "active")
+    }
+    fully_verified = controlled_matches and all(unchanged_fields.values())
+    return {
+        "_status": "updated" if fully_verified else "verification_failed",
+        "_audit_result": "success" if fully_verified else "verification_failed",
+        "_audit": {
+            "ledger_account_id": ledger_account_id,
+            "rgs_code": after["rgs_code"],
+            "fully_verified": fully_verified,
+        },
+        "ledger_account": compact_ledger_account_summary(record),
+        "verification": {
+            "independent_post_read": True,
+            "rgs_code_expected": str(payload["rgs_code"]),
+            "rgs_code_actual": after["rgs_code"],
+            "name_expected": expected_name,
+            "name_actual": after["name"],
+            "unchanged_fields": unchanged_fields,
+            "fully_verified": fully_verified,
+        },
+    }
+
+
+# Not registered as an MCP tool: every approved action executes through the single
+# annotated execute_approved_action entry point.
+def update_ledger_account_from_approval(approval_id: ApprovalId) -> dict[str, Any]:
+    """Execute one explicitly approved ledger-account taxonomy/name correction."""
+    return run_approved_write(
+        ctx.get_client(),
+        approval_id,
+        "update_ledger_account",
+        _execute_update_ledger_account,
     )
 
 

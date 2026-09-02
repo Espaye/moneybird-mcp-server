@@ -54,6 +54,7 @@ In compact mode these stay visible without a search step:
 ### Sales
 
 - `list_sales_invoices`
+- `get_sales_invoices_by_ids` (up to 100 complete invoices in one call)
 - `audit_invoice_delivery_settings`
 - `audit_recent_sales_invoice_send_methods`
 - `list_estimates`
@@ -136,7 +137,9 @@ Write families include:
 - contacts: create, update, archive, and delivery method changes;
 - sales: draft, update, batch create, schedule, send, pause, resume, and credit invoices;
 - payments: register payments on supported invoices and documents;
-- ledger and journals: create ledger accounts and general journal documents;
+- ledger and journals: create ledger accounts, correct a ledger account's RGS
+  taxonomy or name, remove an empty recently created test ledger, and create
+  general journal documents;
 - purchase documents: line reclassification and reconciliation;
 - banking: link, unlink, and reclassify mutation bookings; exact multi-mutation purchase
   settlements use `prepare_settle_purchase_invoice_from_bank_mutations` for one preview and

@@ -7,6 +7,30 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Added
 
+- **Ledger-account taxonomy corrections and empty test-ledger cleanup.**
+  `prepare_update_ledger_account` sets an existing Dutch RGS 3.5 code, and optionally a new
+  name, on one ledger account. The preview pins the account's complete identity, taxonomy,
+  hierarchy and active state; execution re-reads it independently and reports both the
+  requested change and every field that had to stay the same. A taxonomy-only change still
+  sends the `ledger_account` wrapper the provider requires, because Moneybird answers an
+  RGS-only body with HTTP 400 despite its own schema marking the wrapper optional.
+  `prepare_delete_empty_ledger_account` removes a ledger account created recently for
+  testing, and refuses to preview one that is not provably empty: it proves zero journal
+  entries for every month since creation and zero assets still referencing the account, and
+  additionally requires the exact current name, the exact creation date and a written
+  provenance note. Moneybird may physically delete a ledger account or merely deactivate it;
+  both outcomes are read back independently and reported as what actually happened, and the
+  evidence is re-proved at execution time so an account that stopped being empty between
+  preview and approval is never deleted.
+
+- **`get_sales_invoices_by_ids` fetches up to 100 complete sales invoices in one call.**
+  Joining payments, details or versions across a set of invoices previously cost one
+  `fetch` per invoice, which is the fastest way to spend the per-IP rate-limit budget. The
+  tool uses Moneybird's typed synchronization endpoint, returns records in the order the
+  caller asked for them, and reports ids the provider did not return under `missing_ids`
+  rather than silently shortening the result. It interprets nothing: records are passed
+  through exactly as received.
+
 - **Linking a payment now finishes an unbooked document.** A purchase invoice or receipt in
   state `new` is not booked by a payment link: the money settles while the document stays
   unbooked and keeps surfacing in `review_purchase_invoices` as "not booked yet". The

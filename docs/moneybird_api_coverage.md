@@ -11,8 +11,8 @@ operation's `Required scope(s)` description text rather than its `security` arra
 because that array is the same flat list whether the scopes are needed *together* or any
 one of them suffices. See [Moneybird OAuth](oauth.md) for what this server requests.
 
-> 296 operations in the API: **81** with a dedicated tool or flow, **52** readable
-> through the generic `moneybird_request` escape hatch, **163** not exposed by this server.
+> 296 operations in the API: **83** with a dedicated tool or flow, **52** readable
+> through the generic `moneybird_request` escape hatch, **161** not exposed by this server.
 
 Legend: ✅ dedicated tool/flow · 🔎 reachable read-only via `moneybird_request` (no dedicated
 tool) · — not exposed (writes are only ever exposed as an explicit `prepare_*` preview
@@ -285,9 +285,9 @@ per-IP scope must be considered whenever several processes use the same egress a
 |---|---|---|---|
 | GET | `/ledger_accounts` | List all ledger accounts of an administration | ✅ `list_ledger_accounts` |
 | POST | `/ledger_accounts` | Creates a new ledger account | ✅ `prepare_create_ledger_account` |
-| DELETE | `/ledger_accounts/{id}` | Deletes a ledger account | — |
+| DELETE | `/ledger_accounts/{id}` | Deletes a ledger account | ✅ `prepare_delete_empty_ledger_account` |
 | GET | `/ledger_accounts/{id}` | Returns information about a ledger account | ✅ `fetch("ledger_account:<id>")` |
-| PATCH | `/ledger_accounts/{id}` | Updates a ledger account | — |
+| PATCH | `/ledger_accounts/{id}` | Updates a ledger account | ✅ `prepare_update_ledger_account` |
 
 ## Payments
 

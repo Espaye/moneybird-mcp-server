@@ -544,8 +544,8 @@ class ExtensionEndToEndTests(unittest.TestCase):
         self.assertTrue(self.payload["core_tool_still_visible"])
 
     def test_the_surface_grows_by_exactly_what_the_extension_added(self) -> None:
-        self.assertEqual(self.payload["tool_count"], 60)
-        self.assertEqual(self.payload["spec_count"], 25)
+        self.assertEqual(self.payload["tool_count"], 63)
+        self.assertEqual(self.payload["spec_count"], 27)
         self.assertEqual(self.payload["spec_origins"], [CORE_ORIGIN, DISTRIBUTION])
 
     def test_validation_sealed_every_registry(self) -> None:

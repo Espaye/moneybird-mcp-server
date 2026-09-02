@@ -27,7 +27,9 @@ from .contacts import (
 from .ledger import (
     create_general_journal_document_from_approval,
     create_ledger_account_from_approval,
+    delete_empty_ledger_account_from_approval,
     reclassify_document_lines_from_approval,
+    update_ledger_account_from_approval,
     vat_settlement_journal_from_approval,
 )
 from .payments import register_payment_from_approval
@@ -67,6 +69,7 @@ _CORE_APPROVAL_EXECUTORS: dict[str, ApprovalExecutor] = {
     ),
     "create_ledger_account": create_ledger_account_from_approval,
     "create_sales_invoice_draft": create_sales_invoice_draft_from_approval,
+    "delete_empty_ledger_account": delete_empty_ledger_account_from_approval,
     "link_bank_mutation_booking": link_bank_mutation_booking_from_approval,
     "pause_sales_invoice_workflow": pause_sales_invoice_workflow_from_approval,
     "reclassify_bank_mutation_bookings": (
@@ -86,6 +89,7 @@ _CORE_APPROVAL_EXECUTORS: dict[str, ApprovalExecutor] = {
     "settle_vat_period": vat_settlement_journal_from_approval,
     "unlink_bank_mutation_booking": unlink_bank_mutation_booking_from_approval,
     "update_contact": update_contact_from_approval,
+    "update_ledger_account": update_ledger_account_from_approval,
 }
 
 APPROVAL_EXECUTOR_REGISTRY = Registry("approval executor")
