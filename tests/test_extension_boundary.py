@@ -156,6 +156,11 @@ def run_with_extensions(
     env["PYTHONPATH"] = os.pathsep.join([str(ROOT), *(str(root) for root in roots)])
     env["MONEYBIRD_MCP_DATA_DIR"] = tempfile.mkdtemp(prefix="moneybird_boundary_")
     env["MONEYBIRD_CAPABILITY_MODE"] = capability_mode
+    # Pin the credential mode too. A developer whose shell selects
+    # hosted_request_only would otherwise see the guarded-write probe refused
+    # before the executor ran, and the failure would point at the boundary
+    # rather than at the environment that caused it.
+    env["MONEYBIRD_CREDENTIAL_MODE"] = "local"
     env.pop("MONEYBIRD_TOOL_DISCOVERY", None)
     return subprocess.run(
         [sys.executable, "-c", textwrap.dedent(script)],
