@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Iterable
 
-from ._registration import Registry
+from ._registration import Registry, registering_as_core
 from .config import MoneybirdError
 from .formatting import money_decimal
 
@@ -203,8 +203,13 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
 
 
 WRITE_SPEC_REGISTRY = Registry("write spec")
-for _action, _write_spec in _CORE_WRITE_SPECS.items():
-    WRITE_SPEC_REGISTRY.register(_action, _write_spec)
+# Stated, not defaulted. This table is populated the moment this module is
+# imported, which an extension does before anything else on its first line, so
+# the credit for it has to come from here rather than from an ambient default
+# that would also cover whatever the extension registers next.
+with registering_as_core():
+    for _action, _write_spec in _CORE_WRITE_SPECS.items():
+        WRITE_SPEC_REGISTRY.register(_action, _write_spec)
 
 #: Live read-only view. Existing callers read it exactly as they read the dict it
 #: replaced; writing to it raises, which is the point.

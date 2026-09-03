@@ -938,5 +938,244 @@ class ProviderRequestTests(unittest.TestCase):
         self.assertFalse(hasattr(MoneybirdClient, "provider_request"))
 
 
+# --------------------------------------------------------------------------
+# T7 -- the registration lifecycle, which is the only door
+# --------------------------------------------------------------------------
+
+#: A capability module that registers without ever reaching the tools package.
+#:
+#: Everything it imports from the seam resolves eagerly, so importing it does not
+#: pull the loader in behind it. That is what makes it the sharp case: nothing
+#: fails on its own, and before the lifecycle was enforced its guarded write was
+#: filed under this distribution's name.
+EAGER_MODULE = """
+from moneybird_mcp.api import WriteSpec, register_write_spec
+
+register_write_spec(
+    "eager_action",
+    WriteSpec(1, "eager pre", "eager verifier", "eager idempotency", "eager reconciliation"),
+)
+"""
+
+#: An entry-point module that starts the loader again from inside it.
+REENTRANT_MODULE = """
+from moneybird_mcp.tools._extensions import load_extensions
+
+load_extensions()
+"""
+
+
+class RegistrationLifecycleTests(unittest.TestCase):
+    """T7: registering is possible exactly inside the loader's lifecycle.
+
+    Three ways in, and only the first is one: the installed entry point, a
+    capability module imported directly before the tools package, and the loader
+    re-entered from underneath. The last two used to fail confusingly or not at
+    all -- an ``AttributeError`` about a circular import, or a silent
+    registration credited to whoever the default happened to name. Both are
+    refused here, before anything is registered.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="moneybird_lifecycle_")
+        self.addCleanup(self._tmp.cleanup)
+        self.root = pathlib.Path(self._tmp.name)
+
+    # -- the supported way in ------------------------------------------------
+
+    def test_the_entry_point_import_registers_and_credits_both_sides(self) -> None:
+        """The normal startup, unchanged: core credited to core, extension to it."""
+        install_extension(self.root, CANARY_MODULE)
+        result = run_with_extensions(
+            f'''
+            import json
+
+            import moneybird_mcp.tools  # the entry point's own import order
+            from moneybird_mcp._registration import CORE_ORIGIN, current_origin
+            from moneybird_mcp.tools._registry import TOOL_REGISTRY
+            from moneybird_mcp.tools.approvals import APPROVAL_EXECUTOR_REGISTRY
+            from moneybird_mcp.write_contracts import WRITE_SPEC_REGISTRY
+
+            print("RESULT:" + json.dumps({{
+                "tool_origin": TOOL_REGISTRY.origin_of("{TOOL_NAME}"),
+                "spec_origin": WRITE_SPEC_REGISTRY.origin_of("{ACTION}"),
+                "executor_origin": APPROVAL_EXECUTOR_REGISTRY.origin_of("{ACTION}"),
+                "a_core_tool_origin": TOOL_REGISTRY.origin_of("execute_approved_action"),
+                "a_core_spec_origin": WRITE_SPEC_REGISTRY.origin_of("update_contact"),
+                "core_origin": CORE_ORIGIN,
+                "origin_after_startup": current_origin(),
+                "sealed": [
+                    TOOL_REGISTRY.frozen,
+                    WRITE_SPEC_REGISTRY.frozen,
+                    APPROVAL_EXECUTOR_REGISTRY.frozen,
+                ],
+            }}))
+            ''',
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = payload_of(result)
+        self.assertEqual(payload["tool_origin"], DISTRIBUTION)
+        self.assertEqual(payload["spec_origin"], DISTRIBUTION)
+        self.assertEqual(payload["executor_origin"], DISTRIBUTION)
+        self.assertEqual(payload["a_core_tool_origin"], payload["core_origin"])
+        self.assertEqual(payload["a_core_spec_origin"], payload["core_origin"])
+        self.assertIsNone(payload["origin_after_startup"])
+        self.assertTrue(all(payload["sealed"]))
+
+    # -- a capability module imported directly, before the tools package ------
+
+    def test_a_premature_direct_import_that_registers_is_refused(self) -> None:
+        """The silent case: it used to succeed, credited to this distribution."""
+        install_extension(
+            self.root,
+            EAGER_MODULE,
+            distribution="mb-lifecycle-eager",
+            package="mb_lifecycle_eager",
+        )
+        result = run_with_extensions(
+            '''
+            import json
+            import sys
+
+            from moneybird_mcp.write_contracts import WRITE_SPEC_REGISTRY
+
+            before = len(WRITE_SPEC_REGISTRY)
+            raised = ""
+            try:
+                import mb_lifecycle_eager.tools  # noqa: F401 - the order is the point
+            except Exception as exc:
+                raised = type(exc).__name__ + ": " + str(exc)
+
+            print("RESULT:" + json.dumps({
+                "raised": raised,
+                "before": before,
+                "after": len(WRITE_SPEC_REGISTRY),
+                "action_registered": "eager_action" in WRITE_SPEC_REGISTRY,
+                "origins": list(WRITE_SPEC_REGISTRY.origins()),
+                "tools_imported": "moneybird_mcp.tools" in sys.modules,
+            }))
+            ''',
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = payload_of(result)
+        self.assertTrue(payload["raised"].startswith("RegistryError:"), payload["raised"])
+        self.assertIn("outside the loader lifecycle", payload["raised"])
+        self.assertIn("no distribution is being credited", payload["raised"])
+        # (4) nothing partially registered, and nobody else's name on it
+        self.assertFalse(payload["action_registered"])
+        self.assertEqual(payload["before"], payload["after"])
+        self.assertEqual(payload["origins"], [CORE_ORIGIN])
+        self.assertFalse(payload["tools_imported"])
+
+    def test_a_premature_direct_import_that_re_enters_the_loader_is_refused(self) -> None:
+        """The noisy case: it failed, but as a circular-import AttributeError.
+
+        This is the shape a real capability module has -- its first line asks the
+        seam for a name that lives behind the tools package -- so the loader is
+        reached from halfway through that module's own import.
+        """
+        install_extension(self.root, CANARY_MODULE)
+        result = run_with_extensions(
+            f'''
+            import json
+
+            raised = ""
+            try:
+                import {PACKAGE}.tools  # noqa: F401 - the order is the point
+            except Exception as exc:
+                raised = type(exc).__name__ + ": " + str(exc)
+
+            from moneybird_mcp.write_contracts import WRITE_SPEC_REGISTRY
+
+            print("RESULT:" + json.dumps({{
+                "raised": raised,
+                "spec_registered": "{ACTION}" in WRITE_SPEC_REGISTRY,
+                "spec_origins": list(WRITE_SPEC_REGISTRY.origins()),
+                "sealed": WRITE_SPEC_REGISTRY.frozen,
+            }}))
+            ''',
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = payload_of(result)
+        self.assertIn("ExtensionError", payload["raised"])
+        self.assertIn("already part-way through its own import", payload["raised"])
+        self.assertIn(f"{PACKAGE}.tools", payload["raised"])
+        self.assertNotIn("circular import", payload["raised"])
+        # (4) the refused extension contributed nothing, and nothing was sealed
+        self.assertFalse(payload["spec_registered"])
+        self.assertEqual(payload["spec_origins"], [CORE_ORIGIN])
+        self.assertFalse(payload["sealed"])
+
+    # -- the loader started again from underneath itself ----------------------
+
+    def test_a_re_entrant_loader_is_refused_and_fails_the_server(self) -> None:
+        install_extension(
+            self.root,
+            REENTRANT_MODULE,
+            distribution="mb-lifecycle-reentrant",
+            package="mb_lifecycle_reentrant",
+        )
+        result = run_with_extensions(
+            '''
+            import json
+            import sys
+
+            raised = ""
+            try:
+                import moneybird_mcp.tools  # noqa: F401
+            except Exception as exc:
+                raised = type(exc).__name__ + ": " + str(exc)
+
+            from moneybird_mcp.write_contracts import WRITE_SPEC_REGISTRY
+
+            print("RESULT:" + json.dumps({
+                "raised": raised,
+                "tools_imported": "moneybird_mcp.tools" in sys.modules,
+                "spec_origins": list(WRITE_SPEC_REGISTRY.origins()),
+                "sealed": WRITE_SPEC_REGISTRY.frozen,
+            }))
+            ''',
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = payload_of(result)
+        self.assertIn("ExtensionError", payload["raised"])
+        self.assertIn("re-entered while it was already running", payload["raised"])
+        # (4) the server does not start, and no half-assembled surface is sealed
+        self.assertFalse(payload["tools_imported"])
+        self.assertEqual(payload["spec_origins"], [CORE_ORIGIN])
+        self.assertFalse(payload["sealed"])
+
+    # -- the invariant itself, without a subprocess ---------------------------
+
+    def test_a_registry_refuses_what_nobody_is_being_credited_for(self) -> None:
+        registry = Registry("write spec")
+        with self.assertRaises(RegistryError) as caught:
+            registry.register("unattributed", spec())
+        self.assertIn("outside the loader lifecycle", str(caught.exception))
+        self.assertEqual(len(registry), 0)
+
+    def test_the_core_context_credits_this_distribution(self) -> None:
+        from moneybird_mcp._registration import current_origin, registering_as_core
+
+        registry = Registry("write spec")
+        with registering_as_core():
+            registry.register("attributed", spec())
+        self.assertEqual(registry.origin_of("attributed"), CORE_ORIGIN)
+        self.assertIsNone(current_origin())
+
+    def test_the_refusal_names_the_key_and_nothing_else(self) -> None:
+        """Diagnostics stay free of anything that could carry a secret."""
+        registry = Registry("write spec")
+        with self.assertRaises(RegistryError) as caught:
+            registry.register("some_action", spec(precondition="s3cret-precondition"))
+        message = str(caught.exception)
+        self.assertIn("some_action", message)
+        self.assertNotIn("s3cret", message)
+
+
 if __name__ == "__main__":
     unittest.main()
