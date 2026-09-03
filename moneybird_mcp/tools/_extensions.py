@@ -18,10 +18,19 @@ and a bare entry point is not reliably back-referenced to one.
 A failure here aborts the import of :mod:`moneybird_mcp.tools`, so the server
 does not start. That is deliberate: a partially loaded extension would leave a
 guarded write surface that nobody validated.
+
+The loader also refuses to run underneath itself. Importing an extension's own
+capability module directly reaches this package while that module is half
+executed; the loader would then import the extension, get the half-executed
+module back from ``sys.modules``, and treat it as loaded. What follows is either
+an ``AttributeError`` about a circular import or, worse, a surface assembled from
+a module that never finished. Both are diagnosed here instead, before anything is
+imported, because at this point the cause is still visible.
 """
 from __future__ import annotations
 
 import importlib.metadata
+import sys
 from dataclasses import dataclass
 
 from .._registration import registering_as
@@ -32,6 +41,30 @@ ENTRY_POINT_GROUP = "moneybird_mcp.tools"
 
 class ExtensionError(RuntimeError):
     """An installed extension could not be discovered or imported."""
+
+
+#: Set for the duration of :func:`load_extensions`. Module-level rather than a
+#: context variable on purpose: re-entry through a fresh context would be just as
+#: wrong, and there is only ever one assembly of one process's tool surface.
+_LOADING = False
+
+
+def _initializing_modules(package: str) -> list[str]:
+    """Modules of ``package`` that are part-way through their own import.
+
+    ``__spec__._initializing`` is what the import system itself consults to tell
+    a finished module from one still executing, and it is the only way to see the
+    half-imported module that ``sys.modules`` is otherwise happy to hand back.
+    """
+    prefix = f"{package}."
+    found = []
+    for name, module in list(sys.modules.items()):
+        if name != package and not name.startswith(prefix):
+            continue
+        spec = getattr(module, "__spec__", None)
+        if getattr(spec, "_initializing", False):
+            found.append(name)
+    return sorted(found)
 
 
 @dataclass(frozen=True)
@@ -89,15 +122,57 @@ def load_extensions() -> list[ExtensionEntryPoint]:
     import; the underlying exception is chained, and nothing here formats the
     extension's own data into the message.
     """
+    global _LOADING
+
+    if _LOADING:
+        raise ExtensionError(
+            "The extension loader was re-entered while it was already running. "
+            "Extensions are imported exactly once, in one pass, and a second "
+            "pass would register into a surface the first pass is still "
+            "assembling."
+        )
+
     loaded: list[ExtensionEntryPoint] = []
-    for declared in discover_extensions():
-        with registering_as(declared.distribution, declared.version):
-            try:
-                importlib.import_module(declared.value)
-            except Exception as exc:  # noqa: BLE001 - re-raised with provenance
-                raise ExtensionError(
-                    f"Extension {declared.label} failed to load: "
-                    f"{type(exc).__name__}: {exc}"
-                ) from exc
-        loaded.append(declared)
+    _LOADING = True
+    try:
+        for declared in discover_extensions():
+            _refuse_if_already_importing(declared)
+            with registering_as(declared.distribution, declared.version):
+                try:
+                    importlib.import_module(declared.value)
+                except Exception as exc:  # noqa: BLE001 - re-raised with provenance
+                    raise ExtensionError(
+                        f"Extension {declared.label} failed to load: "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
+            loaded.append(declared)
+    finally:
+        _LOADING = False
     return loaded
+
+
+def _refuse_if_already_importing(declared: ExtensionEntryPoint) -> None:
+    """Refuse to load a distribution whose own import brought us here.
+
+    Reached when something imported one of the extension's capability modules
+    directly. That module's first line reaches the seam, the seam reaches this
+    package, this package reaches the loader -- and the loader is now about to
+    import the very package that is still executing above it on the stack.
+    Importing it would hand back the half-built module, so the registrations that
+    module has not made yet would never be made, and the ones it makes after this
+    returns would land outside every attribution context.
+
+    Diagnostics name module paths only.
+    """
+    package = declared.value.split(".")[0]
+    in_flight = _initializing_modules(package)
+    if not in_flight:
+        return
+    raise ExtensionError(
+        f"Extension {declared.label} cannot be loaded: {', '.join(in_flight)} "
+        "is already part-way through its own import, so the loader is running "
+        "underneath it. An extension is loaded by installing it and letting the "
+        "entry point be discovered; importing one of its modules directly starts "
+        "the server assembly from inside that module and cannot complete. Import "
+        "moneybird_mcp.tools first, or just let the server start."
+    )

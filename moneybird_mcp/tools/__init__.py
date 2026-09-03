@@ -9,29 +9,42 @@ first, then any tool modules installed distributions contribute through the
 ``moneybird_mcp.tools`` entry-point group, then one validation pass that seals
 the registries. Nothing here knows the name of any extension, and with none
 installed the result is exactly the surface this distribution defines.
+
+Each stage registers inside an explicit attribution context -- this distribution
+for the built-in imports, the loader's own for each extension -- because a
+registry here refuses anything nobody is being credited for. That is what makes
+the assembly order enforced rather than merely documented.
 """
 from __future__ import annotations
 
 # Register the guidance layer (playbook resource + scenario prompts) last, so the
 # mcp instance and all tools already exist; guidance.py imports nothing from here.
+from .._registration import registering_as_core
 from ..guidance import register_guidance
 from ._context import get_client as get_client  # explicit back-compat re-export
 from ._registry import SERVER_INSTRUCTIONS as SERVER_INSTRUCTIONS
 from ._registry import mcp
-from .approvals import *  # noqa: F401,F403
-from .bank import *  # noqa: F401,F403
-from .catalogue import *  # noqa: F401,F403
-from .contacts import *  # noqa: F401,F403
-from .core import *  # noqa: F401,F403
-from .ledger import *  # noqa: F401,F403
-from .payments import *  # noqa: F401,F403
-from .products import *  # noqa: F401,F403
-from .purchases import *  # noqa: F401,F403
-from .reference import *  # noqa: F401,F403
-from .reports import *  # noqa: F401,F403
-from .sales import *  # noqa: F401,F403
-from .sales_batches import *  # noqa: F401,F403
-from .workflows import *  # noqa: F401,F403
+
+# Everything the built-in domain modules register is registered as this
+# distribution, said out loud. Nothing may register without a distribution being
+# credited, so this block is what makes the built-in surface registrable at all
+# -- and, more to the point, what stops an extension module imported outside the
+# loader from registering under the credit meant for these fourteen imports.
+with registering_as_core():
+    from .approvals import *  # noqa: F401,F403
+    from .bank import *  # noqa: F401,F403
+    from .catalogue import *  # noqa: F401,F403
+    from .contacts import *  # noqa: F401,F403
+    from .core import *  # noqa: F401,F403
+    from .ledger import *  # noqa: F401,F403
+    from .payments import *  # noqa: F401,F403
+    from .products import *  # noqa: F401,F403
+    from .purchases import *  # noqa: F401,F403
+    from .reference import *  # noqa: F401,F403
+    from .reports import *  # noqa: F401,F403
+    from .sales import *  # noqa: F401,F403
+    from .sales_batches import *  # noqa: F401,F403
+    from .workflows import *  # noqa: F401,F403
 
 # Extensions register by importing, so they load after every built-in module and
 # before anything inspects the result. A failure here propagates and this package

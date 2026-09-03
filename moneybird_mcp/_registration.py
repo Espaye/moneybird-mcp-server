@@ -16,6 +16,14 @@ So every registry here rejects a duplicate instead of overwriting it, records
 the origin of each entry, and can be frozen. Freezing is what makes the
 validation pass meaningful: after it, the surface the server validated is the
 surface it serves.
+
+Attribution is required rather than defaulted, which closes the other end of the
+same question. Registration is open from process start until the seal, so
+"before" cannot be answered by a window; it is answered by insisting that
+somebody is being credited. This distribution says so around its own tables, the
+loader says so around each extension it imports, and a registration that arrives
+under neither is refused instead of being filed under whoever happens to be the
+default.
 """
 from __future__ import annotations
 
@@ -48,13 +56,19 @@ class Registration:
         return f"{self.origin} {self.version}" if self.version else self.origin
 
 
-_CURRENT_ORIGIN: ContextVar[tuple[str, str | None]] = ContextVar(
-    "moneybird_mcp_registration_origin", default=(CORE_ORIGIN, None)
+# There is deliberately no default. A registration that arrives while nothing is
+# being credited is not a registration with a boring origin -- it is one nobody
+# can attribute, and the only honest answers are "refuse it" or "guess". A
+# default of CORE_ORIGIN was the second answer wearing the first one's clothes:
+# an extension module imported directly, outside the loader, registered its
+# guarded write under this distribution's name and the surface looked clean.
+_CURRENT_ORIGIN: ContextVar[tuple[str, str | None] | None] = ContextVar(
+    "moneybird_mcp_registration_origin", default=None
 )
 
 
-def current_origin() -> tuple[str, str | None]:
-    """The distribution credited with registrations made right now."""
+def current_origin() -> tuple[str, str | None] | None:
+    """The distribution credited with registrations made right now, if any."""
     return _CURRENT_ORIGIN.get()
 
 
@@ -72,6 +86,34 @@ def registering_as(origin: str, version: str | None = None) -> Iterator[None]:
         yield
     finally:
         _CURRENT_ORIGIN.reset(token)
+
+
+@contextlib.contextmanager
+def registering_as_core() -> Iterator[None]:
+    """Credit this block to this distribution, which assembles its own surface.
+
+    Two places open it: the write-contract table, which is populated the moment
+    :mod:`moneybird_mcp.write_contracts` is imported and therefore may run before
+    anything else, and the tools package, which imports the built-in domain
+    modules. Both are this distribution registering its own keys, stated rather
+    than inferred, so the loader's context is left to mean exactly one thing:
+    some other installed distribution is registering right now.
+    """
+    with registering_as(CORE_ORIGIN):
+        yield
+
+
+#: Raised text shared by every "nobody is being credited" refusal. It names the
+#: registry and the key -- both are tool or action names, never payloads,
+#: credentials or approval contents.
+_UNATTRIBUTED_HINT = (
+    "no distribution is being credited for it. This distribution registers its "
+    "own keys while it assembles its surface, and an installed extension "
+    "registers only while the loader is importing its entry-point module, so a "
+    "registration outside both belongs to nobody. Importing an extension's "
+    "capability module directly does this: import moneybird_mcp.tools, or let "
+    "the server do it, and the loader will import the extension for you."
+)
 
 
 class Registry:
@@ -108,7 +150,13 @@ class Registry:
         if not key or not isinstance(key, str):
             raise RegistryError(f"{self._subject} keys must be non-empty strings; got {key!r}")
         if origin is None:
-            origin, version = current_origin()
+            attribution = current_origin()
+            if attribution is None:
+                raise RegistryError(
+                    f"{self._subject} {key!r} was registered outside the loader "
+                    f"lifecycle: {_UNATTRIBUTED_HINT}"
+                )
+            origin, version = attribution
         existing = self._registrations.get(key)
         if existing is not None:
             raise RegistryError(

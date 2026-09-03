@@ -5,6 +5,27 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+### Changed
+
+- **Registering a tool or guarded action now requires a distribution to be credited
+  for it.** Provenance was recorded from an ambient context whose default named this
+  distribution, so the answer to "who registered this" was correct only while the
+  assembly order held. It held by convention: the loader is the only thing that
+  imports an extension's modules, and it does so inside a context naming the
+  installed distribution it read the entry point from. Importing one of those modules
+  directly broke the convention silently — its `register_write_spec` call landed
+  under this distribution's name, and the assembled surface looked clean. There is no
+  default now. This distribution states its own credit around the built-in domain
+  imports and around the write-contract table, the loader states each extension's,
+  and a registration arriving under neither is refused naming the registry and the
+  key. The extension loader additionally refuses to run underneath itself: a
+  capability module imported directly reaches the seam, the seam reaches the tools
+  package, and the loader would then import the very package still executing above
+  it — which used to surface as an `AttributeError` about a circular import, and is
+  now diagnosed before anything is imported. Re-entering the loader while it is
+  already running is refused for the same reason. Normal entry-point startup is
+  unchanged, with the same tools, actions and provenance as before.
+
 ### Added
 
 - **The extension seam carries what a real out-of-tree tool package needs.**
