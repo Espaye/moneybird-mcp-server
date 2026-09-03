@@ -44,6 +44,13 @@ A minimal extension looks like this, in a distribution declaring
     register_write_spec("example", WriteSpec(1, "...", "...", "...", "..."))
     register_approval_executor("example", example_from_approval)
 
+Some of what is here is vocabulary rather than machinery, and
+:func:`validate_explicit_document_lines` is the clearest case. An extension that
+lets a user state exact document lines has to prove every ledger account and tax
+rate, parse the prices as exact decimals, and total them -- and a second
+implementation of that is a second rounding behaviour. The built-in tools call
+the same function, so there is one.
+
 Growing this surface is a compatible change; removing or renaming anything in
 :data:`__all__` is not. ``tests/test_extension_boundary.py`` pins the list.
 """
@@ -61,6 +68,10 @@ from .config import (
     WRITE_ANNOTATIONS,
     MoneybirdError,
     MoneybirdHTTPError,
+)
+from .document_lines import (
+    ExplicitDocumentLines,
+    validate_explicit_document_lines,
 )
 from .formatting import (
     clean_dict,
@@ -241,6 +252,7 @@ __all__ = [
     "API_VERSION",
     "ApprovalId",
     "DateString",
+    "ExplicitDocumentLines",
     "Limit",
     "MONTH_CAPPED_REPORTS",
     "MoneybirdError",
@@ -276,5 +288,6 @@ __all__ = [
     "stage_write",
     "symbolic_period_months",
     "tool",
+    "validate_explicit_document_lines",
     "verify_general_journal_payload",
 ]
