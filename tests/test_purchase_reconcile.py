@@ -26,8 +26,8 @@ from purchase_test_support import (
     target_july as _target_july,
 )
 
+from moneybird_mcp.document_lines import details_attributes_for_lines
 from moneybird_mcp.purchase_reconcile import (
-    _map_lines,
     build_explicit_purchase_invoice_reconcile,
     build_reconcile_purchase_invoice,
     dutch_month_label,
@@ -141,7 +141,7 @@ class MapLinesTests(unittest.TestCase):
             {"description": "a", "ledger_account_id": LEDGER_ZAK, "tax_rate_id": TAX_21, "price": Decimal("10.00")},
             {"description": "b", "ledger_account_id": LEDGER_PRIV, "tax_rate_id": TAX_GEEN, "price": Decimal("5.00")},
         ]
-        ops = _map_lines(current, desired)
+        ops = details_attributes_for_lines(current, desired)
         reused = {op["id"] for op in ops if "id" in op and "_destroy" not in op}
         destroyed = {op["id"] for op in ops if op.get("_destroy") == "true"}
         added = [op for op in ops if "id" not in op]
