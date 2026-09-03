@@ -13,6 +13,7 @@ from typing import Any
 
 from . import rate_budget
 from .config import MoneybirdError
+from .document_lines import line_ledger_account_id, line_tax_rate_id
 from .formatting import chunked, normalize_document_kind
 
 _SUPPORTED_KINDS = {"purchase_invoice", "receipt"}
@@ -43,14 +44,6 @@ _DESCRIPTION_STOPWORDS = {
     "van",
     "voor",
 }
-
-
-def _line_ledger(detail: dict[str, Any]) -> str:
-    return str(detail.get("ledger_account_id") or "")
-
-
-def _line_tax(detail: dict[str, Any]) -> str:
-    return str(detail.get("tax_rate_id") or "")
 
 
 def _ledger_label(
@@ -305,7 +298,7 @@ def _canonical_pattern(documents: list[dict[str, Any]]) -> dict[str, Any] | None
 
     line_counts = Counter(len(doc.get("details") or []) for doc in documents)
     ledger_sets = Counter(
-        frozenset(_line_ledger(detail) for detail in (doc.get("details") or []))
+        frozenset(line_ledger_account_id(detail) for detail in (doc.get("details") or []))
         for doc in documents
     )
     incl_flags = Counter(bool(doc.get("prices_are_incl_tax")) for doc in documents)
@@ -362,8 +355,8 @@ def _description_mapping_reasons(
             if overlap_count >= 2 and overlap >= 0.60:
                 similar_mappings.append(
                     (
-                        _line_ledger(previous),
-                        _line_tax(previous),
+                        line_ledger_account_id(previous),
+                        line_tax_rate_id(previous),
                         str(previous.get("description") or ""),
                     )
                 )
@@ -378,8 +371,8 @@ def _description_mapping_reasons(
         if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
             continue
         (expected_ledger, expected_tax), _count = ranked[0]
-        current_ledger = _line_ledger(detail)
-        current_tax = _line_tax(detail)
+        current_ledger = line_ledger_account_id(detail)
+        current_tax = line_tax_rate_id(detail)
         if (current_ledger, current_tax) == (expected_ledger, expected_tax):
             continue
 
@@ -489,7 +482,7 @@ def scan_purchase_invoices_for_attention(
                     f"has {len(details)} line(s); this supplier usually has "
                     f"{pattern['modal_line_count']}"
                 )
-            ledgers = frozenset(_line_ledger(detail) for detail in details)
+            ledgers = frozenset(line_ledger_account_id(detail) for detail in details)
             if ledgers != pattern["modal_ledgers"] and pattern["modal_ledgers"]:
                 missing = pattern["modal_ledgers"] - ledgers
                 if missing:

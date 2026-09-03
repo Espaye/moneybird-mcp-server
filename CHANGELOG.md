@@ -20,7 +20,11 @@ versioning while allowing pre-1.0 breaking changes.
   capability-neutral: it fetches nothing, decides no totals, stages nothing, and names
   the caller's own input field in every refusal. `build_explicit_purchase_invoice_reconcile`
   was migrated onto it, so this distribution holds one implementation rather than two.
-  Adding names to the seam is a compatible change; `API_VERSION` stays 1.
+  `line_signatures` and `booking_line_snapshot` are exported alongside it, for the other
+  end of the same question: after a guarded write, proving that the lines that arrived
+  are the lines that were stated, and that nothing else on them moved. Those were three
+  near-identical private copies inside this distribution and are now one each. Adding
+  names to the seam is a compatible change; `API_VERSION` stays 1.
 
 ### Changed
 

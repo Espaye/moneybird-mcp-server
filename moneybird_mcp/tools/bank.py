@@ -19,6 +19,7 @@ from ..config import (
     MoneybirdError,
     MoneybirdHTTPError,
 )
+from ..document_lines import booking_line_snapshot
 from ..formatting import (
     clean_dict,
     compact_financial_mutation_summary,
@@ -1472,24 +1473,7 @@ def link_bank_mutation_booking_from_approval(approval_id: ApprovalId) -> dict[st
 def _purchase_invoice_lines(record: dict[str, Any]) -> list[dict[str, Any]]:
     """Stable booking fields that must survive the status-triggering save."""
 
-    return sorted(
-        (
-            {
-                "id": str(line.get("id") or ""),
-                "description": str(line.get("description") or ""),
-                "price": f"{money_decimal(line.get('price')):.2f}",
-                "amount": str(line.get("amount_decimal") or line.get("amount") or "1"),
-                "ledger_account_id": str(line.get("ledger_account_id") or ""),
-                "tax_rate_id": str(line.get("tax_rate_id") or ""),
-                "project_id": str(line.get("project_id") or ""),
-                "product_id": str(line.get("product_id") or ""),
-                "period": str(line.get("period") or ""),
-                "row_order": int(line.get("row_order") or 0),
-            }
-            for line in (record.get("details") or [])
-        ),
-        key=lambda line: (line["row_order"], line["id"]),
-    )
+    return booking_line_snapshot(record.get("details") or [])
 
 
 def _purchase_invoice_settlement_snapshot(record: dict[str, Any]) -> dict[str, Any]:

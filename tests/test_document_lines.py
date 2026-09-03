@@ -24,7 +24,10 @@ from moneybird_mcp.config import MoneybirdError
 from moneybird_mcp.document_lines import (
     CENT,
     ExplicitDocumentLines,
+    booking_line_snapshot,
     details_attributes_for_lines,
+    line_signature,
+    line_signatures,
     line_total_incl_tax,
     line_view,
     validate_explicit_document_lines,
@@ -104,9 +107,16 @@ class OneImplementationTests(unittest.TestCase):
         )
         self.assertIs(api.ExplicitDocumentLines, document_lines.ExplicitDocumentLines)
 
-    def test_the_seam_declares_both_names(self) -> None:
-        self.assertIn("validate_explicit_document_lines", api.__all__)
-        self.assertIn("ExplicitDocumentLines", api.__all__)
+    def test_the_seam_declares_every_name_an_extension_needs(self) -> None:
+        for name in (
+            "validate_explicit_document_lines",
+            "ExplicitDocumentLines",
+            "line_signatures",
+            "booking_line_snapshot",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, api.__all__)
+                self.assertIs(getattr(api, name), getattr(document_lines, name))
 
     def test_the_built_in_reconciler_holds_no_copy_of_the_arithmetic(self) -> None:
         """A second definition here is the drift this file exists to prevent."""
@@ -127,11 +137,41 @@ class OneImplementationTests(unittest.TestCase):
     def test_the_reconciler_uses_the_shared_objects(self) -> None:
         self.assertIs(purchase_reconcile.CENT, CENT)
         self.assertIs(purchase_reconcile.line_view, line_view)
+        self.assertIs(purchase_reconcile.line_signature, line_signature)
         self.assertIs(purchase_reconcile.line_total_incl_tax, line_total_incl_tax)
         self.assertIs(
             purchase_reconcile.details_attributes_for_lines,
             details_attributes_for_lines,
         )
+
+    def test_the_built_in_tools_compare_lines_through_the_shared_helpers(self) -> None:
+        from moneybird_mcp.tools import bank, purchases
+
+        self.assertIs(purchases.line_signatures, line_signatures)
+        self.assertIs(bank.booking_line_snapshot, booking_line_snapshot)
+
+    def test_no_built_in_module_redefines_a_line_comparison(self) -> None:
+        import ast
+        import pathlib as _pathlib
+
+        package = _pathlib.Path(document_lines.__file__).resolve().parent
+        offenders = []
+        for path in sorted(package.rglob("*.py")):
+            if path.name == "document_lines.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name in {
+                    "_verification_line_signature",
+                    "_line_signature",
+                    "_expected_lines",
+                    "_map_lines",
+                    "_line_ledger",
+                    "_line_tax",
+                    "_line_total_incl_tax",
+                }:
+                    offenders.append(f"{path.name}:{node.lineno}: {node.name}")
+        self.assertEqual(offenders, [], "\n".join(offenders))
 
 
 # --------------------------------------------------------------------------
@@ -371,6 +411,102 @@ class DetailsAttributeTests(unittest.TestCase):
         reused = [op for op in ops if op.get("id") and "_destroy" not in op]
         self.assertEqual(len(reused), 1)
         self.assertEqual(len([op for op in ops if "id" not in op]), 1)
+
+
+class ComparisonHelperTests(unittest.TestCase):
+    """The other end of a guarded write: proving the lines that arrived match."""
+
+    def test_a_signature_ignores_order(self) -> None:
+        first = [line("1.00", description="a"), line("2.00", description="b")]
+        self.assertEqual(line_signatures(first), line_signatures(list(reversed(first))))
+
+    def test_a_signature_compares_price_as_fixed_text(self) -> None:
+        self.assertEqual(
+            line_signatures([line("1.5")]), line_signatures([line("1.50")])
+        )
+        self.assertEqual(
+            line_signatures([line(Decimal("1.50"))]), line_signatures([line("1.5")])
+        )
+
+    def test_a_signature_ignores_surrounding_space_in_a_description(self) -> None:
+        self.assertEqual(
+            line_signatures([line("1.00", description="  a  ")]),
+            line_signatures([line("1.00", description="a")]),
+        )
+
+    def test_a_different_price_is_a_different_signature(self) -> None:
+        self.assertNotEqual(line_signatures([line("1.00")]), line_signatures([line("1.01")]))
+
+    def test_a_different_ledger_or_tax_is_a_different_signature(self) -> None:
+        self.assertNotEqual(
+            line_signatures([line("1.00")]), line_signatures([line("1.00", ledger="103")])
+        )
+        self.assertNotEqual(
+            line_signatures([line("1.00")]), line_signatures([line("1.00", tax=TAX_9)])
+        )
+
+    def test_a_booking_snapshot_orders_by_row_then_id(self) -> None:
+        rows = [
+            {"id": "2", "row_order": 1, "price": "1.00"},
+            {"id": "1", "row_order": 1, "price": "1.00"},
+            {"id": "3", "row_order": 0, "price": "1.00"},
+        ]
+        self.assertEqual(
+            [row["id"] for row in booking_line_snapshot(rows)], ["3", "1", "2"]
+        )
+
+    def test_a_booking_snapshot_keeps_the_fields_a_save_must_not_move(self) -> None:
+        snapshot = booking_line_snapshot(
+            [
+                {
+                    "id": "1",
+                    "description": "a",
+                    "price": "1.5",
+                    "amount_decimal": "2.0",
+                    "ledger_account_id": LEDGER,
+                    "tax_rate_id": TAX_21,
+                    "project_id": "p",
+                    "product_id": "q",
+                    "period": "202603",
+                    "row_order": 3,
+                }
+            ]
+        )
+        self.assertEqual(
+            snapshot,
+            [
+                {
+                    "id": "1",
+                    "description": "a",
+                    "price": "1.50",
+                    "amount": "2.0",
+                    "ledger_account_id": LEDGER,
+                    "tax_rate_id": TAX_21,
+                    "project_id": "p",
+                    "product_id": "q",
+                    "period": "202603",
+                    "row_order": 3,
+                }
+            ],
+        )
+
+    def test_a_booking_snapshot_prefers_the_decimal_quantity(self) -> None:
+        self.assertEqual(
+            booking_line_snapshot(
+                [{"price": "1.00", "amount_decimal": "2.5", "amount": "2"}]
+            )[0]["amount"],
+            "2.5",
+        )
+        self.assertEqual(
+            booking_line_snapshot([{"price": "1.00", "amount": "2"}])[0]["amount"], "2"
+        )
+        self.assertEqual(
+            booking_line_snapshot([{"price": "1.00"}])[0]["amount"], "1"
+        )
+
+    def test_an_empty_line_set_snapshots_to_nothing(self) -> None:
+        self.assertEqual(booking_line_snapshot([]), [])
+        self.assertEqual(line_signatures([]), [])
 
 
 if __name__ == "__main__":

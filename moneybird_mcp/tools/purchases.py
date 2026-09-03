@@ -15,6 +15,7 @@ from ..credentials import (
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
     get_credential_mode,
 )
+from ..document_lines import line_signatures
 from ..formatting import (
     compact_document_summary,
     compact_general_journal_summary,
@@ -416,18 +417,6 @@ def prepare_reconcile_purchase_invoice(
     )
 
 
-def _verification_line_signature(lines: list[dict[str, Any]]) -> list[tuple[str, str, str, str]]:
-    return sorted(
-        (
-            str(line.get("ledger_account_id") or ""),
-            str(line.get("tax_rate_id") or ""),
-            f'{money_decimal(line.get("price")):.2f}',
-            str(line.get("description") or "").strip(),
-        )
-        for line in lines
-    )
-
-
 def _validate_reconcile_preflight(
     before: dict[str, Any],
     payload: dict[str, Any],
@@ -494,9 +483,9 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
     total_after = money_decimal(after.get("total_price_incl_tax"))
     verified_total = abs(total_after - expected_total) < Decimal("0.005")
     expected_lines = payload.get("expected_lines") or []
-    verified_lines = not expected_lines or _verification_line_signature(
+    verified_lines = not expected_lines or line_signatures(
         after.get("details") or []
-    ) == _verification_line_signature(expected_lines)
+    ) == line_signatures(expected_lines)
     verified_tax_mode = bool(after.get("prices_are_incl_tax")) == bool(
         payload["prices_are_incl_tax"]
     )

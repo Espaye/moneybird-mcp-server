@@ -34,6 +34,7 @@ from .document_lines import (
     CENT,
     details_attributes_for_lines,
     line_ledger_account_id,
+    line_signature,
     line_tax_rate_id,
     line_total_incl_tax,
     line_view,
@@ -69,22 +70,11 @@ def dutch_month_label(date_str: Any) -> str:
     return f"{_DUTCH_MONTHS[month - 1]} {year}"
 
 
-def _line_signature(detail: dict[str, Any]) -> tuple[str, str, str, str]:
-    """Comparable (ledger, tax, price, description) tuple for a line."""
-    price = money_decimal(detail.get("price"))
-    return (
-        line_ledger_account_id(detail),
-        line_tax_rate_id(detail),
-        f"{price:.2f}",
-        str(detail.get("description") or "").strip(),
-    )
-
-
 def _document_signature(document: dict[str, Any]) -> tuple:
     details = document.get("details") or []
     return (
         bool(document.get("prices_are_incl_tax")),
-        tuple(sorted(_line_signature(d) for d in details)),
+        tuple(sorted(line_signature(d) for d in details)),
     )
 
 

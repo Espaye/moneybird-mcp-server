@@ -71,6 +71,8 @@ from .config import (
 )
 from .document_lines import (
     ExplicitDocumentLines,
+    booking_line_snapshot,
+    line_signatures,
     validate_explicit_document_lines,
 )
 from .formatting import (
@@ -269,11 +271,13 @@ __all__ = [
     "ReportName",
     "WRITE_ANNOTATIONS",
     "WriteSpec",
+    "booking_line_snapshot",
     "clean_dict",
     "compact_general_journal_summary",
     "details_attributes_payload",
     "duplicate_fingerprint",
     "get_client",
+    "line_signatures",
     "mark_write_dispatch_started",
     "mark_write_verifying",
     "money_decimal",
