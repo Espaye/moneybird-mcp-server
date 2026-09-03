@@ -18,6 +18,11 @@ Money is parsed with :func:`~moneybird_mcp.formatting.money_decimal` and
 quantised to :data:`CENT` with ``ROUND_HALF_UP``, per line and again on the sum.
 Nothing here uses binary floating point.
 
+The comparison helpers belong to the same question from the other end. A guarded
+write states lines, and afterwards something has to prove the lines that arrived
+are the lines that were stated -- which is the same field-by-field, price-as-text
+reading of a line, and would be the same copy if it lived anywhere else.
+
 Diagnostics name the caller's own field, so a refusal reads as a statement about
 the input the caller was given rather than about this module's parameters.
 """
@@ -75,6 +80,59 @@ def line_total_incl_tax(
     return (price * (Decimal("1") + percentage / Decimal("100"))).quantize(
         CENT,
         rounding=ROUND_HALF_UP,
+    )
+
+
+def line_signature(line: dict[str, Any]) -> tuple[str, str, str, str]:
+    """A comparable (ledger, tax, price, description) tuple for one line."""
+    return (
+        line_ledger_account_id(line),
+        line_tax_rate_id(line),
+        f'{money_decimal(line.get("price")):.2f}',
+        str(line.get("description") or "").strip(),
+    )
+
+
+def line_signatures(lines: Any) -> list[tuple[str, str, str, str]]:
+    """Every line's signature, sorted, so two line sets compare regardless of order.
+
+    This is what a guarded write uses to prove the lines it asked for are the
+    lines that arrived. Provider order is not stable and is not part of the
+    promise; the fields here are, and the price is compared as fixed
+    two-decimal text so two exact decimals that differ only in trailing zeros
+    still compare equal.
+    """
+    return sorted(line_signature(line) for line in lines)
+
+
+def booking_line_snapshot(lines: Any) -> list[dict[str, Any]]:
+    """The booking fields of a line set that a save must leave alone.
+
+    Wider than :func:`line_signatures` and used for a different question: not
+    "are these the lines I asked for" but "did anything else move". So it keeps
+    the provider's own identity and ordering fields, and orders by them, which
+    makes two snapshots of the same document comparable across a save that
+    reorders the rows.
+    """
+    return sorted(
+        (
+            {
+                "id": str(line.get("id") or ""),
+                "description": str(line.get("description") or ""),
+                "price": f'{money_decimal(line.get("price")):.2f}',
+                "amount": str(
+                    line.get("amount_decimal") or line.get("amount") or "1"
+                ),
+                "ledger_account_id": line_ledger_account_id(line),
+                "tax_rate_id": line_tax_rate_id(line),
+                "project_id": str(line.get("project_id") or ""),
+                "product_id": str(line.get("product_id") or ""),
+                "period": str(line.get("period") or ""),
+                "row_order": int(line.get("row_order") or 0),
+            }
+            for line in lines
+        ),
+        key=lambda line: (line["row_order"], line["id"]),
     )
 
 
