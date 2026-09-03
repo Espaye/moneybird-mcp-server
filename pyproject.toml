@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moneybird-mcp"
-version = "0.7.0"
+version = "0.8.0"
 description = "Read-first MCP server for Moneybird bookkeeping, with experimental supervised writes behind an explicit capability policy."
 readme = "README.md"
 requires-python = ">=3.11"
