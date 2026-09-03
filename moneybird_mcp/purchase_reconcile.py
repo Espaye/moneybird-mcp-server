@@ -18,6 +18,11 @@ repeatable operations:
 
 Neither function writes anything; the tool layer stages the write and only the
 ``*_from_approval`` tool executes it after explicit user confirmation.
+
+Line, tax and total arithmetic is not here. It lives in
+:mod:`moneybird_mcp.document_lines`, which both this module and any out-of-tree
+tool package reach through the same functions, so there is one rounding
+behaviour rather than one per caller.
 """
 from __future__ import annotations
 
@@ -25,10 +30,17 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from .config import MoneybirdError
+from .document_lines import (
+    CENT,
+    details_attributes_for_lines,
+    line_ledger_account_id,
+    line_tax_rate_id,
+    line_total_incl_tax,
+    line_view,
+    validate_explicit_document_lines,
+)
 from .formatting import money_decimal, normalize_document_kind
 from .purchase_review import list_documents_for_contact
-
-CENT = Decimal("0.01")
 
 _DUTCH_MONTHS = [
     "januari", "februari", "maart", "april", "mei", "juni",
@@ -57,20 +69,12 @@ def dutch_month_label(date_str: Any) -> str:
     return f"{_DUTCH_MONTHS[month - 1]} {year}"
 
 
-def _line_ledger(detail: dict[str, Any]) -> str:
-    return str(detail.get("ledger_account_id") or "")
-
-
-def _line_tax(detail: dict[str, Any]) -> str:
-    return str(detail.get("tax_rate_id") or "")
-
-
 def _line_signature(detail: dict[str, Any]) -> tuple[str, str, str, str]:
     """Comparable (ledger, tax, price, description) tuple for a line."""
     price = money_decimal(detail.get("price"))
     return (
-        _line_ledger(detail),
-        _line_tax(detail),
+        line_ledger_account_id(detail),
+        line_tax_rate_id(detail),
         f"{price:.2f}",
         str(detail.get("description") or "").strip(),
     )
@@ -94,44 +98,9 @@ def _version_snapshot(document: dict[str, Any]) -> dict[str, str]:
     return snapshot
 
 
-def _expected_lines(desired: list[dict[str, Any]]) -> list[dict[str, str]]:
-    return [
-        {
-            "description": str(line.get("description") or ""),
-            "price": f'{money_decimal(line.get("price")):.2f}',
-            "ledger_account_id": _line_ledger(line),
-            "tax_rate_id": _line_tax(line),
-        }
-        for line in desired
-    ]
-
-
 # --------------------------------------------------------------------------- #
 # Building a reconcile (fix) payload from a reference invoice
 # --------------------------------------------------------------------------- #
-
-def _line_total_incl_tax(
-    line: dict[str, Any],
-    *,
-    prices_are_incl_tax: bool,
-    tax_rates: dict[str, dict[str, Any]],
-) -> Decimal:
-    price = money_decimal(line.get("price"))
-    if prices_are_incl_tax:
-        return price.quantize(CENT, rounding=ROUND_HALF_UP)
-    tax_rate_id = _line_tax(line)
-    tax_rate = tax_rates.get(tax_rate_id)
-    if tax_rate is None:
-        raise MoneybirdError(
-            f"Reference line uses unknown tax_rate_id {tax_rate_id or '(empty)'}; "
-            "cannot prove the incl-tax total."
-        )
-    percentage = Decimal(str(tax_rate.get("percentage") or "0"))
-    return (price * (Decimal("1") + percentage / Decimal("100"))).quantize(
-        CENT,
-        rounding=ROUND_HALF_UP,
-    )
-
 
 def _calculated_total_incl_tax(
     desired: list[dict[str, Any]],
@@ -141,7 +110,7 @@ def _calculated_total_incl_tax(
 ) -> Decimal:
     return sum(
         (
-            _line_total_incl_tax(
+            line_total_incl_tax(
                 line,
                 prices_are_incl_tax=prices_are_incl_tax,
                 tax_rates=tax_rates,
@@ -188,7 +157,7 @@ def _rebalance_to_incl_total(
         original = desired[index]["price"]
         multiplier = Decimal("1")
         if not prices_are_incl_tax:
-            tax_rate = tax_rates.get(_line_tax(desired[index]))
+            tax_rate = tax_rates.get(line_tax_rate_id(desired[index]))
             if tax_rate is None:
                 continue
             percentage = Decimal(str(tax_rate.get("percentage") or "0"))
@@ -213,56 +182,6 @@ def _rebalance_to_incl_total(
         "The reference line/tax split cannot be rounded to the requested incl-tax "
         f"total {target_total:.2f}. Supply exact desired_lines from the invoice instead."
     )
-
-
-def _map_lines(
-    current: list[dict[str, Any]],
-    desired: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Turn a desired line set into details_attributes ops against current lines.
-
-    Reuses an existing line (by matching ledger + tax) for each desired line to
-    keep detail identity stable, appends the rest as new lines, and marks any
-    leftover current line for deletion via ``_destroy``.
-    """
-    ops: list[dict[str, Any]] = []
-    used = [False] * len(current)
-
-    for want in desired:
-        matched = None
-        for index, line in enumerate(current):
-            if used[index]:
-                continue
-            if _line_ledger(line) == want["ledger_account_id"] and _line_tax(line) == want["tax_rate_id"]:
-                matched = index
-                break
-        price_text = f'{want["price"]:.2f}'
-        if matched is not None:
-            used[matched] = True
-            ops.append(
-                {
-                    "id": str(current[matched].get("id")),
-                    "description": want["description"],
-                    "price": price_text,
-                    "amount": "1",
-                }
-            )
-        else:
-            ops.append(
-                {
-                    "description": want["description"],
-                    "price": price_text,
-                    "amount": "1",
-                    "ledger_account_id": want["ledger_account_id"],
-                    "tax_rate_id": want["tax_rate_id"],
-                }
-            )
-
-    for index, line in enumerate(current):
-        if not used[index]:
-            ops.append({"id": str(line.get("id")), "_destroy": "true"})
-
-    return ops
 
 
 def _pick_reference_document(
@@ -398,8 +317,8 @@ def build_reconcile_purchase_invoice(
         desired.append(
             {
                 "description": description,
-                "ledger_account_id": _line_ledger(detail),
-                "tax_rate_id": _line_tax(detail),
+                "ledger_account_id": line_ledger_account_id(detail),
+                "tax_rate_id": line_tax_rate_id(detail),
                 "price": scaled,
             }
         )
@@ -410,7 +329,7 @@ def build_reconcile_purchase_invoice(
         prices_are_incl_tax=prices_are_incl_tax,
         tax_rates=tax_rates,
     )
-    details_attributes = _map_lines(target.get("details") or [], desired)
+    details_attributes = details_attributes_for_lines(target.get("details") or [], desired)
 
     # Did anything actually change? Compare the resulting line set + tax flag.
     desired_document = {
@@ -433,8 +352,8 @@ def build_reconcile_purchase_invoice(
             "id": str(detail.get("id")),
             "description": str(detail.get("description") or ""),
             "price": f'{money_decimal(detail.get("price")):.2f}',
-            "ledger_account_id": _line_ledger(detail),
-            "tax_rate_id": _line_tax(detail),
+            "ledger_account_id": line_ledger_account_id(detail),
+            "tax_rate_id": line_tax_rate_id(detail),
         }
         for detail in (target.get("details") or [])
     ]
@@ -472,7 +391,7 @@ def build_reconcile_purchase_invoice(
         "prices_are_incl_tax": prices_are_incl_tax,
         "expected_total_before": f"{current_total:.2f}",
         "expected_total_incl_tax": f"{calculated_total:.2f}",
-        "expected_lines": _expected_lines(desired),
+        "expected_lines": line_view(desired),
         **_version_snapshot(target),
     }
     preview = {
@@ -501,6 +420,7 @@ def build_reconcile_purchase_invoice(
         "warnings": warnings,
     }
     return {"payload": payload, "preview": preview}
+
 
 def build_explicit_purchase_invoice_reconcile(
     client: Any,
@@ -539,81 +459,14 @@ def build_explicit_purchase_invoice_reconcile(
     )
     current_total = money_decimal(target.get("total_price_incl_tax"))
 
-    ledger_accounts = {
-        str(account.get("id")): account for account in client.list_ledger_accounts()
-    }
-    tax_rates = {str(rate.get("id")): rate for rate in client.list_tax_rates()}
-
-    desired: list[dict[str, Any]] = []
-    calculated_total_incl = Decimal("0.00")
-    for index, raw_line in enumerate(desired_lines, start=1):
-        description = str(raw_line.get("description") or "").strip()
-        if not description:
-            raise MoneybirdError(f"desired_lines[{index}] requires a description.")
-        if raw_line.get("price") in (None, ""):
-            raise MoneybirdError(f"desired_lines[{index}] requires a price.")
-
-        amount = str(raw_line.get("amount") or "1").strip()
-        if amount not in {"1", "1.0", "1.00", "1 x"}:
-            raise MoneybirdError(
-                f"desired_lines[{index}] amount must be 1; split the PDF into one "
-                "explicit total per desired line."
-            )
-        price = money_decimal(raw_line.get("price"))
-        ledger_id = str(raw_line.get("ledger_account_id") or "").strip()
-        tax_id = str(raw_line.get("tax_rate_id") or "").strip()
-
-        ledger = ledger_accounts.get(ledger_id)
-        if ledger is None:
-            raise MoneybirdError(
-                f"desired_lines[{index}] ledger_account_id {ledger_id or '(empty)'} "
-                "does not exist."
-            )
-        if ledger.get("active") is False:
-            raise MoneybirdError(
-                f"desired_lines[{index}] ledger account {ledger_id} is inactive."
-            )
-        allowed_types = set(ledger.get("allowed_document_types") or [])
-        ledger_document_type = "purchase_invoice" if kind == "receipt" else kind
-        if allowed_types and ledger_document_type not in allowed_types:
-            raise MoneybirdError(
-                f"desired_lines[{index}] ledger account {ledger_id} does not allow {kind}."
-            )
-
-        tax_rate = tax_rates.get(tax_id)
-        if tax_rate is None:
-            raise MoneybirdError(
-                f"desired_lines[{index}] tax_rate_id {tax_id or '(empty)'} does not exist."
-            )
-        if tax_rate.get("active") is False:
-            raise MoneybirdError(
-                f"desired_lines[{index}] tax rate {tax_id} is inactive."
-            )
-        tax_type = str(tax_rate.get("tax_rate_type") or "")
-        if tax_type and tax_type not in {kind, "purchase_invoice"}:
-            raise MoneybirdError(
-                f"desired_lines[{index}] tax rate {tax_id} is for {tax_type}, not {kind}."
-            )
-
-        desired.append(
-            {
-                "description": description,
-                "price": price,
-                "ledger_account_id": ledger_id,
-                "tax_rate_id": tax_id,
-            }
-        )
-
-        line_total_incl = price
-        if not resolved_incl_flag:
-            percentage = Decimal(str(tax_rate.get("percentage") or "0"))
-            line_total_incl = (price * (Decimal("1") + percentage / Decimal("100"))).quantize(
-                CENT,
-                rounding=ROUND_HALF_UP,
-            )
-        calculated_total_incl += line_total_incl
-
-    calculated_total_incl = calculated_total_incl.quantize(CENT, rounding=ROUND_HALF_UP)
+    validated = validate_explicit_document_lines(
+        client,
+        document_kind=kind,
+        lines=desired_lines,
+        prices_are_incl_tax=resolved_incl_flag,
+    )
+    desired = validated.lines
+    calculated_total_incl = validated.total_incl_tax
     if abs(calculated_total_incl - current_total) >= Decimal("0.005"):
         raise MoneybirdError(
             "The explicit line allocation would change the invoice total: "
@@ -621,7 +474,7 @@ def build_explicit_purchase_invoice_reconcile(
             "Correct the PDF amounts or prices_are_incl_tax before preparing the write."
         )
 
-    details_attributes = _map_lines(target.get("details") or [], desired)
+    details_attributes = details_attributes_for_lines(target.get("details") or [], desired)
     desired_document = {
         "prices_are_incl_tax": resolved_incl_flag,
         "details": desired,
@@ -632,12 +485,12 @@ def build_explicit_purchase_invoice_reconcile(
             "id": str(detail.get("id") or ""),
             "description": str(detail.get("description") or ""),
             "price": f'{money_decimal(detail.get("price")):.2f}',
-            "ledger_account_id": _line_ledger(detail),
-            "tax_rate_id": _line_tax(detail),
+            "ledger_account_id": line_ledger_account_id(detail),
+            "tax_rate_id": line_tax_rate_id(detail),
         }
         for detail in (target.get("details") or [])
     ]
-    after_lines = _expected_lines(desired)
+    after_lines = line_view(desired)
 
     warnings = [
         "Exact line amounts were supplied explicitly; confirm them against the invoice attachment."

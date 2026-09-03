@@ -5,7 +5,30 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+### Added
+
+- **`validate_explicit_document_lines` on the extension seam: one implementation of
+  explicit line, tax and total arithmetic.** A caller who has transcribed amounts off
+  a source document states the lines exactly, and something has to prove every ledger
+  account and tax rate exists, is active and is usable on a document of that kind,
+  parse each price as exact decimal money, and total them. That step lived inside the
+  purchase reconciler, behind a private module path an out-of-tree tool package is not
+  allowed to import — so the only way for a second distribution to do it was a copy,
+  and a copy of money arithmetic is a second rounding behaviour waiting to disagree
+  with the first about a cent. It is now `moneybird_mcp.document_lines`, exported from
+  `moneybird_mcp.api` as the same objects the built-in tools call. The primitive is
+  capability-neutral: it fetches nothing, decides no totals, stages nothing, and names
+  the caller's own input field in every refusal. `build_explicit_purchase_invoice_reconcile`
+  was migrated onto it, so this distribution holds one implementation rather than two.
+  Adding names to the seam is a compatible change; `API_VERSION` stays 1.
+
 ### Changed
+
+- **One refusal is worded differently.** A line quantity other than one used to be
+  refused with "split the PDF into one explicit total per desired line"; the shared
+  primitive says "split the source into ...", because the source of a transcribed line
+  is as often an e-mail or a statement as a PDF. No schema, tool, contract or total
+  changed.
 
 - **Registering a tool or guarded action now requires a distribution to be credited
   for it.** Provenance was recorded from an ambient context whose default named this

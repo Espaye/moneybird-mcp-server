@@ -297,6 +297,7 @@ class PublicApiSurfaceTests(unittest.TestCase):
         "API_VERSION",
         "ApprovalId",
         "DateString",
+        "ExplicitDocumentLines",
         "Limit",
         "MONTH_CAPPED_REPORTS",
         "MoneybirdError",
@@ -332,6 +333,7 @@ class PublicApiSurfaceTests(unittest.TestCase):
         "stage_write",
         "symbolic_period_months",
         "tool",
+        "validate_explicit_document_lines",
         "verify_general_journal_payload",
     )
 
