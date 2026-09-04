@@ -31,6 +31,16 @@ versioning while allowing pre-1.0 breaking changes.
   answers with a bare "Period cannot exceed 1 month". It is now guarded by the same
   month cap as the typed reports.
 
+- **A general-journal document is no longer reported as unverified because the provider
+  reordered its entries.** Moneybird does not promise to return general-journal entries in
+  the order they were submitted, but verification compared them by array position. A
+  provider-side reorder therefore surfaced as a `line_mismatch` on a write that was in fact
+  exactly correct — the worst kind of false alarm on a guarded write, because it teaches a
+  caller to distrust a verifier that was right. Entry identity is now the complete
+  caller-controlled signature compared as an unordered multiset, including duplicate
+  occurrences, so a genuine missing, extra or altered line is still caught while a pure
+  reorder verifies clean.
+
 ### Changed
 
 - **`list_administrations` returns the lock state and explains `period_start_date`.**
