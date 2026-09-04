@@ -196,6 +196,20 @@ class ClientPathConfinementTests(unittest.TestCase):
             f"{self.client.base_url}/123/time_entries/456.json?filter=state%3Aopen",
         )
 
+    def test_generic_ledger_report_refuses_multi_month_period_before_http(self) -> None:
+        pooled_client = mock.Mock()
+        with mock.patch.object(
+            client_module,
+            "get_shared_http_client",
+            return_value=pooled_client,
+        ):
+            with self.assertRaisesRegex(MoneybirdError, "at most one month"):
+                self.client.raw_get(
+                    "reports/ledger_accounts/456",
+                    query={"period": "20260101..20260831"},
+                )
+        pooled_client.request.assert_not_called()
+
     def test_generic_get_rejects_url_and_path_smuggling(self) -> None:
         pooled_client = mock.Mock()
         malicious_paths = (

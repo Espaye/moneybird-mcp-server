@@ -71,15 +71,23 @@ def list_ledger_accounts() -> dict[str, Any]:
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_financial_accounts(limit: Limit = 25, page: Page = 1) -> dict[str, Any]:
-    """List bankrekeningen, kasrekeningen and intermediary accounts (financiële rekeningen)."""
+    """List bankrekeningen, kasrekeningen and intermediary accounts (financiële rekeningen).
+
+    Moneybird returns the complete collection without server-side pagination; this tool
+    applies limit/page locally so later pages never repeat page 1.
+    """
     client = ctx.get_client()
-    financial_accounts = client.list_financial_accounts(limit=limit, page=page)
+    all_financial_accounts = client.list_all_financial_accounts()
+    start = (page - 1) * limit
+    financial_accounts = all_financial_accounts[start : start + limit]
     return {
         "financial_accounts": [
             compact_financial_account_summary(item) for item in financial_accounts
         ],
         "page": page,
         "count": len(financial_accounts),
+        "total_count": len(all_financial_accounts),
+        "has_more": start + len(financial_accounts) < len(all_financial_accounts),
     }
 
 

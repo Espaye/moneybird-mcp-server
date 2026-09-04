@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from calendar import monthrange
 from datetime import datetime
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
@@ -86,6 +87,75 @@ def _reject_over_month_period(report_name: str, period: str) -> None:
             f"The '{report_name}' report accepts at most one month per call, but "
             f"'{text}' spans {len(months)} months. Call it once per month "
             f"({listed}) and sum the results."
+        )
+
+
+_REPORT_PERIOD_PRESETS = {
+    "this_month",
+    "prev_month",
+    "next_month",
+    "this_quarter",
+    "prev_quarter",
+    "next_quarter",
+    "this_year",
+    "prev_year",
+    "next_year",
+}
+
+
+def _validate_whole_month_report_period(report_name: str, period: str) -> None:
+    """Enforce Moneybird's documented whole-month report contract locally.
+
+    Balance, profit/loss, general-ledger, and the month-capped reports all use
+    calendar-month semantics. Sending a partial day range is especially risky:
+    older provider behaviour widened it to a month instead of returning the
+    requested days. Aging reports are the exception; their ``period_until``
+    parameter is an as-of date and is deliberately left alone here.
+    """
+    if report_name in REPORT_PERIOD_PARAM_OVERRIDES:
+        return
+    text = str(period or "").strip()
+    if not text or text.casefold() in _REPORT_PERIOD_PRESETS:
+        return
+
+    def parse_endpoint(value: str, *, end: bool) -> tuple[int, int, int]:
+        value = value.strip()
+        if re.fullmatch(r"[0-9]{6}", value):
+            year, month = int(value[:4]), int(value[4:6])
+            if not 1 <= month <= 12:
+                raise ValueError
+            return year, month, monthrange(year, month)[1] if end else 1
+        if re.fullmatch(r"[0-9]{8}", value):
+            parsed = datetime.strptime(value, "%Y%m%d")
+            return parsed.year, parsed.month, parsed.day
+        raise ValueError
+
+    start_text, separator, end_text = text.partition("..")
+    if not separator:
+        if re.fullmatch(r"[0-9]{6}", text):
+            try:
+                parse_endpoint(text, end=False)
+            except ValueError:
+                pass
+            else:
+                return
+        raise MoneybirdError(
+            f"The '{report_name}' report uses whole calendar months. Use a "
+            "month such as '202601' or a whole-month range such as "
+            "'20260101..20260131'; a partial or single-day period is refused."
+        )
+    try:
+        start = parse_endpoint(start_text, end=False)
+        end = parse_endpoint(end_text, end=True)
+    except ValueError as exc:
+        raise MoneybirdError(
+            f"The '{report_name}' report period '{text}' is invalid. Use "
+            "YYYYMM, YYYYMM..YYYYMM, or a whole-month YYYYMMDD..YYYYMMDD range."
+        ) from exc
+    if start > end or start[2] != 1 or end[2] != monthrange(end[0], end[1])[1]:
+        raise MoneybirdError(
+            f"The '{report_name}' report uses whole calendar months, but '{text}' "
+            "does not start on the first and end on the last day of a month."
         )
 
 
@@ -1244,10 +1314,19 @@ class MoneybirdClient:
         limit: int = 25,
         page: int = 1,
     ) -> list[dict[str, Any]]:
+        # Moneybird documents this as a retrieve-all endpoint and ignores the
+        # usual page/per_page parameters.  Paginate the returned collection
+        # locally so page 2 cannot silently repeat page 1.
+        accounts = self.list_all_financial_accounts()
+        per_page = max(1, min(limit, 100))
+        start = (max(1, page) - 1) * per_page
+        return accounts[start : start + per_page]
+
+    def list_all_financial_accounts(self) -> list[dict[str, Any]]:
+        """Retrieve Moneybird's complete active financial-account collection."""
         return self._request(
             "GET",
             f"/{self.administration_id}/financial_accounts.json",
-            {"per_page": max(1, min(limit, 100)), "page": max(1, page)},
         )
 
     def get_financial_account(self, financial_account_id: str) -> dict[str, Any]:
@@ -1312,6 +1391,11 @@ class MoneybirdClient:
         with route-sensitive characters use the typed lookup helpers instead.
         """
         raw = normalize_generic_get_path(path)
+        if re.fullmatch(r"reports/ledger_accounts/[0-9]+", raw):
+            _reject_over_month_period(
+                "ledger_account",
+                str((query or {}).get("period") or ""),
+            )
         if raw == "administrations":
             endpoint = "/administrations"
         else:
@@ -1713,6 +1797,7 @@ class MoneybirdClient:
             raise MoneybirdError(
                 f"Unsupported report '{report_name}'. Use one of: {supported}."
             )
+        _validate_whole_month_report_period(name, period)
         if name in MONTH_CAPPED_REPORTS:
             _reject_over_month_period(name, period)
         period_param = REPORT_PERIOD_PARAM_OVERRIDES.get(name, "period")
