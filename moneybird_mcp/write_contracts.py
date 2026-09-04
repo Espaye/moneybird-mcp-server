@@ -371,6 +371,69 @@ def compare_controlled_rows(
     return mismatches
 
 
+def compare_controlled_rows_unordered(
+    expected_rows: Any,
+    actual_rows: Any,
+    *,
+    fields: Iterable[str],
+    decimal_fields: Iterable[str] = (),
+) -> list[dict[str, Any]]:
+    """Compare a provider-owned unordered multiset of financial lines.
+
+    Moneybird does not promise to preserve the submitted order of general-journal
+    entries.  Line identity is therefore the complete caller-controlled signature,
+    including duplicate occurrences, rather than the response array position.
+    """
+
+    field_names = tuple(fields)
+    decimal_field_set = set(decimal_fields)
+
+    def canonical(row: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+        return tuple(
+            (
+                field,
+                _normalized_value(
+                    field,
+                    row.get(field),
+                    decimal_fields=decimal_field_set,
+                ),
+            )
+            for field in field_names
+        )
+
+    expected = _attribute_rows(expected_rows)
+    actual = _attribute_rows(actual_rows)
+    unmatched_actual = list(actual)
+    missing: list[dict[str, Any]] = []
+
+    for expected_row in expected:
+        signature = canonical(expected_row)
+        match_index = next(
+            (
+                index
+                for index, actual_row in enumerate(unmatched_actual)
+                if canonical(actual_row) == signature
+            ),
+            None,
+        )
+        if match_index is None:
+            missing.append(expected_row)
+        else:
+            unmatched_actual.pop(match_index)
+
+    if not missing and not unmatched_actual:
+        return []
+    return [
+        {
+            "field": "line_multiset",
+            "expected_count": len(expected),
+            "actual_count": len(actual),
+            "missing": missing,
+            "unexpected": unmatched_actual,
+        }
+    ]
+
+
 SALES_INVOICE_LINE_FIELDS = (
     "id",
     "description",
@@ -442,7 +505,7 @@ def verify_general_journal_payload(
         record,
         fields=("reference", "date", "description"),
     )
-    line_mismatches = compare_controlled_rows(
+    line_mismatches = compare_controlled_rows_unordered(
         expected.get("general_journal_document_entries_attributes"),
         _actual_rows(record, "general_journal_document_entries", "details"),
         fields=GENERAL_JOURNAL_LINE_FIELDS,

@@ -263,6 +263,57 @@ class WriteContractRegressionTests(unittest.TestCase):
         self.assertEqual(result["verification"]["field_mismatches"], {})
         self.assertTrue(result["verification"]["fully_verified"])
 
+    def test_general_journal_verification_accepts_provider_line_reordering(self) -> None:
+        sent: dict = {}
+
+        class Client:
+            administration_id = "contract-admin"
+
+            def list_ledger_accounts(self):
+                return [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}]
+
+            def create_general_journal_document(self, payload):
+                sent.update(payload)
+                return {"id": "journal-1"}
+
+            def get_document(self, _kind, _document_id):
+                submitted = list(
+                    sent["general_journal_document_entries_attributes"].values()
+                )
+                return {
+                    "id": "journal-1",
+                    "reference": "R",
+                    "date": "2026-07-01",
+                    "general_journal_document_entries": list(reversed(submitted)),
+                }
+
+        client = Client()
+        with self._patch_client(ledger, client):
+            prepared = ledger.prepare_create_general_journal_document(
+                "R",
+                "2026-07-01",
+                [
+                    {
+                        "ledger_account_id": "a",
+                        "debit": "10",
+                        "credit": "0",
+                        "description": "first",
+                    },
+                    {
+                        "ledger_account_id": "b",
+                        "debit": "0",
+                        "credit": "10",
+                        "description": "second",
+                    },
+                ],
+            )
+            result = ledger.create_general_journal_document_from_approval(
+                prepared["approval_id"]
+            )
+
+        self.assertEqual(result["verification"]["line_mismatches"], [])
+        self.assertTrue(result["verification"]["fully_verified"])
+
     def test_wrong_invoice_line_with_same_count_is_not_verified(self) -> None:
         class Client:
             administration_id = "contract-admin"
