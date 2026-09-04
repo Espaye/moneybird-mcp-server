@@ -263,54 +263,54 @@ class MatchMutationTests(unittest.TestCase):
 
 class MatchMutationGroupTests(unittest.TestCase):
     @staticmethod
-    def marktplaats_mutation(item_id: str, amount: str) -> dict:
+    def supplier_mutation(item_id: str, amount: str) -> dict:
         return mutation(
             id=item_id,
             date="2026-07-28",
             amount=amount,
             amount_open=amount,
-            contra_account_name="Marktplaats B.V.",
+            contra_account_name="Voorbeeld Handelsbedrijf B.V.",
             contra_account_number="",
         )
 
     @staticmethod
-    def marktplaats_invoice(item_id: str = "invoice-aug") -> dict:
+    def supplier_invoice(item_id: str = "invoice-aug") -> dict:
         return {
             "id": item_id,
-            "reference": "MPDI260816662",
+            "reference": "TEST-GROUP-INVOICE",
             "date": "2026-08-12",
             "state": "new",
-            "total_price_incl_tax": "43.19",
+            "total_price_incl_tax": "60.00",
             "payments": [],
-            "contact": {"company_name": "Marktplaats B.V."},
+            "contact": {"company_name": "Voorbeeld Handelsbedrijf B.V."},
         }
 
     def test_unique_exact_group_is_suggested_even_when_invoice_is_later(self):
         mutations = [
-            self.marktplaats_mutation("m1", "-11.50"),
-            self.marktplaats_mutation("m2", "-13.50"),
-            self.marktplaats_mutation("m3", "-18.19"),
+            self.supplier_mutation("m1", "-10.00"),
+            self.supplier_mutation("m2", "-20.00"),
+            self.supplier_mutation("m3", "-30.00"),
         ]
         groups = match_mutation_groups(
             mutations,
-            [("purchase_invoice", self.marktplaats_invoice())],
+            [("purchase_invoice", self.supplier_invoice())],
         )
 
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["suggestion"], "strong")
-        self.assertEqual(groups[0]["open_amount"], "43.19")
+        self.assertEqual(groups[0]["open_amount"], "60.00")
         self.assertEqual(groups[0]["financial_mutation_ids"], ["m1", "m2", "m3"])
         self.assertTrue(groups[0]["process_purchase_invoice"])
 
     def test_ambiguous_subsets_and_competing_invoices_stay_ambiguous(self):
         mutations = [
-            self.marktplaats_mutation(f"m{index}", amount)
+            self.supplier_mutation(f"m{index}", amount)
             for index, amount in enumerate(
-                ("-11.50", "-31.69", "-13.50", "-29.69"), 1
+                ("-10.00", "-50.00", "-25.00", "-35.00"), 1
             )
         ]
         groups = match_mutation_groups(
-            mutations, [("purchase_invoice", self.marktplaats_invoice())]
+            mutations, [("purchase_invoice", self.supplier_invoice())]
         )
         self.assertEqual(groups[0]["suggestion"], "ambiguous")
         self.assertIn("alternative_financial_mutation_ids", groups[0])
@@ -318,8 +318,8 @@ class MatchMutationGroupTests(unittest.TestCase):
         competing = match_mutation_groups(
             mutations[:2],
             [
-                ("purchase_invoice", self.marktplaats_invoice("invoice-a")),
-                ("purchase_invoice", self.marktplaats_invoice("invoice-b")),
+                ("purchase_invoice", self.supplier_invoice("invoice-a")),
+                ("purchase_invoice", self.supplier_invoice("invoice-b")),
             ],
         )
         self.assertEqual(len(competing), 2)
@@ -327,16 +327,16 @@ class MatchMutationGroupTests(unittest.TestCase):
 
     def test_unsafe_inputs_are_not_grouped(self):
         base = [
-            self.marktplaats_mutation("m1", "-11.50"),
-            self.marktplaats_mutation("m2", "-31.69"),
+            self.supplier_mutation("m1", "-10.00"),
+            self.supplier_mutation("m2", "-31.69"),
         ]
         wrong_contact = [dict(item, contra_account_name="Other B.V.") for item in base]
         processed = [base[0], dict(base[1], state="processed")]
-        late_invoice = self.marktplaats_invoice()
+        late_invoice = self.supplier_invoice()
         late_invoice["date"] = "2026-10-01"
         for name, mutations, invoice in (
-            ("contact", wrong_contact, self.marktplaats_invoice()),
-            ("state", processed, self.marktplaats_invoice()),
+            ("contact", wrong_contact, self.supplier_invoice()),
+            ("state", processed, self.supplier_invoice()),
             ("date", base, late_invoice),
         ):
             with self.subTest(name=name):

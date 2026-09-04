@@ -22,19 +22,19 @@ class GroupSettlementClient:
         self.update_calls = 0
         self.invoice = {
             "id": "invoice-1",
-            "reference": "MPDI260816662",
+            "reference": "TEST-GROUP-INVOICE",
             "date": "2026-08-12",
             "state": "new",
             "paid_at": None,
             "version": 10,
             "prices_are_incl_tax": True,
-            "total_price_incl_tax": "43.19",
-            "contact": {"company_name": "Marktplaats B.V."},
+            "total_price_incl_tax": "60.00",
+            "contact": {"company_name": "Voorbeeld Handelsbedrijf B.V."},
             "details": [
                 {
                     "id": "line-1",
-                    "description": "Advertentieplaatsingen",
-                    "price": "43.19",
+                    "description": "Voorbeeld diensten",
+                    "price": "60.00",
                     "amount": "1",
                     "ledger_account_id": "ledger-ads",
                     "tax_rate_id": "tax-21",
@@ -44,9 +44,9 @@ class GroupSettlementClient:
             "payments": [],
         }
         self.mutations = {
-            "m1": self._mutation("m1", "-11.50", 1),
-            "m2": self._mutation("m2", "-13.50", 2),
-            "m3": self._mutation("m3", "-18.19", 3),
+            "m1": self._mutation("m1", "-10.00", 1),
+            "m2": self._mutation("m2", "-20.00", 2),
+            "m3": self._mutation("m3", "-30.00", 3),
         }
 
     @staticmethod
@@ -58,7 +58,7 @@ class GroupSettlementClient:
             "amount": amount,
             "amount_open": amount,
             "version": version,
-            "contra_account_name": "Marktplaats B.V.",
+            "contra_account_name": "Voorbeeld Handelsbedrijf B.V.",
             "payments": [],
             "ledger_account_bookings": [],
         }
@@ -135,7 +135,7 @@ class GroupSettlementTests(unittest.TestCase):
         prepared = self._prepare(client)
 
         self.assertEqual(prepared["preview"]["mutation_count"], 3)
-        self.assertEqual(prepared["preview"]["total"], "43.19")
+        self.assertEqual(prepared["preview"]["total"], "60.00")
         self.assertEqual(
             prepared["preview"]["purchase_invoice"]["state_after_expected"],
             "paid",
@@ -153,7 +153,7 @@ class GroupSettlementTests(unittest.TestCase):
         self.assertEqual(client.update_calls, 1)
         self.assertEqual(client.invoice["state"], "paid")
         self.assertEqual(client.invoice["paid_at"], "2026-07-28")
-        self.assertEqual(client.invoice["details"][0]["price"], "43.19")
+        self.assertEqual(client.invoice["details"][0]["price"], "60.00")
 
     def test_stale_invoice_aborts_before_first_write(self) -> None:
         client = GroupSettlementClient()
@@ -203,7 +203,7 @@ class GroupSettlementTests(unittest.TestCase):
 
     def test_outgoing_document_payment_uses_positive_returned_magnitude(self) -> None:
         client = GroupSettlementClient()
-        client.invoice["total_price_incl_tax"] = "11.50"
+        client.invoice["total_price_incl_tax"] = "10.00"
         with mock.patch.object(bank.ctx, "get_client", return_value=client):
             prepared = bank.prepare_link_bank_mutation_booking(
                 "m1", "Document", "invoice-1"
