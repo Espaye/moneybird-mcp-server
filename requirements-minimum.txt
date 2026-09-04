@@ -1,7 +1,7 @@
 # Lowest direct dependency versions supported by pyproject.toml. CI installs
 # this constraints file to catch accidental reliance on newer APIs.
 fastmcp==3.4.7
-pydantic==2.13.4
+pydantic==2.13.5
 httpx==0.28.1
 uvicorn==0.52.4
 pypdf==6.16.2
