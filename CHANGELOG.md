@@ -3,6 +3,43 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning while allowing pre-1.0 breaking changes.
 
+## Unreleased
+
+### Fixed
+
+- **`list_financial_accounts` no longer repeats page 1 on every later page.** Moneybird
+  documents `/financial_accounts` as a retrieve-all route and ignores `page` and
+  `per_page` on it. This distribution was passing both anyway, so page 2 silently
+  returned page 1 again and a caller paging through a long account list would read the
+  same rows forever without any signal that it had stopped advancing. The client now
+  fetches the complete collection through `list_all_financial_accounts` and slices it
+  locally; the tool reports `total_count` and `has_more` so the caller can see where
+  the collection actually ends, and a page past the end is honestly empty.
+
+- **Whole-month report periods are enforced before the request leaves the process.**
+  Balance, profit-and-loss, general-ledger and the month-capped reports use calendar-month
+  semantics. The existing guard only refused periods *longer* than a month; a partial day
+  range such as `20260101..20260115` passed straight through, and older provider behaviour
+  widened it to the whole month rather than returning the requested days — so the caller
+  got a month of figures believing they had asked for a fortnight. `get_report` now refuses
+  a period that does not start on the first and end on the last day of a month, naming the
+  forms that do work. Aging reports keep their as-of-date semantics and are deliberately
+  exempt.
+
+- **The generic ledger-account report refuses a multi-month period before HTTP.**
+  `raw_get("reports/ledger_accounts/{id}")` reached the network with a period the provider
+  answers with a bare "Period cannot exceed 1 month". It is now guarded by the same
+  month cap as the typed reports.
+
+### Changed
+
+- **`list_administrations` returns the lock state and explains `period_start_date`.**
+  The response now carries `country`, `time_zone`, `access`, `suspended`,
+  `period_locked_until` and `period_start_date`. The last of these is the start of the
+  first year containing bookkeeping data, not a recurring fiscal-year boundary — a
+  reading that silently produces wrong periods for a broken or non-calendar fiscal year —
+  so it ships with a `period_start_date_meaning` field saying so.
+
 ## 0.8.0 — 2026-09-03
 
 ### Added

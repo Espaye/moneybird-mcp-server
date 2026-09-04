@@ -117,7 +117,11 @@ def get_server_status(
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 def list_administrations() -> dict[str, Any]:
-    """Use this when you need to inspect which Moneybird administrations are available to the token."""
+    """Inspect the Moneybird administrations available to the token, including lock state.
+
+    period_start_date is Moneybird's first bookkeeping-data year, not the start month of
+    every fiscal year. Use explicit report periods for broken or non-calendar fiscal years.
+    """
     client = ctx.get_client(require_administration=False)
     administrations = client.list_administrations()
     # The caller's resolved credential context is authoritative. Consulting the
@@ -131,6 +135,15 @@ def list_administrations() -> dict[str, Any]:
                 "name": item.get("name"),
                 "language": item.get("language"),
                 "currency": item.get("currency"),
+                "country": item.get("country"),
+                "time_zone": item.get("time_zone"),
+                "access": item.get("access"),
+                "suspended": item.get("suspended"),
+                "period_locked_until": item.get("period_locked_until"),
+                "period_start_date": item.get("period_start_date"),
+                "period_start_date_meaning": (
+                    "Start of the first bookkeeping-data year; not a recurring fiscal-year boundary."
+                ),
                 "is_default": str(item.get("id")) == configured_id,
             }
             for item in administrations

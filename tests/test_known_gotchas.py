@@ -109,6 +109,116 @@ class ReportPeriodMonthTests(unittest.TestCase):
             [f"2026{month:02d}" for month in range(1, 13)],
         )
 
+    def test_all_configured_month_capped_reports_are_guarded(self) -> None:
+        from moneybird_mcp.config import MONTH_CAPPED_REPORTS
+
+        for report_name in MONTH_CAPPED_REPORTS:
+            with self.subTest(report_name=report_name):
+                with self.assertRaises(MoneybirdError) as caught:
+                    client_module._reject_over_month_period(report_name, "202601..202602")
+                self.assertIn("at most one month", str(caught.exception))
+
+    def test_report_period_must_start_and_end_on_calendar_month_boundaries(self) -> None:
+        for report_name in ("profit_loss", "balance_sheet", "general_ledger", "tax"):
+            with self.subTest(report_name=report_name):
+                with self.assertRaisesRegex(MoneybirdError, "whole calendar months"):
+                    client_module._validate_whole_month_report_period(
+                        report_name, "20260115..20260310"
+                    )
+        for period in ("202601", "202601..202603", "20260101..20260331"):
+            with self.subTest(period=period):
+                client_module._validate_whole_month_report_period(
+                    "profit_loss", period
+                )
+
+    def test_aging_report_keeps_its_as_of_date_semantics(self) -> None:
+        client_module._validate_whole_month_report_period(
+            "debtors_aging", "20260115"
+        )
+
+    def test_partial_report_period_is_refused_before_network_access(self) -> None:
+        client = client_module.MoneybirdClient("token", "123")
+        with (
+            mock.patch.object(client, "_request") as request,
+            self.assertRaisesRegex(MoneybirdError, "whole calendar months"),
+        ):
+            client.get_report(
+                "balance_sheet", period="20260101..20260115"
+            )
+        request.assert_not_called()
+
+
+class FinancialAccountPaginationTests(unittest.TestCase):
+    """Moneybird ignores page/per_page here, so the slice has to happen locally."""
+
+    def test_unpaginated_moneybird_collection_is_sliced_locally(self) -> None:
+        client = client_module.MoneybirdClient.__new__(client_module.MoneybirdClient)
+        client.administration_id = "1"
+        calls = []
+
+        def _request(method, path, *args, **kwargs):
+            calls.append((method, path, args, kwargs))
+            return [{"id": str(index)} for index in range(1, 5)]
+
+        client._request = _request
+
+        self.assertEqual(
+            [item["id"] for item in client.list_financial_accounts(limit=2, page=2)],
+            ["3", "4"],
+        )
+        self.assertEqual(calls, [("GET", "/1/financial_accounts.json", (), {})])
+
+    def test_later_financial_account_page_can_be_empty(self) -> None:
+        client = client_module.MoneybirdClient.__new__(client_module.MoneybirdClient)
+        client.administration_id = "1"
+        client._request = lambda *_args, **_kwargs: [{"id": "1"}]
+
+        self.assertEqual(client.list_financial_accounts(limit=25, page=2), [])
+
+    def test_retrieve_all_financial_accounts_is_not_capped_at_100(self) -> None:
+        client = client_module.MoneybirdClient.__new__(client_module.MoneybirdClient)
+        client.administration_id = "1"
+        records = [{"id": str(index)} for index in range(125)]
+        client._request = lambda *_args, **_kwargs: records
+
+        self.assertEqual(client.list_all_financial_accounts(), records)
+
+
+class AdministrationSettingsOutputTests(unittest.TestCase):
+    """period_start_date is the first data year, not a fiscal-year boundary."""
+
+    def test_lock_and_first_data_year_are_exposed_and_explained(self) -> None:
+        from moneybird_mcp.tools import core
+
+        class Client:
+            administration_id = "1"
+
+            def list_administrations(self):
+                return [
+                    {
+                        "id": "1",
+                        "name": "Voorbeeld Administratie",
+                        "language": "nl",
+                        "currency": "EUR",
+                        "country": "NL",
+                        "time_zone": "Europe/Amsterdam",
+                        "access": "user",
+                        "suspended": False,
+                        "period_locked_until": "2025-12-31",
+                        "period_start_date": "2025-01-01",
+                    }
+                ]
+
+        with mock.patch.object(core.ctx, "get_client", return_value=Client()):
+            administration = core.list_administrations()["administrations"][0]
+
+        self.assertEqual(administration["period_locked_until"], "2025-12-31")
+        self.assertEqual(administration["period_start_date"], "2025-01-01")
+        self.assertIn(
+            "not a recurring fiscal-year boundary",
+            administration["period_start_date_meaning"],
+        )
+
 
 class AbsentConceptHintTests(unittest.TestCase):
     """Concepts that exist in the product but not the API get a specific message."""
