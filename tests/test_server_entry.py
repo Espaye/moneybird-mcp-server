@@ -369,7 +369,7 @@ class ServerStatusCredentialTests(unittest.TestCase):
             status = core.get_server_status()
 
         get_client.assert_not_called()
-        self.assertEqual(status["version"], "0.8.0")
+        self.assertEqual(status["version"], "0.8.1")
         self.assertEqual(status["capability_mode"], "write_enabled")
         self.assertEqual(
             status["credential_state"],

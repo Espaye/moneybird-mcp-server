@@ -8,7 +8,7 @@
 
 > **Onofficiële community-integratie.** Dit project is niet ontwikkeld, goedgekeurd, ondersteund of gecontroleerd door Moneybird B.V.
 >
-> **Bèta 0.8.0.** De ondersteunde opstelling is een lokale MCP-server via stdio. De server start technisch afgedwongen in alleen-lezenmodus. Experimentele schrijfacties vereisen een expliciete lokale inschakeling en gecontroleerde goedkeuring.
+> **Bèta 0.8.1.** De ondersteunde opstelling is een lokale MCP-server via stdio. De server start technisch afgedwongen in alleen-lezenmodus. Experimentele schrijfacties vereisen een expliciete lokale inschakeling en gecontroleerde goedkeuring.
 
 Gebruik Claude, ChatGPT, Cursor of een andere MCP-client om een Moneybird-administratie te doorzoeken en ermee te werken. De server kan contacten, facturen, documenten, bankmutaties, rapporten en lokaal geïndexeerde boekhoudgegevens lezen.
 
