@@ -1,12 +1,12 @@
 # Pin to the tested major. fastmcp 3.x changed enough that a stray 4.0 could
 # break the http_app/middleware wiring used in __main__. Bump deliberately.
-fastmcp>=3.4.5,<4
+fastmcp>=3.4.7,<4
 # Imported directly for tool parameter validation and JSON schemas.
-pydantic>=2.11.7,<3
+pydantic>=2.13.4,<3
 # Used directly for pooled, keep-alive Moneybird API connections.
 httpx>=0.28.1,<1
 # Used directly by the __main__ entrypoint to serve the SSE app with middleware.
-uvicorn>=0.35
+uvicorn>=0.52.4
 # PDF text-layer extraction for read_document_attachment (optional in the wheel
 # as the [pdf] extra; installed by default in the git-clone workflow).
-pypdf>=6.15.0
+pypdf>=6.16.2

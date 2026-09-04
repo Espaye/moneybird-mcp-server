@@ -62,6 +62,37 @@ versioning while allowing pre-1.0 breaking changes.
   Bank mutation rows additionally carry `message`, `contra_account_number` and
   `financial_account_id`, which a caller needs to audit a match rather than take it on faith.
 
+- **The one supplier fixture the earlier synthesis pass missed is now synthetic.**
+  `Recognise private data by shape instead of by remembered example` replaced the real
+  names, IBAN and policy number in the search fixtures, and the identifier-hygiene gate
+  catches any 18-digit Moneybird id. Neither reaches a company name paired with an invoice
+  reference, so one bank-group fixture kept a real-looking supplier, its invoice reference
+  and its exact split amounts. Those are now a synthetic supplier and round amounts. The
+  group arithmetic the tests actually exercise is preserved: the group still closes the
+  invoice exactly, and the ambiguity case still has two distinct subsets that each close
+  it. The synthetic name deliberately shares no token with the "different supplier"
+  sentinel, because group matching is token-overlap based.
+
+
+### Security
+
+- **The build tooling is pinned and private working material cannot be committed.**
+  CI and the release workflow installed `build` and `twine` unpinned, so a release
+  artifact depended on whatever those resolved to on the day -- the one place in the
+  pipeline where an unpinned dependency reaches a published wheel. Both are now
+  `build==1.5.0` and `twine==7.0.0`, alongside the already-pinned `cyclonedx-bom`.
+
+- **Declared dependency floors now match the versions documented as supported.**
+  `requirements-minimum.txt` already named fastmcp 3.4.7, pydantic 2.13.4, uvicorn 0.52.4
+  and pypdf 6.16.2 as the lowest supported versions, while `pyproject.toml` and
+  `requirements.txt` still permitted older ones -- so an install could legitimately
+  resolve below the floor CI claims to test. All three files now agree.
+
+- **`.gitignore` covers project memory, reconciliation output and the live audit
+  scripts**, which are working material against a real administration and are never
+  inputs to a public source distribution.
+
+
 ### Changed
 
 - **`list_administrations` returns the lock state and explains `period_start_date`.**

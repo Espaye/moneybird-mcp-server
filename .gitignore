@@ -36,3 +36,18 @@ venv/
 
 # Attachment downloads saved by read_document_attachment (financial data)
 attachments/
+
+# Private project memory and live bookkeeping/reconciliation working material.
+# These are never inputs to a public source distribution.
+MEMORY.md
+tmp/
+dist-pre-*-archive/
+docs/reconciliation-*.md
+docs/mcp-improvement-log.md
+scripts/audit_asset_plan_semantics.py
+scripts/build_machine_asset_manifests.py
+scripts/build_reconciliation_2026.py
+scripts/build_reconciliation_artifacts.py
+scripts/live_mcp_audit.py
+scripts/run_machine_asset_batches.py
+scripts/sync_asset_migration_live_status.py
