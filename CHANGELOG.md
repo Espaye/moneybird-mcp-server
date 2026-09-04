@@ -41,6 +41,27 @@ versioning while allowing pre-1.0 breaking changes.
   occurrences, so a genuine missing, extra or altered line is still caught while a pure
   reorder verifies clean.
 
+- **A reconciliation can now prove it saw the whole period.** Two read paths returned one
+  provider page and said nothing about it. `list_financial_mutations` inherited two separate
+  provider quirks — the list endpoint rejects a wide period outright, and `state:unprocessed`
+  omits unprocessed rows whose payment did not settle — so a caller reconciling a month could
+  read a page, see no unmatched rows, and conclude the period was clean when cancelled and
+  refused mutations had simply been filtered out of the answer. `review_purchase_invoices`
+  had the milder version of the same problem: an "all clear" covered whatever fitted on
+  page one.
+
+  Both now take `complete_scan`. Set it with an explicit period and the mutation route
+  enumerates the synchronization population, fetches every exact ID in bounded batches,
+  refuses the read if the population shifted underneath it, applies the state filter
+  locally, and reports `population_count`, `selected_count` and
+  `provider_hidden_nonsettled_count`. The review route reads a bounded complete population
+  the same way and reports its own truncation and rate-budget stops. Left at its default
+  each tool behaves exactly as before, but now says so: every response carries a
+  `completeness` block stating whether the population was proven.
+
+  Bank mutation rows additionally carry `message`, `contra_account_number` and
+  `financial_account_id`, which a caller needs to audit a match rather than take it on faith.
+
 ### Changed
 
 - **`list_administrations` returns the lock state and explains `period_start_date`.**

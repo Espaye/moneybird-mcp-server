@@ -111,6 +111,12 @@ KNOWN LIMITS:
   fresh preview if somebody changed the invoice in the meantime.
 - list_financial_mutations rejects a wide period with HTTP 400 ("too many ... use sync API");
   query per month (period:"JJJJMM01..JJJJMMnn") or use the sync index.
+- The ordinary list_financial_mutations mode is a provider page and cannot prove a complete
+  audit population. For a reconciliation, set complete_scan=true with an explicit period;
+  it uses synchronization plus exact-ID fetches, applies state locally, and reports the
+  complete population including non-settled rows hidden by Moneybird's state filter.
+  review_purchase_invoices takes the same complete_scan flag for the same reason: without
+  it, an "all clear" only covers one page.
 - The cash_flow, tax, debtors, and creditors reports accept at most ONE month of period
   (use this_month or 202606); the *_aging reports take a whole month as reference date.
   Only profit_loss, balance_sheet, general_ledger, and the by_contact/by_project reports

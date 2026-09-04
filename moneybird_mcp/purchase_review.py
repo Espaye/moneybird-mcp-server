@@ -17,6 +17,10 @@ from .document_lines import line_ledger_account_id, line_tax_rate_id
 from .formatting import chunked, normalize_document_kind
 
 _SUPPORTED_KINDS = {"purchase_invoice", "receipt"}
+
+#: Upper bound on a complete review population, so an explicit complete scan
+#: stays bounded and reports its own truncation instead of implying completeness.
+_MAX_COMPLETE_REVIEW_DOCUMENTS = 1000
 _DESCRIPTION_STOPWORDS = {
     "aan",
     "de",
@@ -291,6 +295,90 @@ def list_documents_for_contact(
     }
 
 
+def list_documents_for_complete_review(
+    client: Any,
+    kind: str,
+    *,
+    period: str = "",
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read a bounded complete review population, preferring synchronization.
+
+    The ordinary review remains a cheap one-page operation. Callers that explicitly
+    request a complete scan get up to 1,000 documents plus honest budget/truncation
+    metadata; they never receive a silently partial "all clear".
+    """
+    budget_exhausted = False
+    if hasattr(client, "list_document_versions") and hasattr(
+        client, "fetch_documents_by_ids"
+    ):
+        version_filter = f"period:{period}" if period else ""
+        versions = client.list_document_versions(kind, filter=version_filter)
+        ids = [str(item.get("id") or "") for item in versions if item.get("id")]
+        ids.reverse()
+        selected_ids = ids[:_MAX_COMPLETE_REVIEW_DOCUMENTS]
+        documents: list[dict[str, Any]] = []
+        batches_scanned = 0
+        for id_batch in chunked(selected_ids, 100):
+            if batches_scanned and rate_budget.affordable_batches("general") == 0:
+                budget_exhausted = True
+                break
+            documents.extend(client.fetch_documents_by_ids(kind, id_batch))
+            batches_scanned += 1
+        documents.sort(key=_document_order_key, reverse=True)
+        return documents, {
+            "history_source": "synchronization_complete_review",
+            "pages_scanned": batches_scanned,
+            "documents_examined": len(documents),
+            "history_scan_truncated": (
+                budget_exhausted or len(ids) > _MAX_COMPLETE_REVIEW_DOCUMENTS
+            ),
+            "history_scan_stopped_for_rate_budget": budget_exhausted,
+            "population_count": len(ids),
+            "scan_cap": _MAX_COMPLETE_REVIEW_DOCUMENTS,
+        }
+
+    page_size = 100
+    documents = []
+    page = 1
+    prior_page_ids: tuple[str, ...] | None = None
+    repeated_page = False
+    while len(documents) < _MAX_COMPLETE_REVIEW_DOCUMENTS:
+        if page > 1 and rate_budget.affordable_batches("general") == 0:
+            budget_exhausted = True
+            break
+        batch = client.list_documents(
+            kind,
+            limit=page_size,
+            page=page,
+            period=period,
+        )
+        if not batch:
+            break
+        page_ids = tuple(str(document.get("id") or "") for document in batch)
+        if page_ids == prior_page_ids:
+            repeated_page = True
+            break
+        prior_page_ids = page_ids
+        documents.extend(batch)
+        if len(batch) < page_size:
+            break
+        page += 1
+    documents = documents[:_MAX_COMPLETE_REVIEW_DOCUMENTS]
+    documents.sort(key=_document_order_key, reverse=True)
+    return documents, {
+        "history_source": "paginated_complete_review",
+        "pages_scanned": page,
+        "documents_examined": len(documents),
+        "history_scan_truncated": (
+            budget_exhausted
+            or repeated_page
+            or len(documents) >= _MAX_COMPLETE_REVIEW_DOCUMENTS
+        ),
+        "history_scan_stopped_for_rate_budget": budget_exhausted,
+        "scan_cap": _MAX_COMPLETE_REVIEW_DOCUMENTS,
+    }
+
+
 def _canonical_pattern(documents: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Return the modal booking pattern, or ``None`` for insufficient history."""
     if len(documents) < 2:
@@ -407,6 +495,7 @@ def scan_purchase_invoices_for_attention(
     limit: int = 100,
     contact_id: str = "",
     include_description_mapping_checks: bool = True,
+    complete_scan: bool = False,
 ) -> dict[str, Any]:
     """Flag documents that are new or deviate from their supplier's pattern.
 
@@ -426,6 +515,12 @@ def scan_purchase_invoices_for_attention(
             contact_id=contact_id,
             period=period,
             limit=limit,
+        )
+    elif complete_scan:
+        documents, scan_metadata = list_documents_for_complete_review(
+            client,
+            normalized_kind,
+            period=period,
         )
     else:
         documents = client.list_documents(
@@ -543,6 +638,7 @@ def scan_purchase_invoices_for_attention(
         "count": len(flagged),
         "scanned": len(documents),
         "period": period,
+        "complete_scan_requested": complete_scan,
         "description_mapping_checks_included": include_description_mapping_checks,
         **scan_metadata,
     }

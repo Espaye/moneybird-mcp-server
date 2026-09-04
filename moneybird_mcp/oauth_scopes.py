@@ -153,6 +153,8 @@ CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
         ),
         endpoints=(
             "GET /financial_mutations",
+            "GET /financial_mutations/synchronization",
+            "POST /financial_mutations/synchronization",
             "PATCH /financial_mutations/*/link_booking",
             "DELETE /financial_mutations/*/unlink_booking",
         ),
