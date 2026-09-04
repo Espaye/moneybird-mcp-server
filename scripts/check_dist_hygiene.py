@@ -76,6 +76,7 @@ PUBLIC_DOCS = frozenset(
         "docs/oauth.md",
         "docs/reading_pdf_attachments.md",
         "docs/releasing.md",
+        "docs/roadmap.md",
         "docs/threat_model.md",
         "docs/tool-reference.md",
         "docs/workflow-catalogue.md",

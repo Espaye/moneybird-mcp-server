@@ -189,6 +189,7 @@ Deze bestanden worden door dit project niet versleuteld. Beperk de toegang tot d
 - [Wijzigingslogboek](CHANGELOG.md)
 - [Dekking van de Moneybird API](docs/moneybird_api_coverage.md)
 - [Releaseproces](docs/releasing.md)
+- [Roadmap](docs/roadmap.md)
 
 De technische referentie-, beveiligings-, ontwikkel- en releasedocumentatie blijft voorlopig Engelstalig.
 
