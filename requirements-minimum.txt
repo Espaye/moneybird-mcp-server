@@ -1,5 +1,16 @@
 # Lowest direct dependency versions supported by pyproject.toml. CI installs
 # this constraints file to catch accidental reliance on newer APIs.
+#
+# This is a floor, not a pin of what ships: pyproject.toml and requirements.txt
+# already admit every newer compatible release. Raising a version here only
+# stops the minimum-dependency lane from testing the version we still promise
+# to support, so a Dependabot PR that touches nothing but this file is closed,
+# not merged. Dependabot's pip ecosystem has no file-level exclusion, so it
+# will keep proposing them.
+#
+# Move a floor only when the old version is demonstrably unsupportable, and
+# then move it in pyproject.toml, requirements.txt and this file together as
+# one deliberate dependency-contract change.
 fastmcp==3.4.7
 pydantic==2.13.4
 httpx==0.28.1
