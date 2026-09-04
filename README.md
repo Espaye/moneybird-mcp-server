@@ -189,6 +189,7 @@ These files are not encrypted by this project. Restrict access to the directory 
 - [Changelog](https://github.com/Espaye/moneybird-mcp-server/blob/main/CHANGELOG.md)
 - [Moneybird API coverage](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/moneybird_api_coverage.md)
 - [Release process](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/releasing.md)
+- [Roadmap](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/roadmap.md)
 
 ## Support and status
 
