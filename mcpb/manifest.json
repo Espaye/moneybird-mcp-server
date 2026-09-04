@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "moneybird-mcp",
   "display_name": "Moneybird",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Read your Moneybird bookkeeping with Claude; optional experimental writes require an explicit local capability setting and supervised previews.",
   "long_description": "Connects Claude locally to your Moneybird administration. Read invoices, purchase documents, contacts, bank mutations and financial reports. The extension defaults to read-only. Setting capability mode to write_enabled exposes experimental prepare-and-execute bookkeeping tools; review every preview and verify the action-specific result. An approval ID binds a prepared payload but is not independent proof of human confirmation. Includes Dutch bookkeeping prompts such as 'koppel_banktransacties' and 'verwerk_achterstand'.",
   "author": {

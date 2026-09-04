@@ -3,7 +3,7 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning while allowing pre-1.0 breaking changes.
 
-## Unreleased
+## 0.8.1 — 2026-09-04
 
 ### Fixed
 
