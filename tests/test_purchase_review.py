@@ -14,6 +14,47 @@ from moneybird_mcp.purchase_review import scan_purchase_invoices_for_attention
 
 
 class ScanAttentionTests(unittest.TestCase):
+    def test_complete_scan_uses_sync_population_beyond_first_hundred(self):
+        class CompleteSyncClient(FakeClient):
+            def list_document_versions(self, kind, *, filter=""):
+                return [
+                    {"id": document_id, "version": document.get("version", 1)}
+                    for document_id, document in self._docs.items()
+                ]
+
+            def fetch_documents_by_ids(self, kind, ids):
+                return [self._docs[document_id] for document_id in ids]
+
+            def list_documents(self, *args, **kwargs):
+                raise AssertionError("complete review should use synchronization")
+
+        unrelated = []
+        for index in range(105):
+            document = reference_june(f"other-{index}")
+            document["contact"] = {
+                "id": f"OTHER-{index}",
+                "company_name": "Other",
+            }
+            unrelated.append(document)
+        stale = target_july("stale-beyond-100")
+        stale["date"] = "2025-01-01"
+
+        result = scan_purchase_invoices_for_attention(
+            CompleteSyncClient([*unrelated, stale]),
+            complete_scan=True,
+        )
+
+        self.assertEqual(result["scanned"], 106)
+        self.assertEqual(result["population_count"], 106)
+        self.assertFalse(result["history_scan_truncated"])
+        self.assertTrue(result["complete_scan_requested"])
+        self.assertTrue(
+            any(
+                item["document_id"] == "stale-beyond-100"
+                for item in result["flagged"]
+            )
+        )
+
     def test_flags_the_deviating_new_invoice(self):
         documents = []
         for index, month in enumerate(("03", "04", "05")):

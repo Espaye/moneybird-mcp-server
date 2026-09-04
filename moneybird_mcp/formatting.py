@@ -493,7 +493,10 @@ def compact_financial_mutation_summary(
         "settlement_state": mutation.get("settlement_state"),
         "amount": mutation.get("amount"),
         "amount_open": mutation.get("amount_open"),
+        "message": mutation.get("message"),
         "contra_account_name": mutation.get("contra_account_name"),
+        "contra_account_number": mutation.get("contra_account_number"),
+        "financial_account_id": str(mutation.get("financial_account_id") or ""),
         "financial_account_name": (
             financial_account.get("name")
             or financial_account.get("identifier")

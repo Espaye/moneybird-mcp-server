@@ -294,11 +294,23 @@ def review_purchase_invoices(
             )
         ),
     ] = True,
+    complete_scan: Annotated[
+        bool,
+        Field(
+            description=(
+                "False reviews one provider page. True reads a bounded complete "
+                "population through synchronization and reports its own truncation, "
+                "so an 'all clear' is never silently partial."
+            )
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     """Use this to find purchase invoices that need attention: still in 'new' state, booked
     differently than the same supplier usually books, or carrying a familiar description on a
     different ledger/tax destination. Contact-specific scans use complete versioned history.
     Each flagged invoice suggests a canonical prior invoice to use as the reconcile reference.
+    Set complete_scan=true when an 'all clear' has to mean the whole period was examined;
+    the result then carries its population count and any truncation.
     Read-only; it never changes anything."""
     client = ctx.get_client()
     return scan_purchase_invoices_for_attention(
@@ -308,6 +320,7 @@ def review_purchase_invoices(
         limit=limit,
         contact_id=contact_id,
         include_description_mapping_checks=include_description_mapping_checks,
+        complete_scan=complete_scan,
     )
 
 

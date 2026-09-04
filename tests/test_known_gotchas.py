@@ -148,6 +148,94 @@ class ReportPeriodMonthTests(unittest.TestCase):
         request.assert_not_called()
 
 
+class CompleteFinancialMutationScanTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from moneybird_mcp import rate_budget
+
+        rate_budget.clear()
+        self.addCleanup(rate_budget.clear)
+        self.client = client_module.MoneybirdClient("token", "123")
+
+    def test_sync_population_applies_unprocessed_state_locally(self) -> None:
+        calls = []
+        records = [
+            {
+                "id": "1",
+                "date": "2026-01-01",
+                "state": "unprocessed",
+                "settlement_state": "settled",
+                "version": 1,
+            },
+            {
+                "id": "2",
+                "date": "2026-01-02",
+                "state": "unprocessed",
+                "settlement_state": "cancelled",
+                "version": 1,
+            },
+            {
+                "id": "3",
+                "date": "2026-01-03",
+                "state": "processed",
+                "settlement_state": "settled",
+                "version": 1,
+            },
+        ]
+
+        def request(method, path, *, query=None, body=None, **_kwargs):
+            calls.append((method, path, query, body))
+            if method == "GET":
+                return [{"id": item["id"], "version": 1} for item in records]
+            return [item for item in records if item["id"] in body["ids"]]
+
+        with mock.patch.object(self.client, "_request", side_effect=request):
+            result = self.client.scan_financial_mutations_complete(
+                filter="state:unprocessed",
+                period="20260101..20260131",
+            )
+
+        self.assertEqual(
+            [item["id"] for item in result["financial_mutations"]], ["2", "1"]
+        )
+        self.assertEqual(result["population_count"], 3)
+        self.assertEqual(result["selected_count"], 2)
+        self.assertEqual(result["provider_hidden_nonsettled_count"], 1)
+        self.assertEqual(result["mutation_api_calls"], 2)
+        self.assertEqual(
+            calls[0][2], {"filter": "period:20260101..20260131"}
+        )
+        self.assertEqual(calls[1][3], {"ids": ["1", "2", "3"]})
+
+    def test_complete_scan_requires_an_explicit_bounded_period(self) -> None:
+        with self.assertRaisesRegex(MoneybirdError, "explicit period"):
+            self.client.scan_financial_mutations_complete(
+                filter="state:unprocessed"
+            )
+        with self.assertRaisesRegex(MoneybirdError, "at most 12 months"):
+            self.client.scan_financial_mutations_complete(
+                period="20250101..20260228"
+            )
+
+    def test_complete_scan_refuses_a_record_changed_after_synchronization(self) -> None:
+        def request(method, _path, **_kwargs):
+            if method == "GET":
+                return [{"id": "1", "version": 10}]
+            return [
+                {
+                    "id": "1",
+                    "version": 11,
+                    "date": "2026-01-01",
+                    "state": "unprocessed",
+                }
+            ]
+
+        with (
+            mock.patch.object(self.client, "_request", side_effect=request),
+            self.assertRaisesRegex(MoneybirdError, "changed=1"),
+        ):
+            self.client.scan_financial_mutations_complete(period="202601")
+
+
 class FinancialAccountPaginationTests(unittest.TestCase):
     """Moneybird ignores page/per_page here, so the slice has to happen locally."""
 

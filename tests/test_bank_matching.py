@@ -6,6 +6,7 @@ public.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from moneybird_mcp.bank_matching import (
     CONFIDENCE_EXACT,
@@ -18,6 +19,7 @@ from moneybird_mcp.bank_matching import (
     score_candidate,
 )
 from moneybird_mcp.config import MoneybirdError
+from moneybird_mcp.tools import bank
 from moneybird_mcp.tools.bank import (
     _hidden_scan_skipped,
     _unprocessed_hidden_by_state_filter,
@@ -445,6 +447,60 @@ class HiddenUnprocessedPaginationTests(unittest.TestCase):
     def test_a_blank_settlement_state_is_unknown_not_failed(self) -> None:
         client = self._Client([self._mutation("1", "")])
         self.assertEqual(_unprocessed_hidden_by_state_filter(client, "", []), [])
+
+
+class CompleteFinancialMutationToolTests(unittest.TestCase):
+    class _Client:
+        administration_id = "123"
+
+        def scan_financial_mutations_complete(self, **_kwargs):
+            return {
+                "financial_mutations": [
+                    {
+                        "id": "2",
+                        "date": "2026-01-02",
+                        "state": "unprocessed",
+                        "settlement_state": "cancelled",
+                        "amount": "-10.00",
+                        "amount_open": "-10.00",
+                        "financial_account_id": "77",
+                    },
+                    {
+                        "id": "1",
+                        "date": "2026-01-01",
+                        "state": "unprocessed",
+                        "settlement_state": "settled",
+                        "amount": "-20.00",
+                        "amount_open": "-20.00",
+                        "financial_account_id": "77",
+                    },
+                ],
+                "population_count": 3,
+                "selected_count": 2,
+                "provider_filter": "period:20260101..20260131",
+                "requested_state": "unprocessed",
+                "provider_hidden_nonsettled_count": 1,
+                "synchronization_count": 3,
+                "mutation_api_calls": 2,
+            }
+
+        def list_financial_accounts(self, **_kwargs):
+            return [{"id": "77", "name": "Audit bank"}]
+
+    def test_complete_population_is_paginated_locally_and_disclosed(self) -> None:
+        with mock.patch.object(bank.ctx, "get_client", return_value=self._Client()):
+            result = bank.list_financial_mutations(
+                limit=1,
+                page=2,
+                filter="state:unprocessed",
+                period="20260101..20260131",
+                complete_scan=True,
+            )
+
+        self.assertEqual([item["id"] for item in result["financial_mutations"]], ["1"])
+        self.assertTrue(result["completeness"]["complete_population_proven"])
+        self.assertFalse(result["completeness"]["has_more"])
+        self.assertEqual(result["completeness"]["provider_hidden_nonsettled_count"], 1)
 
 
 class HiddenScanAffordabilityTests(unittest.TestCase):

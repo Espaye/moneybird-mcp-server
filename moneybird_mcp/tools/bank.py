@@ -63,22 +63,55 @@ def list_financial_mutations(
     page: Page = 1,
     filter: FilterString = "",
     period: Period = "",
+    complete_scan: Annotated[
+        bool,
+        Field(
+            description=(
+                "False uses Moneybird's normal paginated list. True uses the "
+                "synchronization endpoint to prove a complete, bounded population, "
+                "then paginates that population locally; an explicit period is required."
+            )
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     """List bankmutaties (bank or cash transactions, banktransacties, afschriftregels).
     Filter state:unprocessed for the onverwerkte transacties that still need booking.
-    To find which invoice each one pays, use suggest_bank_mutation_matches."""
+    Each row includes the bankrekening-id, payment message and counterparty account needed
+    to audit a match. Set complete_scan=true for reconciliations: Moneybird's
+    normal state:unprocessed filter can hide non-settled rows and its list endpoint
+    can reject large periods. The complete route uses synchronization plus exact-ID
+    fetches, applies state locally, and reports its population proof. To find which
+    invoice each row pays, use suggest_bank_mutation_matches."""
     client = ctx.get_client()
-    mutations = client.list_financial_mutations(
-        limit=limit,
-        page=page,
-        filter=filter,
-        period=period,
-    )
+    completeness: dict[str, Any] | None = None
+    if complete_scan:
+        complete = client.scan_financial_mutations_complete(
+            filter=filter,
+            period=period,
+        )
+        population = complete.pop("financial_mutations")
+        start = (page - 1) * limit
+        mutations = population[start : start + limit]
+        completeness = {
+            "mode": "synchronization_plus_exact_id_fetch",
+            "complete_population_proven": True,
+            **complete,
+            "has_more": start + len(mutations) < complete["selected_count"],
+            "local_page": page,
+            "local_limit": limit,
+        }
+    else:
+        mutations = client.list_financial_mutations(
+            limit=limit,
+            page=page,
+            filter=filter,
+            period=period,
+        )
     financial_accounts = {
         str(item.get("id") or ""): item
         for item in client.list_financial_accounts(limit=100, page=1)
     }
-    return {
+    result = {
         "financial_mutations": [
             compact_financial_mutation_summary(
                 item,
@@ -90,6 +123,18 @@ def list_financial_mutations(
         "page": page,
         "count": len(mutations),
     }
+    if completeness is not None:
+        result["completeness"] = completeness
+    else:
+        result["completeness"] = {
+            "mode": "provider_page",
+            "complete_population_proven": False,
+            "note": (
+                "This is one provider page. Use complete_scan=true with an explicit "
+                "period for audit/reconciliation completeness."
+            ),
+        }
+    return result
 
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)

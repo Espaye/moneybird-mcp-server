@@ -1782,6 +1782,171 @@ class MoneybirdClient:
             retry_safe=True,
         )
 
+    def scan_financial_mutations_complete(
+        self,
+        *,
+        filter: str = "",
+        period: str = "",
+        max_records: int = 5_000,
+    ) -> dict[str, Any]:
+        """Fetch a bounded, complete mutation population through sync + id batches.
+
+        Moneybird's regular list endpoint can reject large periods. More subtly,
+        its ``state:unprocessed`` filter omits unprocessed rows whose payment did
+        not settle. The synchronization endpoint gives the complete ID set. This
+        method therefore removes only the state term from the provider query,
+        fetches every returned ID, and applies state locally.
+        """
+        filter_string = build_filter_string(filter=filter, period=period)
+        parts = [part.strip() for part in filter_string.split(",") if part.strip()]
+        period_terms = [part for part in parts if part.startswith("period:")]
+        if len(period_terms) != 1:
+            raise MoneybirdError(
+                "A complete financial-mutation scan requires exactly one explicit "
+                "period term (for example period:'20260101..20261231')."
+            )
+        period_value = period_terms[0].split(":", 1)[1]
+        months = report_period_months(period_value) or symbolic_period_months(
+            period_value
+        )
+        bounded_symbols = {
+            "this_week",
+            "prev_week",
+            "next_week",
+            "this_month",
+            "prev_month",
+            "next_month",
+            "this_quarter",
+            "prev_quarter",
+            "next_quarter",
+            "next_year",
+        }
+        if months is None and period_value.casefold() not in bounded_symbols:
+            raise MoneybirdError(
+                f"Complete financial-mutation period '{period_value}' is not a "
+                "recognized bounded period. Use an explicit date range or a "
+                "Moneybird week/month/quarter/year preset."
+            )
+        if months is not None and len(months) > 12:
+            raise MoneybirdError(
+                "A complete financial-mutation scan may span at most 12 months; "
+                "split a longer audit into year-sized requests."
+            )
+
+        state_terms = [part for part in parts if part.startswith("state:")]
+        if len(state_terms) > 1:
+            raise MoneybirdError(
+                "A complete financial-mutation scan accepts at most one state filter."
+            )
+        requested_state = (
+            state_terms[0].split(":", 1)[1].strip().casefold()
+            if state_terms
+            else "all"
+        )
+        if requested_state not in {"all", "processed", "unprocessed"}:
+            raise MoneybirdError(
+                "Financial-mutation state must be all, processed, or unprocessed."
+            )
+        provider_parts = [part for part in parts if not part.startswith("state:")]
+        provider_filter = ",".join(provider_parts)
+
+        initial_capacity = rate_budget.affordable_batches("general", reserve=10)
+        if initial_capacity == 0:
+            raise MoneybirdError(
+                "The observed Moneybird API budget has no capacity for a complete "
+                "financial-mutation scan while retaining a 10-request reserve. "
+                "Retry after the current rate-limit window resets."
+            )
+        versions = self.list_financial_mutation_versions(filter=provider_filter)
+        ids = [
+            validate_moneybird_id(str(item.get("id") or ""), "financial_mutation_id")
+            for item in versions
+        ]
+        if len(ids) != len(set(ids)):
+            raise MoneybirdError(
+                "Moneybird synchronization returned duplicate financial-mutation IDs; "
+                "the complete scan was refused instead of silently deduplicating them."
+            )
+        expected_versions = {
+            identifier: str(item.get("version") or "")
+            for identifier, item in zip(ids, versions, strict=True)
+        }
+        if len(ids) > max_records:
+            raise MoneybirdError(
+                f"The complete scan found {len(ids)} mutations, above its "
+                f"{max_records}-record safety bound. Request a shorter period."
+            )
+
+        fetch_calls = (len(ids) + 99) // 100
+        capacity = rate_budget.affordable_batches("general", reserve=10)
+        if capacity is not None and capacity < fetch_calls:
+            reset = rate_budget.reset_seconds("general")
+            reset_note = (
+                f" The observed window resets in about {reset:.0f} seconds."
+                if reset is not None
+                else ""
+            )
+            raise MoneybirdError(
+                f"The synchronization found {len(ids)} mutations and needs "
+                f"{fetch_calls} fetch calls, but the observed API budget can safely "
+                f"fit only {capacity} while retaining a 10-request reserve."
+                f"{reset_note} No mutation batch was fetched."
+            )
+
+        mutations: list[dict[str, Any]] = []
+        for offset in range(0, len(ids), 100):
+            mutations.extend(self.fetch_financial_mutations_by_ids(ids[offset : offset + 100]))
+        returned_ids = [str(item.get("id") or "") for item in mutations]
+        if len(returned_ids) != len(set(returned_ids)):
+            raise MoneybirdError(
+                "Moneybird returned duplicate records while fetching synchronized "
+                "financial mutations."
+            )
+        missing = sorted(set(ids) - set(returned_ids))
+        unexpected = sorted(set(returned_ids) - set(ids))
+        changed = sorted(
+            identifier
+            for identifier, item in (
+                (str(record.get("id") or ""), record) for record in mutations
+            )
+            if expected_versions.get(identifier)
+            and str(item.get("version") or "") != expected_versions[identifier]
+        )
+        if missing or unexpected or changed:
+            raise MoneybirdError(
+                "The synchronization population changed or was incomplete during the "
+                f"scan (missing={len(missing)}, unexpected={len(unexpected)}, "
+                f"changed={len(changed)}). Retry the read so it is based on one "
+                "coherent population."
+            )
+
+        selected = [
+            item
+            for item in mutations
+            if requested_state == "all"
+            or str(item.get("state") or "").casefold() == requested_state
+        ]
+        selected.sort(
+            key=lambda item: (str(item.get("date") or ""), str(item.get("id") or "")),
+            reverse=True,
+        )
+        hidden_nonsettled = sum(
+            1
+            for item in selected
+            if str(item.get("state") or "").casefold() == "unprocessed"
+            and str(item.get("settlement_state") or "") not in {"", "settled"}
+        )
+        return {
+            "financial_mutations": selected,
+            "population_count": len(mutations),
+            "selected_count": len(selected),
+            "provider_filter": provider_filter,
+            "requested_state": requested_state,
+            "provider_hidden_nonsettled_count": hidden_nonsettled,
+            "synchronization_count": len(ids),
+            "mutation_api_calls": 1 + fetch_calls,
+        }
+
     def get_report(
         self,
         report_name: str,
