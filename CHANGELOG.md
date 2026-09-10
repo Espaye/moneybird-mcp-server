@@ -5,6 +5,16 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+### Security
+
+- Require pypdf 6.18.0 or newer for PDF attachment extraction, including the
+  `[pdf]` extra, git-clone installs, and minimum-dependency tests. This includes
+  upstream fixes for excessive indirect-object parsing runtimes
+  ([GHSA-5jq2-8x83-x246](https://github.com/py-pdf/pypdf/security/advisories/GHSA-5jq2-8x83-x246))
+  and Roman page-label memory use
+  ([GHSA-qv6h-rv94-w285](https://github.com/py-pdf/pypdf/security/advisories/GHSA-qv6h-rv94-w285)).
+  Existing parser process isolation, timeout, and memory limits remain in place.
+
 ### Changed
 
 - Allow FastMCP 4.x while retaining support for 3.4.7. The minimum-dependency

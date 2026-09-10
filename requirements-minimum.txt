@@ -15,4 +15,5 @@ fastmcp==3.4.7
 pydantic==2.13.4
 httpx==0.28.1
 uvicorn==0.52.4
-pypdf==6.16.2
+# Security floor: GHSA-5jq2-8x83-x246 (indirect-object parsing).
+pypdf==6.18.0
