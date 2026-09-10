@@ -1,6 +1,6 @@
-# Pin to the tested major. fastmcp 3.x changed enough that a stray 4.0 could
-# break the http_app/middleware wiring used in __main__. Bump deliberately.
-fastmcp>=3.4.7,<4
+# Support FastMCP 3.4.7 and 4.x; CI exercises the minimum and current graphs,
+# including real stdio, streamable HTTP, and legacy SSE connections.
+fastmcp>=3.4.7,<5
 # Imported directly for tool parameter validation and JSON schemas.
 pydantic>=2.13.4,<3
 # Used directly for pooled, keep-alive Moneybird API connections.
