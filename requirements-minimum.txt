@@ -11,7 +11,7 @@
 # Move a floor only when the old version is demonstrably unsupportable, and
 # then move it in pyproject.toml, requirements.txt and this file together as
 # one deliberate dependency-contract change.
-fastmcp==4.0.3
+fastmcp==3.4.7
 pydantic==2.13.4
 httpx==0.28.1
 uvicorn==0.52.4

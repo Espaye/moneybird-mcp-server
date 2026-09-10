@@ -3,6 +3,14 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning while allowing pre-1.0 breaking changes.
 
+## Unreleased
+
+### Changed
+
+- Allow FastMCP 4.x while retaining support for 3.4.7. The minimum-dependency
+  lane continues to test 3.4.7; transport integration tests exercise discovery,
+  tool results, credential refusals, and HTTP authentication on real servers.
+
 ## 0.8.1 — 2026-09-04
 
 ### Fixed
