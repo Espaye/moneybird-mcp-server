@@ -31,7 +31,7 @@ classifiers = [
 ]
 # Keep in sync with requirements.txt (which stays for the git-clone workflow).
 dependencies = [
-    "fastmcp>=3.4.7,<4",
+    "fastmcp>=3.4.7,<5",
     "pydantic>=2.13.4,<3",
     "httpx>=0.28.1,<1",
     "uvicorn>=0.52.4",
