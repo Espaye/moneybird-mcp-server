@@ -11,11 +11,13 @@ from ..config import (
     MoneybirdError,
 )
 from ..formatting import (
+    MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS,
     api_url,
     build_filter_string,
     clean_dict,
     contact_invoice_email,
     contact_title,
+    describe_effective_period,
     document_contact_title,
     duplicate_fingerprint,
     invoice_title,
@@ -111,6 +113,24 @@ def list_sales_invoices(
         ],
         "page": page,
         "count": len(invoices),
+        # Any filter key replaces Moneybird's own default scope entirely, so
+        # narrowing on state/reference/contact without a period widens the period
+        # instead of keeping it. State the result rather than leaving it implicit.
+        **describe_effective_period(
+            filter=",".join(
+                part
+                for part in (
+                    f"state:{state}" if state != "all" else "",
+                    f"reference:{reference}" if reference else "",
+                    f"contact_id:{contact_id}" if contact_id else "",
+                )
+                if part
+            ),
+            period=period,
+            moneybird_default_period=MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS[
+                "sales_invoices"
+            ],
+        ),
     }
     if contact_id and not invoices:
         # A supplier invoices us, so it legitimately has zero sales invoices.
@@ -223,6 +243,11 @@ def list_estimates(
         ],
         "page": page,
         "count": len(estimates),
+        **describe_effective_period(
+            filter=filter,
+            period=period,
+            moneybird_default_period=MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS["estimates"],
+        ),
     }
 
 

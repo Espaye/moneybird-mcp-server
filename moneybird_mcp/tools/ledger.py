@@ -1,6 +1,7 @@
 """Ledger writes: ledger accounts, general journal documents, document-line reclassification."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date as date_type
 from typing import Annotated, Any
 
@@ -37,13 +38,21 @@ from ..safety import (
     record_approval_phase,
 )
 from ..vat_settlement import (
+    EVIDENCE_SOURCE_GENERAL_JOURNAL,
+    GROSS_VAT_ROLES,
+    SETTLEMENT_EVIDENCE_ROLES,
+    ZERO,
+    SignMapping,
     build_vat_settlement_journal,
     compare_gross_to_reported,
     count_rubrieken,
+    find_ledger_settlement_occurrences,
+    find_vat_rounding_adjustments,
     find_vat_settlement_journals,
     ledger_movements_from_report,
     month_periods,
     period_end_date,
+    prove_sign_mappings,
     reported_vat_totals,
     resolve_vat_accounts,
     settlement_preflight,
@@ -912,12 +921,160 @@ def _vat_period_general_journals(client, period: str) -> list[dict[str, Any]]:
     return in_period
 
 
+# Moneybird caps the journal_entries report at one month and paginates it, so a
+# quarter costs one call per month per account -- nine for a three-account
+# quarter, against a reports budget of 50 per five minutes. The cost buys the only
+# view of a VatDocument the API offers: the report names the document type and id
+# behind each posted line, while the document itself is unreachable.
+_JOURNAL_ENTRY_PAGE_SIZE = 100
+_JOURNAL_ENTRY_PAGE_CAP = 50
+
+
+def _journal_entry_rows(payload: Any) -> list[dict[str, Any]]:
+    """Normalise one journal_entries page into a list of rows."""
+
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        rows = (
+            payload.get("journal_entries")
+            or payload.get("report")
+            or payload.get("entries")
+            or []
+        )
+    else:
+        rows = []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _scan_ledger_journal_entries(
+    client,
+    period: str,
+    ledger_account_id: str,
+) -> list[dict[str, Any]]:
+    """Every journal-entry row for one ledger account across a whole-month period.
+
+    Each month is paginated to exhaustion. A truncated scan would understate the
+    evidence and could let a duplicate settlement through, so exceeding the page
+    cap raises instead of returning a partial population.
+    """
+
+    collected: dict[str, dict[str, Any]] = {}
+    ordered: list[dict[str, Any]] = []
+    for month in month_periods(period):
+        page = 1
+        while True:
+            payload = client.get_report(
+                "journal_entries",
+                period=month,
+                page=page,
+                extra_query={
+                    "ledger_account_id": str(ledger_account_id),
+                    "per_page": _JOURNAL_ENTRY_PAGE_SIZE,
+                },
+            )
+            rows = _journal_entry_rows(payload)
+            new_rows = 0
+            for index, row in enumerate(rows):
+                key = str(row.get("id") or "") or (
+                    f"{month}:{page}:{index}:{row.get('document_id')}:{row.get('amount')}"
+                )
+                if key in collected:
+                    continue
+                collected[key] = row
+                ordered.append(row)
+                new_rows += 1
+            if len(rows) < _JOURNAL_ENTRY_PAGE_SIZE or new_rows == 0:
+                break
+            page += 1
+            if page > _JOURNAL_ENTRY_PAGE_CAP:
+                raise MoneybirdError(
+                    f"The journal-entry scan for ledger account {ledger_account_id} "
+                    f"in {month} exceeded {_JOURNAL_ENTRY_PAGE_CAP} pages. Refusing "
+                    "an incomplete VAT settlement-evidence scan."
+                )
+    return ordered
+
+
+def _vat_ledger_evidence(
+    client,
+    period: str,
+    accounts: dict[str, Any],
+    movements: dict[str, Any],
+    *,
+    exclude_document_ids: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Collect ledger evidence that this VAT period was already cleared.
+
+    Detection is sign-free: it groups posted lines by source document and applies
+    the same role test a general-journal settlement must pass. Amounts need the
+    debit/credit direction, which Moneybird does not document for this report, so
+    the direction is proven per account against the general-ledger totals and the
+    amounts are withheld when that proof fails. A failed amount proof never
+    weakens detection.
+    """
+
+    roles = [role for role in SETTLEMENT_EVIDENCE_ROLES if role in accounts]
+    entry_rows_by_role: dict[str, list[dict[str, Any]]] = {}
+    movements_by_role: dict[str, Any] = {}
+    account_types_by_role: dict[str, str] = {}
+    gaps: list[str] = []
+    for role in roles:
+        account = accounts[role]
+        account_id = str(account.get("id") or "")
+        movement = movements.get(account_id)
+        rows = _scan_ledger_journal_entries(client, period, account_id)
+        entry_rows_by_role[role] = rows
+        if movement is None:
+            continue
+        movements_by_role[role] = movement
+        account_types_by_role[role] = str(account.get("account_type") or "")
+        # An account the general ledger says moved but whose rows came back empty
+        # is the one shape that could hide an existing settlement. Gross VAT
+        # accounts are the ones a settlement must touch, so only those gate.
+        if not rows and role in GROSS_VAT_ROLES and (
+            movement.debit != ZERO or movement.credit != ZERO
+        ):
+            gaps.append(
+                f"the {role} account ({account.get('name')}) returned no "
+                f"journal-entry rows while the general ledger shows movement "
+                f"(debit {movement.debit}, credit {movement.credit})"
+            )
+    sign_mappings: dict[str, SignMapping] = prove_sign_mappings(
+        rows_by_role=entry_rows_by_role,
+        movements_by_role=movements_by_role,
+        account_types_by_role=account_types_by_role,
+    )
+    occurrences = find_ledger_settlement_occurrences(
+        entry_rows_by_role=entry_rows_by_role,
+        accounts=accounts,
+        sign_mappings=sign_mappings,
+        exclude_document_ids=exclude_document_ids,
+    )
+    return {
+        "occurrences": occurrences,
+        "sign_mappings": {
+            role: {
+                "ledger_account_id": mapping.ledger_account_id,
+                "proven": mapping.proven,
+                "positive_amount_is": mapping.positive_is or None,
+                "reason": mapping.reason,
+            }
+            for role, mapping in sign_mappings.items()
+        },
+        "row_counts": {role: len(rows) for role, rows in entry_rows_by_role.items()},
+        "evidence_complete": not gaps,
+        "evidence_gaps": gaps,
+    }
+
+
 def _vat_settlement_context(
     client,
     period: str,
     overrides: dict[str, str],
     *,
     roles: tuple[str, ...] = ("payable", "receivable", "settlement"),
+    optional_roles: tuple[str, ...] = ("rounding",),
 ) -> dict[str, Any]:
     """Gather everything a settlement needs: accounts, gross movements, reported totals."""
     # Validate locally before the first API call. A symbolic or partial period
@@ -929,6 +1086,24 @@ def _vat_settlement_context(
         overrides=overrides,
         roles=roles,
     )
+    # The rounding account is needed to *explain* a difference, not to clear one, so
+    # an administration without one still analyses -- it simply has no explained
+    # adjustments. Resolving it is therefore never allowed to fail the analysis, and
+    # it is kept out of ``accounts`` so the journal-building path keeps deciding for
+    # itself whether a rounding account is required.
+    optional_accounts: dict[str, dict[str, Any]] = {}
+    unresolved_optional_roles: dict[str, str] = {}
+    for role in optional_roles:
+        if role in accounts:
+            continue
+        try:
+            optional_accounts[role] = resolve_vat_accounts(
+                ledger_accounts,
+                overrides=overrides,
+                roles=(role,),
+            )[role]
+        except MoneybirdError as exc:
+            unresolved_optional_roles[role] = str(exc)
     account_ids = [str(account["id"]) for account in accounts.values()]
     movements = ledger_movements_from_report(
         client.get_report("general_ledger", period=period),
@@ -942,23 +1117,66 @@ def _vat_settlement_context(
         accounts=accounts,
         period=period,
     )
+    # Moneybird clears a VAT period with its own VatDocument as readily as with a
+    # general journal, and that document never appears in the collection above.
+    # General-journal settlements are excluded from the ledger scan so one
+    # settlement is never counted twice.
+    ledger_evidence = _vat_ledger_evidence(
+        client,
+        period,
+        accounts,
+        movements,
+        exclude_document_ids=[
+            str(journal.get("id") or "") for journal in general_journals
+        ],
+    )
+    ledger_occurrences = ledger_evidence["occurrences"]
+    # A whole-euro declaration difference already booked against the rounding
+    # account explains part of the gross/reported gap. It is itemised, not netted.
+    rounding_adjustments = find_vat_rounding_adjustments(
+        general_journals,
+        accounts={**accounts, **optional_accounts},
+        period=period,
+        exclude_document_ids=[
+            str(journal.get("id") or "") for journal in settlement_journals
+        ],
+    )
     # The tax report caps at one month, so a quarter is fetched month by month.
     reported = reported_vat_totals(
         client.get_report("tax", period=month) for month in report_months
     )
     # Gross ledger turnover and the reported rubrieken are compared, never merged:
     # reverse-charge VAT moves both accounts while reporting a zero tax amount.
+    reconstructable = [
+        occurrence
+        for occurrence in ledger_occurrences
+        if occurrence.get("amounts_reconstructed")
+    ]
     comparison_payable = payable.net_credit + sum(
         (
             money_decimal(journal["payable_restore"])
-            for journal in settlement_journals
+            for journal in (*settlement_journals, *reconstructable)
         ),
         start=money_decimal("0"),
     )
     comparison_receivable = receivable.net_debit + sum(
         (
             money_decimal(journal["receivable_restore"])
-            for journal in settlement_journals
+            for journal in (*settlement_journals, *reconstructable)
+        ),
+        start=money_decimal("0"),
+    )
+    explained_payable = sum(
+        (
+            money_decimal(adjustment["payable_adjustment"])
+            for adjustment in rounding_adjustments
+        ),
+        start=money_decimal("0"),
+    )
+    explained_deductible = sum(
+        (
+            money_decimal(adjustment["receivable_adjustment"])
+            for adjustment in rounding_adjustments
         ),
         start=money_decimal("0"),
     )
@@ -967,12 +1185,22 @@ def _vat_settlement_context(
         gross_deductible=comparison_receivable,
         reported_payable=reported["payable"],
         reported_deductible=reported["deductible"],
+        explained_payable=explained_payable,
+        explained_deductible=explained_deductible,
+        explained_adjustments=rounding_adjustments,
     )
-    comparison["basis"] = (
-        "reconstructed_before_existing_settlement_journals"
-        if settlement_journals
-        else "current_period_ledger_movements"
-    )
+    withheld = [
+        occurrence
+        for occurrence in ledger_occurrences
+        if not occurrence.get("amounts_reconstructed")
+    ]
+    if settlement_journals or reconstructable:
+        basis = "reconstructed_before_existing_settlement_journals"
+    elif withheld:
+        basis = "current_period_ledger_movements_amounts_withheld_sign_unproven"
+    else:
+        basis = "current_period_ledger_movements"
+    comparison["basis"] = basis
     return {
         "accounts": accounts,
         "movements": movements,
@@ -984,6 +1212,11 @@ def _vat_settlement_context(
         "comparison_receivable": comparison_receivable,
         "general_journals": general_journals,
         "settlement_journals": settlement_journals,
+        "ledger_evidence": ledger_evidence,
+        "ledger_settlement_occurrences": ledger_occurrences,
+        "rounding_adjustments": rounding_adjustments,
+        "optional_accounts": optional_accounts,
+        "unresolved_optional_roles": unresolved_optional_roles,
         "ledger_accounts": ledger_accounts,
     }
 
@@ -1008,7 +1241,33 @@ def analyze_vat_settlement(
     )
     payable = context["payable"]
     receivable = context["receivable"]
-    already_settled = bool(context["settlement_journals"])
+    ledger_evidence = context["ledger_evidence"]
+    ledger_occurrences = context["ledger_settlement_occurrences"]
+    clearing_occurrences = [
+        {
+            "source": EVIDENCE_SOURCE_GENERAL_JOURNAL,
+            "document_type": "GeneralJournalDocument",
+            "document_id": journal.get("id"),
+            "reference": journal.get("reference"),
+            "date": journal.get("date"),
+            "touched_roles": journal.get("touched_roles"),
+            "amounts_reconstructed": True,
+            "payable_restore": journal.get("payable_restore"),
+            "receivable_restore": journal.get("receivable_restore"),
+        }
+        for journal in context["settlement_journals"]
+    ] + list(ledger_occurrences)
+    # One ledger fact, named for what it actually establishes. It is deliberately
+    # not "the return was filed" or "the tax was paid": neither is knowable here.
+    vat_accounts_cleared = bool(clearing_occurrences)
+    evidence_complete = bool(ledger_evidence["evidence_complete"])
+    amounts_withheld = [
+        occurrence
+        for occurrence in clearing_occurrences
+        if not occurrence.get("amounts_reconstructed")
+    ]
+    # Deprecated alias. The logic above no longer consults it.
+    already_settled = vat_accounts_cleared
     return {
         "period": period,
         "accounts": {
@@ -1040,25 +1299,87 @@ def analyze_vat_settlement(
             "rows": context["reported"]["rows"],
         },
         "gross_vs_reported": context["comparison"],
+        # discrepancy - explained = residual, with every explanation itemised.
+        "reconciliation": {
+            "total_discrepancy": {
+                "payable": context["comparison"]["unexplained_payable"],
+                "deductible": context["comparison"]["unexplained_deductible"],
+            },
+            "explained_adjustments": context["rounding_adjustments"],
+            "explained_totals": {
+                "payable": context["comparison"]["explained_payable_adjustment"],
+                "deductible": context["comparison"]["explained_deductible_adjustment"],
+            },
+            "unexplained_residual": {
+                "payable": context["comparison"]["residual_payable"],
+                "deductible": context["comparison"]["residual_deductible"],
+            },
+            "is_anomaly": context["comparison"]["is_anomaly"],
+            "rounding_account": (
+                {
+                    "id": str(context["optional_accounts"]["rounding"]["id"]),
+                    "name": context["optional_accounts"]["rounding"].get("name"),
+                }
+                if "rounding" in context["optional_accounts"]
+                else None
+            ),
+            "unresolved_optional_roles": context["unresolved_optional_roles"],
+        },
         "settlement_status": {
+            # What the ledger establishes, and nothing more.
+            "vat_accounts_cleared_in_period": vat_accounts_cleared,
+            "clearing_occurrences": clearing_occurrences,
+            "settlement_evidence_complete": evidence_complete,
+            "settlement_evidence_gaps": ledger_evidence["evidence_gaps"],
+            "amounts_reconstructed": not amounts_withheld,
+            "amounts_withheld_reason": (
+                "the journal-entry sign convention could not be proven against the "
+                "general-ledger totals for every account involved, so exact cleared "
+                "amounts are withheld rather than guessed"
+                if amounts_withheld
+                else None
+            ),
+            "journal_entry_sign_mappings": ledger_evidence["sign_mappings"],
+            "journal_entry_row_counts": ledger_evidence["row_counts"],
+            # Explicitly separate facts, never folded into the flag above.
+            "filed_with_tax_authority": "not_exposed_by_moneybird_api",
+            "tax_paid_or_refunded": "derive_from_settlement_account_bank_mutations",
+            "safe_to_settle": not vat_accounts_cleared and evidence_complete,
+            # Deprecated: kept for compatibility, equals vat_accounts_cleared_in_period.
             "already_settled": already_settled,
             "settlement_journals": context["settlement_journals"],
             "message": (
-                "This period already contains a settlement-like general journal "
-                "touching the VAT accounts. Do not settle it again."
-                if already_settled
-                else "No settlement-like general journal was found inside this period."
+                "The VAT accounts for this period have already been cleared in the "
+                f"ledger by {len(clearing_occurrences)} posted document(s). Do not "
+                "settle it again. This says nothing about whether the return was "
+                "filed or the tax paid."
+                if vat_accounts_cleared
+                else (
+                    "No clearing of the VAT accounts was found in this period, but "
+                    "the evidence is incomplete, so that is not a clean bill of "
+                    "health."
+                    if not evidence_complete
+                    else "No document clearing the VAT accounts was found inside "
+                    "this period, in either general journals or the ledger."
+                )
             ),
         },
         "next_step": (
             "Do not prepare another VAT settlement for this period. Review the listed "
-            "general journal(s) if the period should be reopened or corrected."
-            if already_settled
+            "clearing occurrence(s) if the period should be reopened or corrected."
+            if vat_accounts_cleared
             else (
-                "The filed amount is never derived from these figures: a Dutch return is "
-                "filed in whole euros and may be rounded in the taxpayer's favour. Ask the "
-                "user for the amount actually filed and paid (or read it from Moneybird's "
-                "VAT overview), then call prepare_vat_settlement_journal with it."
+                "Settlement evidence is incomplete for this period: "
+                + "; ".join(ledger_evidence["evidence_gaps"])
+                + ". Resolve that before settling; prepare_vat_settlement_journal "
+                "will refuse until it can prove the period is not already cleared."
+                if not evidence_complete
+                else (
+                    "The filed amount is never derived from these figures: a Dutch return is "
+                    "filed in whole euros and may be rounded in the taxpayer's favour. Ask the "
+                    "user for the amount actually filed and paid (or read it from Moneybird's "
+                    "VAT overview), then call prepare_vat_settlement_journal with it."
+                )
             )
         ),
     }
@@ -1145,6 +1466,9 @@ def prepare_vat_settlement_journal(
         declared_amount_check=amount_check,
         allow_unexplained_difference=allow_unexplained_difference,
         allow_date_outside_period=allow_date_outside_period,
+        ledger_settlement_occurrences=context["ledger_settlement_occurrences"],
+        settlement_evidence_complete=context["ledger_evidence"]["evidence_complete"],
+        settlement_evidence_gaps=context["ledger_evidence"]["evidence_gaps"],
     )
     if not preflight["clear_to_prepare"]:
         raise MoneybirdError(
@@ -1286,10 +1610,33 @@ def _execute_vat_settlement(client, payload: dict[str, Any]) -> dict[str, Any]:
         if str(journal.get("reference") or "").casefold()
         == str(snapshot["reference"]).casefold()
     ]
+    # The same widened evidence the preview used. Approval and execution are
+    # separated in time, so a VatDocument settlement can land in between and would
+    # otherwise be invisible to this recheck.
+    ledger_evidence = _vat_ledger_evidence(
+        client,
+        period,
+        accounts,
+        movements,
+        exclude_document_ids=[
+            str(journal.get("id") or "") for journal in current_journals
+        ],
+    )
     if settlement_journals:
         drift.append(
             f"VAT period {period} now contains {len(settlement_journals)} "
             "settlement-like journal(s) touching the VAT accounts"
+        )
+    elif ledger_evidence["occurrences"]:
+        drift.append(
+            f"VAT period {period} has now been cleared in the ledger by "
+            f"{len(ledger_evidence['occurrences'])} posted non-general-journal "
+            "document(s), such as a Moneybird VatDocument"
+        )
+    elif not ledger_evidence["evidence_complete"]:
+        drift.append(
+            "whether this VAT period is already cleared can no longer be "
+            "established: " + "; ".join(ledger_evidence["evidence_gaps"])
         )
     elif existing:
         drift.append(

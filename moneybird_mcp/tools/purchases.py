@@ -17,8 +17,10 @@ from ..credentials import (
 )
 from ..document_lines import line_signatures
 from ..formatting import (
+    MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS,
     compact_document_summary,
     compact_general_journal_summary,
+    describe_effective_period,
     document_kind_config,
     duplicate_fingerprint,
     money_decimal,
@@ -88,6 +90,13 @@ def list_purchase_documents(
         "kind": normalized,
         "page": page,
         "count": len(documents),
+        # Moneybird defaults this collection to the current financial year, so an
+        # empty result can mean "none this year" rather than "none at all".
+        **describe_effective_period(
+            filter=filter,
+            period=period,
+            moneybird_default_period=MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS["documents"],
+        ),
     }
 
 

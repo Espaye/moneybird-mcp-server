@@ -9,8 +9,10 @@ from ..config import (
     READ_ONLY_ANNOTATIONS,
 )
 from ..formatting import (
+    MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS,
     compact_financial_account_summary,
     compact_ledger_account_summary,
+    describe_effective_period,
 )
 from . import _context as ctx
 from ._params import FilterString, Limit, Page, Period
@@ -154,5 +156,12 @@ def list_time_entries(
         ],
         "page": page,
         "count": len(entries),
+        **describe_effective_period(
+            filter=filter,
+            period=period,
+            moneybird_default_period=MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS[
+                "time_entries"
+            ],
+        ),
     }
 

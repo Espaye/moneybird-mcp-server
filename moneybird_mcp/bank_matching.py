@@ -152,6 +152,50 @@ def open_amount(record: dict[str, Any]) -> Decimal | None:
     return total - paid
 
 
+NON_BOOKABLE_NO_DETAIL_LINES = "no_detail_lines"
+
+
+def detail_line_count(record: dict[str, Any]) -> int | None:
+    """How many detail lines a document carries, or None when that is not stated.
+
+    Moneybird's list payloads expose ``details_count`` and the full record exposes
+    ``details``. Neither is treated as "zero" when simply absent: a record whose
+    line count is unknown keeps its normal candidacy rather than being suppressed
+    on missing data.
+    """
+
+    for key in ("details", "general_journal_document_entries"):
+        value = record.get(key)
+        if isinstance(value, list):
+            return len(value)
+    count = record.get("details_count")
+    if isinstance(count, bool):
+        return None
+    if isinstance(count, int):
+        return count
+    if isinstance(count, str) and count.strip().lstrip("-").isdigit():
+        return int(count.strip())
+    return None
+
+
+def non_bookable_reason(record: dict[str, Any]) -> str | None:
+    """Why this document cannot settle any payment, or None when it can.
+
+    The test is the absence of detail lines, never a zero total. Moneybird's email
+    inbox creates a purchase-invoice shell for every incoming message, so a
+    Terms-of-Service notice arrives as a document with no lines and a 0.00 total
+    and then competes with real invoices for a payment on counterparty name alone.
+    A *legitimate* zero-total document has lines and stays a normal candidate, and
+    a shell becomes one the moment lines are added -- the test reads the record as
+    it is now, so nothing has to be re-flagged later.
+    """
+
+    lines = detail_line_count(record)
+    if lines == 0:
+        return NON_BOOKABLE_NO_DETAIL_LINES
+    return None
+
+
 def score_candidate(
     mutation: dict[str, Any],
     record: dict[str, Any],
@@ -230,10 +274,13 @@ def score_candidate(
     if not date_plausible and confidence == CONFIDENCE_EXACT:
         confidence = CONFIDENCE_STRONG
 
+    blocked = non_bookable_reason(record)
     return {
         "booking_type": booking_type,
         "booking_id": str(record.get("id") or ""),
         "document_kind": kind,
+        "bookable": blocked is None,
+        "non_bookable_reason": blocked,
         "title": (
             str(record.get("invoice_id") or record.get("reference") or "")
             or f"{booking_type} {record.get('id')}"
@@ -287,13 +334,21 @@ def match_mutation(
     else:
         direction = "zero_or_unknown"
 
-    candidates.sort(
-        key=lambda item: (
+    # A document with no detail lines cannot settle anything, so it never competes
+    # for a suggestion. It stays visible as a diagnostic instead of vanishing:
+    # a pile of them is itself the finding -- an unprocessed email inbox.
+    non_bookable = [item for item in candidates if not item["bookable"]]
+    candidates = [item for item in candidates if item["bookable"]]
+
+    def _rank(item: dict[str, Any]) -> tuple[int, int, int]:
+        return (
             _CONFIDENCE_ORDER[item["confidence"]],
             0 if item["amount_matches_exactly"] else 1,
             -len(item["evidence"]),
         )
-    )
+
+    candidates.sort(key=_rank)
+    non_bookable.sort(key=_rank)
 
     result: dict[str, Any] = {
         "financial_mutation_id": str(mutation.get("id") or ""),
@@ -303,6 +358,7 @@ def match_mutation(
         "contra_account_name": mutation.get("contra_account_name"),
         "description": mutation_text(mutation)[:200],
         "candidates": candidates[:max_candidates],
+        "non_bookable_candidates": non_bookable[:max_candidates],
     }
 
     top = candidates[0] if candidates else None
@@ -313,6 +369,12 @@ def match_mutation(
             "name. Book it to a ledger account instead (prepare_link_bank_mutation_"
             "booking with booking_type LedgerAccount), after checking how this "
             "counterparty was booked before."
+        ) + (
+            f" {len(non_bookable)} document(s) matched on counterparty but carry no "
+            "detail lines, so they cannot settle a payment; complete them first if "
+            "one of them is the real invoice."
+            if non_bookable
+            else ""
         )
         return result
 
