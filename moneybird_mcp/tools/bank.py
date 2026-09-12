@@ -217,6 +217,15 @@ def suggest_bank_mutation_matches(
                     else ""
                 )
             ),
+            # The empty result is exactly where an unstated scope misleads: with no
+            # period passed, Moneybird bounds this to the current financial year, so
+            # "none found" would otherwise read as "none exist".
+            **describe_effective_period(
+                period=period,
+                moneybird_default_period=MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS[
+                    "financial_mutations"
+                ],
+            ),
         }
 
     # Which sides actually need loading. An all-incoming batch never has to fetch

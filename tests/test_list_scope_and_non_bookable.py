@@ -332,3 +332,26 @@ class ListToolScopeTests(unittest.TestCase):
             "reference", "list_time_entries", period="20250101..20250331"
         )
         self.assertEqual(result["period_source"], PERIOD_SOURCE_CALLER)
+
+    def test_an_empty_match_scan_still_states_its_scope(self):
+        """"Nothing found" is the answer that most needs its scope stated.
+
+        ``suggest_bank_mutation_matches`` returns early when the feed comes back
+        empty, and that is exactly the reply an agent turns into "there is nothing
+        left to process". With no period passed Moneybird bounds the read to the
+        current financial year, so the early return has to carry the same scope
+        report the populated one does -- otherwise the one case the feature exists
+        for is the one case it does not cover.
+        """
+        result = self._call("bank", "suggest_bank_mutation_matches")
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["period_source"], PERIOD_SOURCE_MONEYBIRD_DEFAULT)
+        self.assertEqual(result["effective_period"], "this_year")
+
+    def test_an_empty_match_scan_attributes_an_explicit_period(self):
+        result = self._call(
+            "bank", "suggest_bank_mutation_matches", period="20250101..20250331"
+        )
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["period_source"], PERIOD_SOURCE_CALLER)
+        self.assertEqual(result["effective_period"], "20250101..20250331")
