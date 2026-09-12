@@ -401,6 +401,7 @@ def prove_sign_mappings(
     rows_by_role: dict[str, list[dict[str, Any]]],
     movements_by_role: dict[str, LedgerMovement],
     account_types_by_role: dict[str, str],
+    fully_scanned_roles: set[str] | None = None,
 ) -> dict[str, SignMapping]:
     """Prove each account's sign convention, falling back to its account type.
 
@@ -418,8 +419,27 @@ def prove_sign_mappings(
     and the fallback records which account proved it so the inference is auditable.
     """
 
+    # A role read for only some of the period's months cannot be matched against a
+    # whole-period ledger total, so it is never proven directly: its rows are a
+    # subset by construction, and a mismatch would say nothing about the sign. Such
+    # a role goes straight to the account-type fallback.
+    fully_scanned = (
+        set(movements_by_role)
+        if fully_scanned_roles is None
+        else set(fully_scanned_roles)
+    )
     direct = {
-        role: prove_sign_mapping(rows_by_role.get(role) or [], movement)
+        role: (
+            prove_sign_mapping(rows_by_role.get(role) or [], movement)
+            if role in fully_scanned
+            else SignMapping(
+                str(movement.ledger_account_id),
+                False,
+                "",
+                "only part of the period was read for this account, so its rows "
+                "cannot be matched against the whole-period ledger total",
+            )
+        )
         for role, movement in movements_by_role.items()
     }
     by_type: dict[str, set[str]] = {}
@@ -603,6 +623,48 @@ def find_ledger_settlement_occurrences(
             }
         )
     return occurrences
+
+
+def find_undetermined_gross_pairs(
+    *,
+    entry_rows_by_role: dict[str, list[dict[str, Any]]],
+    sign_mappings: dict[str, SignMapping] | None = None,
+    exclude_document_ids: Iterable[str] = (),
+) -> list[dict[str, Any]]:
+    """Documents touching both gross VAT accounts whose direction is unknown.
+
+    A document on both gross accounts is either a reverse-charge accrual or a
+    clearing, and only the debit/credit direction tells them apart. When that
+    direction is unproven the two are genuinely indistinguishable, so such a
+    document must make the period *inconclusive* rather than settleable: absence of
+    a provable direction is not evidence that a second settlement is safe.
+
+    With a proven direction this returns nothing, because the accrual and the
+    clearing separate cleanly -- which is the normal case.
+    """
+
+    sign_mappings = sign_mappings or {}
+    if all(
+        (sign_mappings.get(role) is not None and sign_mappings[role].proven)
+        for role in GROSS_VAT_ROLES
+    ):
+        return []
+    excluded = {str(item) for item in exclude_document_ids}
+    roles_by_document: dict[tuple[str, str], set[str]] = {}
+    for role in GROSS_VAT_ROLES:
+        for row in entry_rows_by_role.get(role) or []:
+            if not isinstance(row, dict):
+                continue
+            document_id = str(row.get("document_id") or "")
+            if not document_id or document_id in excluded:
+                continue
+            key = (str(row.get("document_type") or ""), document_id)
+            roles_by_document.setdefault(key, set()).add(role)
+    return [
+        {"document_type": document_type, "document_id": document_id}
+        for (document_type, document_id), roles in sorted(roles_by_document.items())
+        if set(GROSS_VAT_ROLES) <= roles
+    ]
 
 
 def find_vat_rounding_adjustments(

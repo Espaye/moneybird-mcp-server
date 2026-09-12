@@ -47,6 +47,7 @@ from ..vat_settlement import (
     compare_gross_to_reported,
     count_rubrieken,
     find_ledger_settlement_occurrences,
+    find_undetermined_gross_pairs,
     find_vat_rounding_adjustments,
     find_vat_settlement_journals,
     ledger_movements_from_report,
@@ -951,29 +952,45 @@ def _scan_ledger_journal_entries(
     client,
     period: str,
     ledger_account_id: str,
+    *,
+    months: Iterable[str] | None = None,
+    memo: dict[tuple[str, str, int], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Every journal-entry row for one ledger account across a whole-month period.
+    """Journal-entry rows for one ledger account over the given months.
 
-    Each month is paginated to exhaustion. A truncated scan would understate the
-    evidence and could let a duplicate settlement through, so exceeding the page
-    cap raises instead of returning a partial population.
+    ``months`` defaults to every month of ``period``; a targeted escalation passes
+    only the months it needs. Each month is paginated to exhaustion, because a
+    truncated scan would understate the evidence and could let a duplicate
+    settlement through -- exceeding the page cap raises rather than returning a
+    partial population.
+
+    ``memo`` is a per-operation cache keyed by account, month and page. One
+    analysis can reach the same account/month from two stages, and the same figure
+    must not be paid for twice. It lives only for the duration of one call: no
+    accounting figure is ever carried between operations or between users.
     """
 
     collected: dict[str, dict[str, Any]] = {}
     ordered: list[dict[str, Any]] = []
-    for month in month_periods(period):
+    for month in months if months is not None else month_periods(period):
         page = 1
         while True:
-            payload = client.get_report(
-                "journal_entries",
-                period=month,
-                page=page,
-                extra_query={
-                    "ledger_account_id": str(ledger_account_id),
-                    "per_page": _JOURNAL_ENTRY_PAGE_SIZE,
-                },
-            )
-            rows = _journal_entry_rows(payload)
+            cache_key = (str(ledger_account_id), str(month), page)
+            if memo is not None and cache_key in memo:
+                rows = memo[cache_key]
+            else:
+                payload = client.get_report(
+                    "journal_entries",
+                    period=month,
+                    page=page,
+                    extra_query={
+                        "ledger_account_id": str(ledger_account_id),
+                        "per_page": _JOURNAL_ENTRY_PAGE_SIZE,
+                    },
+                )
+                rows = _journal_entry_rows(payload)
+                if memo is not None:
+                    memo[cache_key] = rows
             new_rows = 0
             for index, row in enumerate(rows):
                 key = str(row.get("id") or "") or (
@@ -1003,47 +1020,152 @@ def _vat_ledger_evidence(
     movements: dict[str, Any],
     *,
     exclude_document_ids: Iterable[str] = (),
+    already_blocked: bool = False,
+    memo: dict[tuple[str, str, int], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Collect ledger evidence that this VAT period was already cleared.
 
-    Detection is sign-free: it groups posted lines by source document and applies
-    the same role test a general-journal settlement must pass. Amounts need the
-    debit/credit direction, which Moneybird does not document for this report, so
-    the direction is proven per account against the general-ledger totals and the
-    amounts are withheld when that proof fails. A failed amount proof never
-    weakens detection.
+    Staged, because the exhaustive version cost one journal-entry report per VAT
+    account per month -- nine for a quarter on top of the ledger and tax reports,
+    against Moneybird's 50-reports-per-5-minutes budget, which real use hit. The
+    stages are ordered so the cheapest one settles the common case, and none of
+    them treats missing evidence as permission:
+
+    * **Stage 0, free.** Clearing a credit-balance output-VAT account requires a
+      *debit* to it, and clearing a debit-balance input-VAT account requires a
+      *credit* to it. That is what double entry means, not an assumption about
+      Moneybird. So if the general-ledger turnover already fetched shows no debit
+      on payable and no credit on receivable, nothing cleared either gross VAT
+      account in this period and no journal-entry report is needed at all.
+      Reverse-charge VAT debits receivable and credits payable, so an ordinary
+      reverse-charge quarter lands here rather than being made ambiguous.
+    * **Stage 1.** Otherwise scan the settlement account, exhaustively. It is the
+      strongest discriminator: every clearing observed live routed its net there,
+      and ordinary purchase invoices never touch it.
+    * **Stage 2.** For each candidate document found there, read only the gross
+      VAT accounts for the months that document actually appears in, to prove the
+      same document moved VAT.
+    * **Stage 3.** A clearing could in principle route no net to the settlement
+      account, but only by moving *both* gross accounts in the clearing direction.
+      That needs a debit on payable *and* a credit on receivable, so it is checked
+      only when the ledger shows both, and only when nothing was found already.
+
+    Detection stays sign-free throughout; only the amounts need the direction.
     """
 
     roles = [role for role in SETTLEMENT_EVIDENCE_ROLES if role in accounts]
+    all_months = month_periods(period)
+
+    def _account_id(role: str) -> str:
+        return str((accounts.get(role) or {}).get("id") or "")
+
+    def _movement(role: str):
+        return movements.get(_account_id(role))
+
     entry_rows_by_role: dict[str, list[dict[str, Any]]] = {}
+    scanned_months_by_role: dict[str, set[str]] = {role: set() for role in roles}
     movements_by_role: dict[str, Any] = {}
     account_types_by_role: dict[str, str] = {}
-    gaps: list[str] = []
     for role in roles:
-        account = accounts[role]
-        account_id = str(account.get("id") or "")
-        movement = movements.get(account_id)
-        rows = _scan_ledger_journal_entries(client, period, account_id)
-        entry_rows_by_role[role] = rows
+        movement = _movement(role)
         if movement is None:
             continue
         movements_by_role[role] = movement
-        account_types_by_role[role] = str(account.get("account_type") or "")
-        # An account the general ledger says moved but whose rows came back empty
-        # is the one shape that could hide an existing settlement. Gross VAT
-        # accounts are the ones a settlement must touch, so only those gate.
-        if not rows and role in GROSS_VAT_ROLES and (
-            movement.debit != ZERO or movement.credit != ZERO
-        ):
-            gaps.append(
-                f"the {role} account ({account.get('name')}) returned no "
-                f"journal-entry rows while the general ledger shows movement "
-                f"(debit {movement.debit}, credit {movement.credit})"
+        account_types_by_role[role] = str(
+            (accounts.get(role) or {}).get("account_type") or ""
+        )
+
+    def _scan(role: str, months: Iterable[str]) -> None:
+        wanted = [
+            month for month in months if month not in scanned_months_by_role[role]
+        ]
+        if not wanted:
+            return
+        rows = _scan_ledger_journal_entries(
+            client, period, _account_id(role), months=wanted, memo=memo
+        )
+        entry_rows_by_role.setdefault(role, []).extend(rows)
+        scanned_months_by_role[role].update(wanted)
+
+    payable_movement = movements_by_role.get("payable")
+    receivable_movement = movements_by_role.get("receivable")
+    payable_debit = payable_movement.debit if payable_movement else ZERO
+    receivable_credit = receivable_movement.credit if receivable_movement else ZERO
+    clearing_possible = payable_debit != ZERO or receivable_credit != ZERO
+
+    gaps: list[str] = []
+    stages: list[str] = []
+    if already_blocked:
+        # A general-journal settlement was already found, so the decision is fixed
+        # and no amount of further evidence can make this period settleable. Paying
+        # for the scan would only confirm a refusal that is already certain.
+        stages.append("skipped: a general-journal settlement already blocks this period")
+        state = "cleared_by_general_journal"
+    elif not clearing_possible:
+        stages.append(
+            "stage0: the general ledger shows no debit on the output-VAT account "
+            f"({payable_debit}) and no credit on the input-VAT account "
+            f"({receivable_credit}), so no document cleared either one in this period"
+        )
+        state = "no_clearing_possible"
+    else:
+        stages.append(
+            f"stage0: a clearing is possible (payable debit {payable_debit}, "
+            f"receivable credit {receivable_credit}), so the evidence is read"
+        )
+        state = "no_clearing_found"
+        if "settlement" in roles:
+            _scan("settlement", all_months)
+            stages.append(
+                f"stage1: scanned the settlement account over {len(all_months)} month(s)"
             )
+            settlement_movement = movements_by_role.get("settlement")
+            if (
+                not entry_rows_by_role.get("settlement")
+                and settlement_movement is not None
+                and (
+                    settlement_movement.debit != ZERO
+                    or settlement_movement.credit != ZERO
+                )
+            ):
+                gaps.append(
+                    "the settlement account "
+                    f"({(accounts.get('settlement') or {}).get('name')}) returned no "
+                    "journal-entry rows while the general ledger shows movement "
+                    f"(debit {settlement_movement.debit}, credit "
+                    f"{settlement_movement.credit})"
+                )
+            excluded = {str(item) for item in exclude_document_ids}
+            candidate_months: set[str] = set()
+            for row in entry_rows_by_role.get("settlement") or []:
+                document_id = str(row.get("document_id") or "")
+                if not document_id or document_id in excluded:
+                    continue
+                month = str(row.get("date") or "").replace("-", "")[:6]
+                if month:
+                    candidate_months.add(month)
+            if candidate_months:
+                ordered_months = [
+                    month for month in all_months if month in candidate_months
+                ]
+                for role in GROSS_VAT_ROLES:
+                    if role in roles:
+                        _scan(role, ordered_months)
+                stages.append(
+                    "stage2: escalated to the gross VAT accounts for "
+                    f"{len(ordered_months)} month(s) carrying a settlement-account "
+                    "document"
+                )
+
     sign_mappings: dict[str, SignMapping] = prove_sign_mappings(
         rows_by_role=entry_rows_by_role,
         movements_by_role=movements_by_role,
         account_types_by_role=account_types_by_role,
+        fully_scanned_roles={
+            role
+            for role, scanned in scanned_months_by_role.items()
+            if scanned >= set(all_months)
+        },
     )
     occurrences = find_ledger_settlement_occurrences(
         entry_rows_by_role=entry_rows_by_role,
@@ -1051,6 +1173,76 @@ def _vat_ledger_evidence(
         sign_mappings=sign_mappings,
         exclude_document_ids=exclude_document_ids,
     )
+
+    # Stage 3. A settlement that routed no net to the settlement account has to
+    # have moved both gross accounts in the clearing direction, so it can only
+    # exist where the ledger shows both a payable debit and a receivable credit.
+    if (
+        not already_blocked
+        and clearing_possible
+        and not occurrences
+        and not gaps
+        and payable_debit != ZERO
+        and receivable_credit != ZERO
+        and set(GROSS_VAT_ROLES) <= set(roles)
+    ):
+        for role in GROSS_VAT_ROLES:
+            _scan(role, all_months)
+        stages.append(
+            "stage3: both gross VAT accounts moved in a direction a settlement-"
+            "account-less clearing needs, so both were read in full"
+        )
+        for role in GROSS_VAT_ROLES:
+            movement = movements_by_role.get(role)
+            if (
+                not entry_rows_by_role.get(role)
+                and movement is not None
+                and (movement.debit != ZERO or movement.credit != ZERO)
+            ):
+                gaps.append(
+                    f"the {role} account ({(accounts.get(role) or {}).get('name')}) "
+                    "returned no journal-entry rows while the general ledger shows "
+                    f"movement (debit {movement.debit}, credit {movement.credit})"
+                )
+        sign_mappings = prove_sign_mappings(
+            rows_by_role=entry_rows_by_role,
+            movements_by_role=movements_by_role,
+            account_types_by_role=account_types_by_role,
+            fully_scanned_roles={
+                role
+                for role, scanned in scanned_months_by_role.items()
+                if scanned >= set(all_months)
+            },
+        )
+        occurrences = find_ledger_settlement_occurrences(
+            entry_rows_by_role=entry_rows_by_role,
+            accounts=accounts,
+            sign_mappings=sign_mappings,
+            exclude_document_ids=exclude_document_ids,
+        )
+        # Without a proven direction a document on both gross accounts could be a
+        # reverse-charge accrual or a clearing, and nothing here can tell them
+        # apart. That is ambiguity, not permission.
+        undetermined = find_undetermined_gross_pairs(
+            entry_rows_by_role=entry_rows_by_role,
+            sign_mappings=sign_mappings,
+            exclude_document_ids=exclude_document_ids,
+        )
+        if undetermined and not occurrences:
+            gaps.append(
+                f"{len(undetermined)} document(s) move both gross VAT accounts while "
+                "the journal-entry sign convention is unproven, so a reverse-charge "
+                "accrual cannot be told apart from a clearing: "
+                + ", ".join(
+                    f"{item['document_type'] or 'document'} {item['document_id']}"
+                    for item in undetermined[:5]
+                )
+            )
+
+    if gaps:
+        state = "inconclusive"
+    elif occurrences:
+        state = "cleared"
     return {
         "occurrences": occurrences,
         "sign_mappings": {
@@ -1063,8 +1255,13 @@ def _vat_ledger_evidence(
             for role, mapping in sign_mappings.items()
         },
         "row_counts": {role: len(rows) for role, rows in entry_rows_by_role.items()},
+        "scanned_months": {
+            role: sorted(scanned) for role, scanned in scanned_months_by_role.items()
+        },
+        "evidence_state": state,
         "evidence_complete": not gaps,
         "evidence_gaps": gaps,
+        "scan_stages": stages,
     }
 
 
@@ -1129,6 +1326,8 @@ def _vat_settlement_context(
         exclude_document_ids=[
             str(journal.get("id") or "") for journal in general_journals
         ],
+        already_blocked=bool(settlement_journals),
+        memo={},
     )
     ledger_occurrences = ledger_evidence["occurrences"]
     # A whole-euro declaration difference already booked against the rounding
@@ -1329,8 +1528,11 @@ def analyze_vat_settlement(
             # What the ledger establishes, and nothing more.
             "vat_accounts_cleared_in_period": vat_accounts_cleared,
             "clearing_occurrences": clearing_occurrences,
+            "settlement_evidence_state": ledger_evidence["evidence_state"],
             "settlement_evidence_complete": evidence_complete,
             "settlement_evidence_gaps": ledger_evidence["evidence_gaps"],
+            "settlement_evidence_scan_stages": ledger_evidence["scan_stages"],
+            "journal_entry_scanned_months": ledger_evidence["scanned_months"],
             "amounts_reconstructed": not amounts_withheld,
             "amounts_withheld_reason": (
                 "the journal-entry sign convention could not be proven against the "
@@ -1621,6 +1823,8 @@ def _execute_vat_settlement(client, payload: dict[str, Any]) -> dict[str, Any]:
         exclude_document_ids=[
             str(journal.get("id") or "") for journal in current_journals
         ],
+        already_blocked=bool(settlement_journals),
+        memo={},
     )
     if settlement_journals:
         drift.append(

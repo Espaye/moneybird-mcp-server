@@ -357,15 +357,20 @@ class SignProofFailureTests(_ToolTestBase):
 
 
 class MissingEvidenceTests(_ToolTestBase):
-    """No rows for an account the ledger says moved is a gap, not a clean period."""
+    """No rows for an account the ledger says moved is a gap, not a clean period.
+
+    Reaching this state now needs a ledger shape where a clearing is *possible* --
+    a debit on the output-VAT account or a credit on the input-VAT one -- because
+    otherwise stage 0 proves no clearing could exist and missing rows are moot.
+    """
 
     def _client(self):
         return FakeClient(
             ledger_override=_rich_ledger(
                 {
-                    PAYABLE: ("0.00", "5232.05"),
-                    RECEIVABLE: ("808.00", "0.00"),
-                    SETTLEMENT: ("0.00", "0.00"),
+                    PAYABLE: ("26.42", "5232.05"),
+                    RECEIVABLE: ("808.00", "433.42"),
+                    SETTLEMENT: ("407.00", "0.00"),
                 }
             ),
             journal_entry_rows=[],
@@ -376,13 +381,235 @@ class MissingEvidenceTests(_ToolTestBase):
         self.assertFalse(status["vat_accounts_cleared_in_period"])
         self.assertFalse(status["settlement_evidence_complete"])
         self.assertFalse(status["safe_to_settle"])
-        self.assertEqual(len(status["settlement_evidence_gaps"]), 2)
+        self.assertEqual(status["settlement_evidence_state"], "inconclusive")
+        self.assertEqual(len(status["settlement_evidence_gaps"]), 1)
         self.assertIn("not a clean bill of health", status["message"])
 
     def test_the_write_refuses_on_unproven_evidence(self):
         with self.assertRaises(MoneybirdError) as caught:
             self._prepare(self._client())
         self.assertIn("could not be established", str(caught.exception))
+
+
+class NoClearingPossibleTests(_ToolTestBase):
+    """Stage 0: double entry alone can rule a clearing out, for free.
+
+    Clearing a credit-balance output-VAT account needs a debit to it, and clearing
+    a debit-balance input-VAT account needs a credit to it. An ordinary quarter has
+    neither, so no journal-entry report has to be fetched at all -- and a
+    reverse-charge quarter is an ordinary quarter by this test, because reverse
+    charge debits the input account and credits the output one.
+    """
+
+    def _client(self):
+        return FakeClient(
+            ledger_override=_rich_ledger(
+                {
+                    PAYABLE: ("0.00", "5232.05"),
+                    RECEIVABLE: ("808.00", "0.00"),
+                    SETTLEMENT: ("0.00", "4423.00"),
+                }
+            ),
+            journal_entry_rows=[],
+        )
+
+    def test_the_period_is_safely_settleable_without_any_journal_entry_call(self):
+        client = self._client()
+        status = self._analyze(client)["settlement_status"]
+        self.assertEqual(status["settlement_evidence_state"], "no_clearing_possible")
+        self.assertFalse(status["vat_accounts_cleared_in_period"])
+        self.assertTrue(status["settlement_evidence_complete"])
+        self.assertTrue(status["safe_to_settle"])
+        self.assertEqual(client.journal_entry_calls, [])
+        self.assertIn("stage0", status["settlement_evidence_scan_stages"][0])
+
+    def test_it_says_why_no_rows_were_needed(self):
+        status = self._analyze(self._client())["settlement_status"]
+        stage = status["settlement_evidence_scan_stages"][0]
+        self.assertIn("no debit on the output-VAT account", stage)
+        self.assertIn("no credit on the input-VAT account", stage)
+
+
+class ReportCallBudgetTests(_ToolTestBase):
+    """Reports are capped at 50 per 5 minutes, so the count is a behaviour.
+
+    The unstaged implementation cost 13 report calls for every quarter and hit that
+    limit in real use. These numbers are asserted exactly so a future change cannot
+    quietly reintroduce a full account x month cross-product.
+    """
+
+    def _count(self, client, period=Q2):
+        self._analyze(client, period=period)
+        return client.report_call_count
+
+    def test_an_open_quarter_costs_only_the_ledger_and_tax_reports(self):
+        client = NoClearingPossibleTests._client(self)
+        self.assertEqual(self._count(client), 4)
+        self.assertEqual(
+            client.report_calls,
+            [
+                ("general_ledger", Q2),
+                ("tax", "202604"),
+                ("tax", "202605"),
+                ("tax", "202606"),
+            ],
+        )
+
+    def test_a_vat_document_settled_quarter_escalates_only_its_own_month(self):
+        client = VatDocumentSettledPeriodTests._client(self)
+        count = self._count(client)
+        # 1 ledger + 3 tax + 3 settlement months + 2 gross accounts for the one
+        # month the VatDocument appears in.
+        self.assertEqual(count, 9)
+        escalated = {
+            month for month, account, _page in client.journal_entry_calls
+            if account in (PAYABLE, RECEIVABLE)
+        }
+        self.assertEqual(escalated, {"202606"})
+
+    def test_a_general_journal_settled_quarter_needs_no_ledger_scan(self):
+        from test_vat_settlement import _q2_settlement_journal
+
+        client = FakeClient(
+            general_journals=[_q2_settlement_journal()],
+            ledger_override=_rich_ledger(
+                {
+                    PAYABLE: ("5232.05", "5232.05"),
+                    RECEIVABLE: ("808.00", "808.00"),
+                    SETTLEMENT: ("0.00", "4423.00"),
+                }
+            ),
+        )
+        self.assertEqual(self._count(client), 4)
+        self.assertEqual(client.journal_entry_calls, [])
+        status = self._analyze(client)["settlement_status"]
+        self.assertTrue(status["vat_accounts_cleared_in_period"])
+        self.assertEqual(
+            status["settlement_evidence_state"], "cleared_by_general_journal"
+        )
+
+    def test_an_inconclusive_period_stops_after_the_settlement_scan(self):
+        client = MissingEvidenceTests._client(self)
+        # 1 ledger + 3 tax + 3 settlement months; the gross accounts are never
+        # reached because the settlement scan already failed to establish evidence.
+        self.assertEqual(self._count(client), 7)
+        self.assertEqual(
+            {account for _month, account, _page in client.journal_entry_calls},
+            {SETTLEMENT},
+        )
+
+    def _settlement_account_less_client(self, settlement_sides):
+        # Both gross accounts move in both directions and the settlement account
+        # carries no clearing, so only stage 3 can resolve this period.
+        return FakeClient(
+            ledger_override=_rich_ledger(
+                {
+                    PAYABLE: ("100.00", "100.00"),
+                    RECEIVABLE: ("100.00", "100.00"),
+                    SETTLEMENT: settlement_sides,
+                }
+            ),
+            journal_entry_rows=[
+                _accrual(PAYABLE, "100.00"),
+                _row(PAYABLE, "-100.00", document_id="zero-net", date="2026-06-30"),
+                _accrual(RECEIVABLE, "-100.00"),
+                _row(RECEIVABLE, "100.00", document_id="zero-net", date="2026-06-30"),
+                # An unrelated refund gives the settlement account an unambiguous
+                # total, which is what lets the direction be proven at all.
+                _accrual(SETTLEMENT, "40.00", date="2026-05-31", document_id="refund"),
+            ],
+        )
+
+    def test_a_settlement_account_less_clearing_costs_the_full_scan(self):
+        client = self._settlement_account_less_client(("0.00", "40.00"))
+        # 1 ledger + 3 tax + 3 settlement + 6 gross (both accounts, all months).
+        self.assertEqual(self._count(client), 13)
+        status = self._analyze(client)["settlement_status"]
+        self.assertTrue(status["vat_accounts_cleared_in_period"])
+        self.assertEqual(
+            status["clearing_occurrences"][0]["matched_rule"],
+            "both_gross_accounts_in_the_clearing_direction",
+        )
+
+    def test_an_unprovable_direction_on_both_gross_accounts_is_inconclusive(self):
+        # Same shape, but the settlement account is symmetrical too, so no account
+        # of the type can prove a direction. A reverse-charge accrual and a clearing
+        # are then indistinguishable, and the period must not read as settleable.
+        client = self._settlement_account_less_client(("40.00", "40.00"))
+        status = self._analyze(client)["settlement_status"]
+        self.assertEqual(status["settlement_evidence_state"], "inconclusive")
+        self.assertFalse(status["safe_to_settle"])
+        self.assertIn(
+            "cannot be told apart from a clearing",
+            " ".join(status["settlement_evidence_gaps"]),
+        )
+        with self.assertRaises(MoneybirdError) as caught:
+            self._prepare(self._settlement_account_less_client(("40.00", "40.00")))
+        self.assertIn("could not be established", str(caught.exception))
+
+    def test_a_report_is_never_fetched_twice_within_one_analysis(self):
+        client = VatDocumentSettledPeriodTests._client(self)
+        self._analyze(client)
+        self.assertEqual(
+            len(client.journal_entry_calls),
+            len(set(client.journal_entry_calls)),
+            "the same account/month/page was requested more than once",
+        )
+
+
+class SignFallbackCannotGrantPermissionTests(_ToolTestBase):
+    """The account_type sign fallback controls amounts, never permission.
+
+    It is an inference, so the one thing that must be impossible is for its
+    success, failure, disagreement or absence to move a period from unsafe or
+    unknown to ``safe_to_settle: true``.
+    """
+
+    def _ledger(self):
+        return _rich_ledger(
+            {
+                PAYABLE: ("5232.05", "5232.05"),
+                RECEIVABLE: ("808.00", "808.00"),
+                SETTLEMENT: ("4424.05", "0.00"),
+            }
+        )
+
+    def test_a_proven_fallback_does_not_make_a_cleared_period_settleable(self):
+        status = self._analyze(
+            FakeClient(ledger_override=self._ledger(), journal_entry_rows=SETTLED_ROWS)
+        )["settlement_status"]
+        self.assertTrue(status["amounts_reconstructed"])
+        self.assertFalse(status["safe_to_settle"])
+
+    def test_a_broken_fallback_still_refuses(self):
+        # Rows that contradict the ledger totals on every account: no direction can
+        # be proven and none can be carried.
+        contradicting = [
+            _row(PAYABLE, "1.00", document_id="vat-doc-q2", date="2026-06-30"),
+            _row(RECEIVABLE, "1.00", document_id="vat-doc-q2", date="2026-06-30"),
+            _row(SETTLEMENT, "1.00", document_id="vat-doc-q2", date="2026-06-30"),
+        ]
+        status = self._analyze(
+            FakeClient(ledger_override=self._ledger(), journal_entry_rows=contradicting)
+        )["settlement_status"]
+        self.assertFalse(status["amounts_reconstructed"])
+        self.assertTrue(status["vat_accounts_cleared_in_period"])
+        self.assertFalse(status["safe_to_settle"])
+        # Provenance is kept even when nothing could be proven.
+        self.assertIn("settlement", status["journal_entry_sign_mappings"])
+        self.assertFalse(status["journal_entry_sign_mappings"]["settlement"]["proven"])
+
+    def test_safe_to_settle_never_depends_on_the_sign_mappings(self):
+        safe = self._analyze(NoClearingPossibleTests._client(self))["settlement_status"]
+        self.assertTrue(safe["safe_to_settle"])
+        # Stage 0 returned before any row was read, so no direction was proven at
+        # all -- and the period is still correctly settleable.
+        self.assertFalse(
+            any(
+                mapping["proven"] and mapping["positive_amount_is"]
+                for mapping in safe["journal_entry_sign_mappings"].values()
+            )
+        )
 
 
 class ExplainedRoundingAdjustmentToolTests(_ToolTestBase):

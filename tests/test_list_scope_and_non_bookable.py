@@ -38,7 +38,7 @@ from moneybird_mcp.formatting import (
 )
 
 GOOGLE_PAYMENT = {
-    "id": "497078506138633274",
+    "id": "100000000000000901",
     "date": "2026-09-01",
     "amount": "-8.10",
     "amount_open": "-8.10",
@@ -49,7 +49,7 @@ GOOGLE_PAYMENT = {
 
 # The real shape: origin "email", no lines, 0.00 total, a recognisable contact.
 TOS_EMAIL_SHELL = {
-    "id": "496712199177242512",
+    "id": "100000000000000902",
     "reference": "email",
     "date": "2026-08-28",
     "state": "new",
@@ -60,7 +60,7 @@ TOS_EMAIL_SHELL = {
 }
 
 REAL_INVOICE = {
-    "id": "497916576249545800",
+    "id": "100000000000000903",
     "reference": "5476802946",
     "date": "2026-08-31",
     "state": "new",
@@ -72,7 +72,7 @@ REAL_INVOICE = {
 
 # A genuine zero-value document: it has a line, so it stays a normal candidate.
 ZERO_VALUE_WITH_LINES = {
-    "id": "600000000000000001",
+    "id": "100000000000000904",
     "reference": "FREE-1",
     "date": "2026-08-28",
     "state": "new",

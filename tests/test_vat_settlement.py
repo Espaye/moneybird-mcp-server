@@ -122,7 +122,15 @@ class FakeClient:
         self.created = []
         self.journal_entry_rows = journal_entry_rows
         self.journal_entry_calls = []
+        # Every Moneybird report request, in order. Reports are rate-limited three
+        # times tighter than the rest of the API (50 per 5 minutes), so the number
+        # of them a single analysis needs is a behaviour worth asserting.
+        self.report_calls: list[tuple[str, str]] = []
         self._last_ledger_period = ""
+
+    @property
+    def report_call_count(self) -> int:
+        return len(self.report_calls)
 
     def require_current_administration_access(self):
         return {"id": self.administration_id, "period_locked_until": self.period_locked_until}
@@ -199,6 +207,7 @@ class FakeClient:
         return rows
 
     def get_report(self, name, *, period, page=None, extra_query=None, **_kwargs):
+        self.report_calls.append((name, period))
         if name == "general_ledger":
             self._last_ledger_period = period
             return self._ledger_report(period)
@@ -226,6 +235,7 @@ class NoRoundingExactClient(FakeClient):
         return _general_ledger("100.00", "40.00")
 
     def get_report(self, name, *, period, page=None, extra_query=None, **_kwargs):
+        self.report_calls.append((name, period))
         if name == "general_ledger":
             self._last_ledger_period = period
             return self._ledger_report(period)
