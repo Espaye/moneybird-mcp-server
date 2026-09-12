@@ -7,7 +7,12 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from ..bank_matching import match_mutation, match_mutation_groups
+from ..bank_matching import (
+    NON_BOOKABLE_NO_DETAIL_LINES,
+    match_mutation,
+    match_mutation_groups,
+    non_bookable_reason,
+)
 from ..config import (
     FINANCIAL_MUTATION_LINK_BOOKING_TYPES,
     FINANCIAL_MUTATION_UNLINK_BOOKING_TYPES,
@@ -21,8 +26,10 @@ from ..config import (
 )
 from ..document_lines import booking_line_snapshot
 from ..formatting import (
+    MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS,
     clean_dict,
     compact_financial_mutation_summary,
+    describe_effective_period,
     document_contact_title,
     duplicate_fingerprint,
     invoice_title,
@@ -122,6 +129,16 @@ def list_financial_mutations(
         ],
         "page": page,
         "count": len(mutations),
+        # complete_scan already demands an explicit period, so there this only ever
+        # echoes the caller's own scope. On the provider page it is the difference
+        # between "no unprocessed mutations" and "none this financial year".
+        **describe_effective_period(
+            filter=filter,
+            period=period,
+            moneybird_default_period=MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS[
+                "financial_mutations"
+            ],
+        ),
     }
     if completeness is not None:
         result["completeness"] = completeness
@@ -200,6 +217,15 @@ def suggest_bank_mutation_matches(
                     else ""
                 )
             ),
+            # The empty result is exactly where an unstated scope misleads: with no
+            # period passed, Moneybird bounds this to the current financial year, so
+            # "none found" would otherwise read as "none exist".
+            **describe_effective_period(
+                period=period,
+                moneybird_default_period=MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS[
+                    "financial_mutations"
+                ],
+            ),
         }
 
     # Which sides actually need loading. An all-incoming batch never has to fetch
@@ -251,7 +277,25 @@ def suggest_bank_mutation_matches(
         "candidate_pool": {
             "open_sales_invoices": len(sales_invoices),
             "open_purchase_documents": len(purchase_documents),
+            # Documents in the pool that carry no detail lines. Moneybird's email
+            # inbox creates one per incoming message, so a large count here means
+            # an unprocessed inbox rather than a set of payable invoices. They are
+            # never offered as matches; each affected mutation lists them under
+            # non_bookable_candidates.
+            "non_bookable_documents_in_pool": sum(
+                1
+                for _kind, document in purchase_documents
+                if non_bookable_reason(document)
+            )
+            + sum(1 for invoice in sales_invoices if non_bookable_reason(invoice)),
+            "non_bookable_reason": NON_BOOKABLE_NO_DETAIL_LINES,
         },
+        **describe_effective_period(
+            period=period,
+            moneybird_default_period=MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS[
+                "financial_mutations"
+            ],
+        ),
         "next_step": (
             "Prefer one strong group_match when present: show its complete preview, "
             "then use prepare_settle_purchase_invoice_from_bank_mutations so one "

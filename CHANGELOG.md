@@ -15,7 +15,52 @@ versioning while allowing pre-1.0 breaking changes.
   ([GHSA-qv6h-rv94-w285](https://github.com/py-pdf/pypdf/security/advisories/GHSA-qv6h-rv94-w285)).
   Existing parser process isolation, timeout, and memory limits remain in place.
 
+### Fixed
+
+- **A VAT period Moneybird settled itself no longer reads as unsettled.** Moneybird
+  clears a btw-aangifte with its own `VatDocument`, which never appears in the
+  general-journal collection, so a quarter it had already settled was reported as open
+  and `prepare_vat_settlement_journal` would clear the same movements a second time.
+  Settlement evidence is now read from the ledger as well, and the write guard refuses
+  on the *presence* of a clearing, independently of whether the exact amounts could be
+  reconstructed. Found against a real administration.
+
+- **A reverse-charge invoice is no longer mistaken for a settlement.** Reverse-charge
+  VAT (btw verlegd) books input and output VAT for the same amount, so "touches both
+  VAT accounts" flagged every such invoice — 7 false settlements in one live quarter
+  and 13 in the next, which would have blocked legitimate settlements. The gate is now
+  the tax-authority settlement account, which a reverse-charge invoice never touches.
+
+- **Documents with no detail lines no longer compete for bank matches.** Moneybird's
+  email inbox creates a purchase-invoice shell per incoming message, so a
+  Terms-of-Service notice arrived as a zero-line document and contested a payment on
+  counterparty name alone. Such documents are excluded from suggestions and reported
+  under `non_bookable_candidates` instead, because a pile of them is itself the
+  finding. The test is the absence of lines, never a zero total.
+
 ### Changed
+
+- **VAT settlement evidence is gathered in stages.** The exhaustive scan cost one
+  journal-entry report per VAT account per month — 13 per quarter against Moneybird's
+  50-reports-per-5-minutes budget, which real use hit. Evidence is now collected
+  cheapest-first: a quarter whose general-ledger turnover cannot contain a clearing
+  costs no journal-entry report at all, a settlement-account hit escalates only to the
+  months it appears in, and a full scan is reserved for genuinely ambiguous cases.
+  Measured per quarter: open 13 → 4, general-journal settled 13 → 4, `VatDocument`
+  settled 13 → 11. Missing evidence is never read as permission to settle; an
+  unprovable direction makes a period inconclusive and refuses the write.
+
+- **VAT rounding corrections are explained rather than flagged.** A whole-euro
+  declaration difference booked against the rounding account is itemised and
+  subtracted from the discrepancy, so `discrepancy - explained = residual`. Anything
+  an adjustment does not cover stays an anomaly for its residual amount.
+
+- **List operations state the period they were actually scoped to.** Moneybird scopes
+  several collections by financial year even when nothing is passed, and its filters
+  replace that default rather than extend it, so an empty result could mean "none this
+  year" or "none at all". `effective_period` and `period_source` are now returned by
+  the document, mutation, sales-invoice, estimate and time-entry listings and by
+  `suggest_bank_mutation_matches`, including on its empty result. Additive fields only.
 
 - Allow FastMCP 4.x while retaining support for 3.4.7. The minimum-dependency
   lane continues to test 3.4.7; transport integration tests exercise discovery,

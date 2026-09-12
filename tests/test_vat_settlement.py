@@ -114,11 +114,23 @@ class FakeClient:
         general_journals=None,
         period_locked_until=None,
         ledger_override=None,
+        journal_entry_rows=None,
     ):
         self.general_journals = general_journals or []
         self.period_locked_until = period_locked_until
         self.ledger_override = ledger_override
         self.created = []
+        self.journal_entry_rows = journal_entry_rows
+        self.journal_entry_calls = []
+        # Every Moneybird report request, in order. Reports are rate-limited three
+        # times tighter than the rest of the API (50 per 5 minutes), so the number
+        # of them a single analysis needs is a behaviour worth asserting.
+        self.report_calls: list[tuple[str, str]] = []
+        self._last_ledger_period = ""
+
+    @property
+    def report_call_count(self) -> int:
+        return len(self.report_calls)
 
     def require_current_administration_access(self):
         return {"id": self.administration_id, "period_locked_until": self.period_locked_until}
@@ -126,13 +138,81 @@ class FakeClient:
     def list_ledger_accounts(self):
         return LEDGER_ACCOUNTS
 
-    def get_report(self, name, *, period, **_kwargs):
+    def _ledger_report(self, period):
+        if self.ledger_override is not None:
+            return self.ledger_override
+        if period not in GENERAL_LEDGERS:
+            raise AssertionError(f"no ledger fixture for period {period!r}")
+        return GENERAL_LEDGERS[period]
+
+    def _journal_entries_page(self, month, extra_query, page):
+        """Rows that reproduce the served general-ledger totals exactly.
+
+        The settlement-evidence scan proves this report's undocumented sign
+        convention against those totals, so a fake that contradicted them would
+        make every settlement refuse on unproven evidence. All rows for a period
+        land in its first month, which is enough for a proof computed over the
+        whole period. Each account gets its own document ids, so no group ever
+        spans two VAT roles and these default fixtures stay free of accidental
+        settlement occurrences.
+        """
+
+        account_id = str((extra_query or {}).get("ledger_account_id") or "")
+        self.journal_entry_calls.append((month, account_id, page))
+        if self.journal_entry_rows is not None:
+            matching = [
+                row
+                for row in self.journal_entry_rows
+                if str(row.get("ledger_account_id") or "") == account_id
+                and str(row.get("date") or "").replace("-", "")[:6] == month
+            ]
+            # Page exactly like Moneybird does, so a population larger than one
+            # page is only complete if the scan actually walks the pages.
+            size = int((extra_query or {}).get("per_page") or 100)
+            index = max(1, page or 1) - 1
+            return matching[index * size : (index + 1) * size]
+        if page not in (None, 1):
+            return []
+        period = self._last_ledger_period
+        if not period or month != month_periods(period)[0]:
+            return []
+        movement = ledger_movements_from_report(
+            self._ledger_report(period), [account_id]
+        )[account_id]
+        rows = []
+        # Positive is a credit on these liability-typed accounts, mirroring what
+        # was observed live; the scan has to derive that rather than assume it.
+        if movement.credit:
+            rows.append(
+                {
+                    "id": f"row-{account_id}-credit",
+                    "date": f"{month[:4]}-{month[4:6]}-28",
+                    "document_type": "Document",
+                    "document_id": f"doc-{account_id}-credit",
+                    "ledger_account_id": account_id,
+                    "amount": str(movement.credit),
+                }
+            )
+        if movement.debit:
+            rows.append(
+                {
+                    "id": f"row-{account_id}-debit",
+                    "date": f"{month[:4]}-{month[4:6]}-28",
+                    "document_type": "Document",
+                    "document_id": f"doc-{account_id}-debit",
+                    "ledger_account_id": account_id,
+                    "amount": str(-movement.debit),
+                }
+            )
+        return rows
+
+    def get_report(self, name, *, period, page=None, extra_query=None, **_kwargs):
+        self.report_calls.append((name, period))
         if name == "general_ledger":
-            if self.ledger_override is not None:
-                return self.ledger_override
-            if period not in GENERAL_LEDGERS:
-                raise AssertionError(f"no ledger fixture for period {period!r}")
-            return GENERAL_LEDGERS[period]
+            self._last_ledger_period = period
+            return self._ledger_report(period)
+        if name == "journal_entries":
+            return self._journal_entries_page(period, extra_query, page)
         if name == "tax":
             # Mirrors the live constraint: only single months are accepted.
             if period not in Q2_TAX_REPORTS:
@@ -151,9 +231,16 @@ class NoRoundingExactClient(FakeClient):
     def list_ledger_accounts(self):
         return [item for item in LEDGER_ACCOUNTS if item["id"] != ROUNDING]
 
-    def get_report(self, name, *, period, **_kwargs):
+    def _ledger_report(self, period):
+        return _general_ledger("100.00", "40.00")
+
+    def get_report(self, name, *, period, page=None, extra_query=None, **_kwargs):
+        self.report_calls.append((name, period))
         if name == "general_ledger":
-            return _general_ledger("100.00", "40.00")
+            self._last_ledger_period = period
+            return self._ledger_report(period)
+        if name == "journal_entries":
+            return self._journal_entries_page(period, extra_query, page)
         if name == "tax" and period == "202604":
             return _tax_report("100.00", "40.00", "0.00")
         raise AssertionError(f"unexpected report {name} for {period}")

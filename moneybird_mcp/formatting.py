@@ -227,6 +227,79 @@ def build_filter_string(*, filter: str = "", period: str = "") -> str:
     return ",".join(parts)
 
 
+# Moneybird scopes several list endpoints by period even when the caller passes
+# nothing, and its filters *replace* the documented defaults rather than extend
+# them. One call therefore has three possible scopes that look interchangeable
+# from the outside: the default financial year, the caller's period, or no period
+# at all because some other filter key wiped the default out. An unscoped listing
+# that quietly covers only the current year reads as "these records do not exist",
+# which is the wrong conclusion to hand an audit. So the scope is stated instead
+# of left to be inferred.
+PERIOD_SOURCE_CALLER = "caller"
+PERIOD_SOURCE_MONEYBIRD_DEFAULT = "moneybird_default"
+PERIOD_SOURCE_UNBOUNDED = "unbounded_filter_replaced_default"
+
+# Only the defaults Moneybird actually documents. The sales-invoice, estimate and
+# time-entry list endpoints do not document one, so none is claimed for them.
+MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS: dict[str, str | None] = {
+    "documents": "this_year",
+    "financial_mutations": "this_year",
+    "sales_invoices": None,
+    "estimates": None,
+    "time_entries": None,
+}
+
+_UNBOUNDED_PERIOD_NOTE = (
+    "No period was requested, but another filter key was, and Moneybird's filters "
+    "replace its defaults entirely -- so this listing is not restricted to a "
+    "financial year. Pass an explicit period to bound it."
+)
+_UNDOCUMENTED_DEFAULT_NOTE = (
+    "Moneybird applied its own default scope for this endpoint. Its value is not "
+    "documented, so it is not asserted here. Pass an explicit period when the "
+    "scope matters."
+)
+
+
+def describe_effective_period(
+    *,
+    filter: str = "",
+    period: str = "",
+    moneybird_default_period: str | None = None,
+) -> dict[str, Any]:
+    """State which period a list call is actually scoped to, and who chose it.
+
+    ``moneybird_default_period`` is only filled in where Moneybird documents the
+    default. Where it does not, the default is reported as unknown rather than
+    guessed, because an invented scope is worse than an acknowledged one.
+    """
+
+    parts = [part.strip() for part in str(filter or "").split(",") if part.strip()]
+    inline = next(
+        (part[len("period:") :] for part in parts if part.startswith("period:")),
+        "",
+    )
+    chosen = inline or str(period or "").strip()
+    if chosen:
+        return {
+            "effective_period": normalize_list_period(chosen),
+            "period_source": PERIOD_SOURCE_CALLER,
+        }
+    if parts:
+        return {
+            "effective_period": "",
+            "period_source": PERIOD_SOURCE_UNBOUNDED,
+            "period_note": _UNBOUNDED_PERIOD_NOTE,
+        }
+    described: dict[str, Any] = {
+        "effective_period": moneybird_default_period or "",
+        "period_source": PERIOD_SOURCE_MONEYBIRD_DEFAULT,
+    }
+    if not moneybird_default_period:
+        described["period_note"] = _UNDOCUMENTED_DEFAULT_NOTE
+    return described
+
+
 
 
 def document_url(kind: str, item_id: str, administration_id: str | None) -> str | None:
