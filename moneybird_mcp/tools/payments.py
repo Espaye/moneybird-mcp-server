@@ -180,7 +180,7 @@ def prepare_register_payment(
         Field(description="Optional Moneybird manual_payment_action, e.g. 'private_payment', 'cash_payment', 'payment_without_proof', 'rounding_error'."),
     ] = "",
 ) -> dict[str, Any]:
-    """Use this before registering a payment on a sales invoice, purchase invoice, or receipt
+    """Use this to record (register) a payment on a sales invoice, purchase invoice, or receipt
     (mark it fully or partially paid). document_type is sales_invoice, purchase_invoice, or
     receipt. Prefer linking the actual bank mutation instead (prepare_link_bank_mutation_booking)
     when one exists; use this for payments outside the bank feed (cash, private, foreign PSP).

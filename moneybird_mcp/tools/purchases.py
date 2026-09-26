@@ -316,7 +316,10 @@ def review_purchase_invoices(
 ) -> dict[str, Any]:
     """Use this to find purchase invoices that need attention: still in 'new' state, booked
     differently than the same supplier usually books, or carrying a familiar description on a
-    different ledger/tax destination. Contact-specific scans use complete versioned history.
+    different ledger/tax destination. Moneybird's booking rules (invisible to the API)
+    auto-fill incoming purchase invoices inconsistently: the usual multi-line split one
+    month, a single catch-all line the next, sometimes with prices_are_incl_tax flipped.
+    This finds the result; prepare_reconcile_purchase_invoice fixes it. Contact-specific scans use complete versioned history.
     Each flagged invoice suggests a canonical prior invoice to use as the reconcile reference.
     Set complete_scan=true when an 'all clear' has to mean the whole period was examined;
     the result then carries its population count and any truncation.
@@ -383,7 +386,10 @@ def prepare_reconcile_purchase_invoice(
 
     With ``desired_lines``, uses exact PDF-derived amounts and refuses any allocation that changes
     the current total. Without ``desired_lines``, copies the reference invoice's descriptions,
-    ledgers, and tax rates and scales its prices to the target total. Existing lines are reused by
+    ledgers, and tax rates and scales its prices to the target total, keeping the document total
+    to the cent; when the totals differ, the per-line split is a flagged assumption. To remove
+    that assumption, read the PDF with read_document_attachment and pass its exact amounts,
+    descriptions, ledger ids, and tax ids as ``desired_lines``. Existing lines are reused by
     ledger+tax to keep their identity; extra lines are added and leftover lines removed. A document
     version snapshot is stored in both modes so execution aborts if the invoice changes after the
     preview. Nothing is written until reconcile_purchase_invoice_from_approval is called.

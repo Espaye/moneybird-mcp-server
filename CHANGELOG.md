@@ -3,6 +3,20 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning while allowing pre-1.0 breaking changes.
 
+## Unreleased
+
+### Fixed
+
+- **The server instructions now fit where clients read them.** They were 8,932
+  characters, and Claude Code cuts server instructions off at about 2,048, so the
+  model there never saw the known API limits or most of the working method. They now
+  hold the identity line, all five hard rules and short pointers (1,440 characters).
+  Every other fact moved to the tool description or `get_bookkeeping_guide` topic
+  where it is needed; the `grenzen` topic now covers booking rules on purchase
+  invoices, rate limits, report periods and list periods. The `SETUP INCOMPLETE`
+  banner is shorter too, so the hard rules still arrive in full on an unconfigured
+  server. Tests pin the budget and the new home of each moved fact.
+
 ## 0.8.2 — 2026-09-12
 
 ### Security

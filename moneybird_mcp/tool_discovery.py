@@ -150,6 +150,15 @@ def configure_tool_discovery(mcp: Any, mode: str | None = None) -> str:
                 ) -> ToolResult:
                     """Call a read-only tool discovered through search_tools.
 
+                    Compact discovery mode: use search_tools to find only the
+                    capabilities the current task needs, then call a discovered
+                    read or prepare tool here. The core tools (search, fetch,
+                    sync_search_index, get_server_status, list_administrations,
+                    prepare_bookkeeping_correction_batch, and
+                    execute_approved_action) stay directly visible. The
+                    default mode is the full catalogue, where every tool is
+                    listed.
+
                     Mutating tools must be called directly so the MCP client
                     can see and enforce their destructive annotation.
                     """

@@ -64,7 +64,9 @@ def get_financial_report(
     period accepts e.g. this_year, prev_month, 202601..202603 — BUT cash_flow, tax, debtors,
     and creditors accept at most one month (use this_month or 202606); asking those for a
     longer period is refused with the exact per-month calls to make instead. The aging
-    reports take a whole month as reference (202606). Set page only for the paginated
+    reports take a whole month as reference (202606). Only profit_loss, balance_sheet,
+    general_ledger, and the by_contact/by_project reports accept a wide period like
+    this_year. Set page only for the paginated
     per-contact/per-project, debtor/creditor, and journal_entries reports.
 
     Reports are throttled separately by Moneybird at 50 requests per 5 minutes, three times

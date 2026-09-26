@@ -87,7 +87,9 @@ def list_financial_mutations(
     to audit a match. Set complete_scan=true for reconciliations: Moneybird's
     normal state:unprocessed filter can hide non-settled rows and its list endpoint
     can reject large periods. The complete route uses synchronization plus exact-ID
-    fetches, applies state locally, and reports its population proof. To find which
+    fetches, applies state locally, and reports its population proof. A wide period
+    is rejected by Moneybird with HTTP 400 ("too many ... use sync API"): query per
+    month (period "YYYYMM01..YYYYMMnn") or use the sync index. To find which
     invoice each row pays, use suggest_bank_mutation_matches."""
     client = ctx.get_client()
     completeness: dict[str, Any] | None = None
@@ -179,12 +181,19 @@ def suggest_bank_mutation_matches(
     against open sales invoices, money out against open purchase invoices and
     receipts, using the invoice reference in the bank description, an exact open
     amount, the counterparty IBAN, and the contact name. Each candidate says which
-    of those fired, so nothing is matched on a hunch.
+    of those fired, so nothing is matched on a hunch. Do not redo this matching by
+    hand from reports and invoice lists.
+
+    It also returns group_matches: two or more outgoing mutations that uniquely add
+    up to one purchase invoice's complete open balance. Settle a strong group match
+    with prepare_settle_purchase_invoice_from_bank_mutations (one preview, one
+    approval for the whole group).
 
     It changes nothing. Take a candidate you and the user agree on to
     prepare_link_bank_mutation_booking, which is where confirmation and
     verification happen. When suggestion is 'ambiguous' or 'none', ask the user
-    rather than picking one.
+    rather than picking one; 'none' usually means the amount belongs on a ledger
+    account rather than an invoice.
     """
     client = ctx.get_client()
 
@@ -1609,8 +1618,11 @@ def prepare_settle_purchase_invoice_from_bank_mutations(
 ) -> dict[str, Any]:
     """Prepare one approval to link several bankmutaties and process one inkoopfactuur.
 
-    Only an unambiguous supplier group that exactly closes the open balance is accepted.
-    The executor preflights every record and verifies the paid invoice after the writes.
+    Prefer this for a strong group_match from suggest_bank_mutation_matches. Only an
+    unambiguous supplier group that exactly closes the open balance is accepted. One
+    approval links the complete group and processes a still-new invoice without
+    changing its accounting lines. The executor preflights every record and verifies
+    the final paid state after the writes.
     """
     document_id = str(document_id or "").strip()
     mutation_ids = [str(item or "").strip() for item in financial_mutation_ids]

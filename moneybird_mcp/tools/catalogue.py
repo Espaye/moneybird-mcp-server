@@ -33,7 +33,9 @@ BookkeepingTopic = Annotated[
             "was not booked automatically; categoriseren = choosing a ledger "
             "account; consistentie = processing a series uniformly; achterstand = "
             "working through a backlog or a whole year; meterverbruik = metered "
-            "usage invoicing; grenzen = where to defer to the bookkeeper."
+            "usage invoicing; grenzen = what the Moneybird API cannot do (booking "
+            "rules, rate limits, report and list periods) and where to defer to "
+            "the bookkeeper."
         )
     ),
 ]
