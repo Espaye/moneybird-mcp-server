@@ -63,7 +63,12 @@ def get_server_status(
         ),
     ] = 20,
 ) -> dict[str, Any]:
-    """Return build, credential, and privacy-safe process diagnostics."""
+    """Return build, credential, and privacy-safe process diagnostics.
+
+    Read this when calls start failing or slowing down. Moneybird throttles per IP
+    address (150 requests per 5 minutes, 50 for /reports/); rate_budget shows the
+    observed remaining budget, and a rate-limit refusal names the bucket and when
+    it frees up."""
     credential_mode = get_credential_mode()
     if (
         credential_mode != CREDENTIAL_MODE_HOSTED_REQUEST_ONLY
@@ -160,7 +165,12 @@ def search(
     invoices (verkoopfacturen), purchase invoices (inkoopfacturen), receipts (bonnen),
     memoriaalboekingen, and bank mutations (bankmutaties) by name, number, or amount.
     Hits carry date, amount, state, and contact_id, so a follow-up fetch is usually
-    unnecessary."""
+    unnecessary.
+
+    Without a local sync index this falls back to a live scan that is partial and
+    breaks on large data. Before a backlog, categorize, or whole-year task, and
+    whenever a result has "source": "live_fallback" or a "warnings" field, run
+    sync_search_index once, then search again."""
     client = ctx.get_client()
     # Administration-keyed files are not an authorization boundary. Revalidate
     # the active token/grant before touching JSON or FTS cache state.
@@ -468,6 +478,9 @@ def moneybird_request(
 ) -> dict[str, Any]:
     """Read-only escape hatch for allowlisted Moneybird GET endpoints.
 
+    Use it for read-only endpoints without a dedicated tool (subscriptions, identities,
+    document styles, workflows, users, custom fields, ...).
+
     Performs a single GET within the configured administration. `path` is relative to the
     administration, e.g. 'estimates', 'subscriptions', 'time_entries/123',
     'documents/purchase_invoices', or 'projects'. Use 'administrations' to hit the API root.
@@ -492,7 +505,12 @@ def sync_search_index(
     financial_mutation_filter: FilterString = "period:this_year",
     force_full: Annotated[bool, Field(description="True = rebuild the index from scratch instead of an incremental refresh.")] = False,
 ) -> dict[str, Any]:
-    """Use this when you want to build or refresh a local cached Moneybird search index."""
+    """Use this when you want to build or refresh a local cached Moneybird search index.
+
+    The index is per administration and a point-in-time snapshot. Run it before a
+    backlog, categorize, or whole-year task, and again after making changes or when
+    working with recent data; a refresh is cheap because it only fetches changed
+    records. Use it instead of rescanning, to spare the rate limit."""
     client = ctx.get_client()
     return sync_search_index_data(
         client,

@@ -110,7 +110,8 @@ PLAYBOOK_TOPICS: dict[str, tuple[tuple[str, ...], str]] = {
     ),
     "grenzen": (
         ("8",),
-        "Bij twijfel: waar dit hulpmiddel ophoudt en de boekhouder begint.",
+        "Wat de Moneybird-API niet kan (boekingsregels, rate limits, rapport- en "
+        "lijstperiodes) en waar de boekhouder begint.",
     ),
 }
 

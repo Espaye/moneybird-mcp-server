@@ -460,9 +460,33 @@ mutatie weer `processed` is.
 - Endpoint niet als tool beschikbaar? → `moneybird_request` (alleen lezen).
 - **Boekingsregels (bankregels) zitten niet in de API.** Je kunt ze niet uitlezen of wijzigen —
   endpoints als `transaction_rules`, `bank_rules`, `automatic_bookings` geven 404. Bevestig dit
-  eerlijk en leid regelgedrag af uit de mutatie-velden en tijdstempels (zie §7-recept E).
-  Voor de letterlijke instelling: verwijs naar Moneybird → Instellingen → Boekhouding →
-  Boekingsregels.
+  eerlijk en leid regelgedrag af uit de mutatie-velden (`state`, `payments`,
+  `ledger_account_bookings`) en uit `created_at` vs. `processed_at` (zie §7-recept E en de prompt
+  `diagnose_bankmutatie`). Zeg ronduit wat je niet kunt zien. Voor de letterlijke instelling:
+  verwijs naar Moneybird → Instellingen → Boekhouding → Boekingsregels.
+- **Dezelfde boekingsregels vullen ook inkomende inkoopfacturen, en inconsistent.** Een factuur
+  van een leverancier kan de ene maand binnenkomen met de gebruikelijke splitsing over meerdere
+  regels en de volgende maand als één verzamelregel, nog in status `new`, soms met
+  `prices_are_incl_tax` omgedraaid. De regel zelf zie of herstel je niet, alleen het resultaat.
+  Zoek zulke facturen met `review_purchase_invoices` en herstel ze met
+  `prepare_reconcile_purchase_invoice`: bij voorkeur met de exacte `desired_lines` uit de PDF
+  (`read_document_attachment`), anders met een bekende goede referentiefactuur (zie §2).
+- **Rate limits.** Moneybird throttlet per IP-adres: 150 verzoeken per 5 minuten, en voor de
+  `/reports/`-endpoints maar 50 per 5 minuten. Doe liever één brede leesactie dan veel smalle,
+  gebruik de sync-index in plaats van opnieuw te scannen, en lees `get_server_status` zodra calls
+  gaan falen: die toont het waargenomen resterende budget. Een weigering door de rate limit noemt
+  de bucket en wanneer die weer vrijkomt.
+- **Rapportperiodes.** `cash_flow`, `tax`, `debtors` en `creditors` accepteren maximaal **één
+  maand** (`this_month` of `202606`); de `*_aging`-rapporten nemen een hele maand als peildatum.
+  Alleen `profit_loss`, `balance_sheet`, `general_ledger` en de `by_contact`/`by_project`-rapporten
+  accepteren een ruime periode als `this_year`.
+- **Bankmutatielijsten.** `list_financial_mutations` weigert een ruime periode met HTTP 400 ("too
+  many ... use sync API"); vraag per maand op (`period:"JJJJMM01..JJJJMMnn"`) of gebruik de
+  sync-index. De gewone modus is één providerpagina en bewijst geen volledige populatie. Zet voor
+  een reconciliatie `complete_scan=true` met een expliciete periode: dat gebruikt synchronisatie
+  plus ophalen per exacte id, past de status lokaal toe en toont ook niet-afgewikkelde mutaties
+  die Moneybirds eigen statusfilter verbergt. `review_purchase_invoices` heeft dezelfde vlag om
+  dezelfde reden: zonder `complete_scan` dekt "alles in orde" maar één pagina.
 - **Btw-aangiftes zitten evenmin in de API.** `tax_returns`, `vat_returns`, `vat_documents`,
   `vat_declarations`, `tax_declarations` en `financial_years` geven allemaal 404; de OpenAPI-spec
   kent alleen `reports/tax` en `tax_rates`. `VatDocument` is wél een geldig `booking_type` bij

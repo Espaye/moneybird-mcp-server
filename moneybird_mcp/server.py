@@ -246,21 +246,19 @@ def build_config(
 # at connect time. The server log is the wrong channel for this: an MCP client
 # shows any server that starts as connected, and nobody opens the log. Reaching
 # the model means the user is told in the conversation, on their first question,
-# instead of receiving a tool error.
+# instead of receiving a tool error. Keep it short: it shares the ~2,048-character
+# budget Claude Code gives server instructions, and the hard rules must still
+# fit after it (tests/test_server_instructions.py).
 MISSING_CREDENTIALS_BANNER = """
-SETUP INCOMPLETE — READ THIS BEFORE ANYTHING ELSE:
-This server started without Moneybird credentials, so every Moneybird tool call
-will fail until they are configured. Do not call a Moneybird tool to "check"; the
-check has already been done. Instead tell the user, in the language they are
-writing in, that the Moneybird server is connected but has no credentials yet,
-and pass on this exactly:
+SETUP INCOMPLETE — READ THIS FIRST:
+This server has no Moneybird credentials, so every Moneybird tool call fails until
+they are configured; do not call one to "check". Tell the user, in their language,
+that the server is connected but has no credentials yet, and pass on exactly:
 
   {message}
 
-If the user replies that they have just configured credentials, believe them and
-try the call: this notice is written once when the server starts and cannot see a
-change made afterwards.
-
+If the user says they have just configured credentials, believe them and try the
+call: this notice was written at startup and cannot see later changes.
 --- normal instructions follow ---
 """
 
