@@ -494,6 +494,7 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
             f"Document {document_id} lookup returned a different record. Prepare again."
         )
     current_version = _validate_reconcile_preflight(before, payload)
+    state_before = before.get("state")
 
     mark_write_dispatch_started()
     client.update_document(
@@ -517,11 +518,16 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
     verified_tax_mode = bool(after.get("prices_are_incl_tax")) == bool(
         payload["prices_are_incl_tax"]
     )
+    # Saving the lines is what processes an uploaded document: Moneybird moves it
+    # from 'new' to 'open' (seen in production on 2026-10-03). Still 'new' afterwards
+    # means it is not booked, whatever its lines say.
+    verified_left_new_state = after.get("state") != "new"
     verified = (
         record_id_matches
         and verified_total
         and verified_lines
         and verified_tax_mode
+        and verified_left_new_state
     )
     lines = [
         {
@@ -545,6 +551,7 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
             "record_id_matches": record_id_matches,
             "verified_lines_match": verified_lines,
             "verified_prices_are_incl_tax": verified_tax_mode,
+            "verified_left_new_state": verified_left_new_state,
         },
         "document_id": document_id,
         "document_kind": kind,
@@ -559,6 +566,8 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
         "record_id_matches": record_id_matches,
         "verified_lines_match": verified_lines,
         "verified_prices_are_incl_tax": verified_tax_mode,
+        "state_before": state_before,
+        "verified_left_new_state": verified_left_new_state,
         "lines": lines,
     }
 

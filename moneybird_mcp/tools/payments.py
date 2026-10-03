@@ -164,6 +164,89 @@ def _check_balance_ledger_account(client, ledger_account_id: str) -> dict[str, A
     }
 
 
+def _contact_id(record: dict[str, Any]) -> str:
+    contact = record.get("contact") if isinstance(record.get("contact"), dict) else {}
+    return str(record.get("contact_id") or contact.get("id") or "")
+
+
+def _attachment_count(record: dict[str, Any]) -> int:
+    return len(record.get("attachments") or [])
+
+
+def _check_settlement_pair(
+    kind: str,
+    record: dict[str, Any],
+    counter: dict[str, Any],
+    amount,
+) -> list[str]:
+    """Refuse a pair Moneybird should not net; return warnings for a pair it can."""
+    document_id = str(record.get("id") or "")
+    counter_id = str(counter.get("id") or "")
+    if not counter_id or counter_id == document_id:
+        raise MoneybirdError("settle_with_document_id must be a different document.")
+    if _contact_id(record) != _contact_id(counter):
+        raise MoneybirdError(
+            "Both documents must belong to the same contact to settle them against "
+            "each other."
+        )
+    currency, counter_currency = record.get("currency"), counter.get("currency")
+    if currency and counter_currency and currency != counter_currency:
+        raise MoneybirdError(
+            f"Both documents must use the same currency ({currency} vs {counter_currency})."
+        )
+    open_amount = money_decimal(_open_amount(record))
+    counter_open = money_decimal(_open_amount(counter))
+    if money_decimal(record.get("total_price_incl_tax") or 0) <= 0 or open_amount <= 0:
+        raise MoneybirdError(
+            f"Document {document_id} must be the positive {kind} with an open amount; "
+            "register the settlement on the positive document and pass the credit "
+            "document as settle_with_document_id."
+        )
+    if money_decimal(counter.get("total_price_incl_tax") or 0) >= 0 or counter_open >= 0:
+        raise MoneybirdError(
+            f"settle_with_document_id {counter_id} must be a credit (negative) {kind} "
+            "with an open amount."
+        )
+    if amount > open_amount or amount > -counter_open:
+        raise MoneybirdError(
+            f"Settlement {amount} exceeds an open amount: {open_amount} on "
+            f"{document_id}, {-counter_open} on the credit {counter_id}."
+        )
+    warnings = []
+    if amount != open_amount or amount != -counter_open:
+        warnings.append(
+            f"Partial settlement: {open_amount - amount} stays open on {document_id} "
+            f"and {-counter_open - amount} on the credit {counter_id}."
+        )
+    for doc in (record, counter):
+        if doc.get("state") == "new":
+            warnings.append(
+                f"Document {doc.get('id')} is still in state 'new'; save its lines "
+                "first so it is fully processed, not only settled."
+            )
+    return warnings
+
+
+def _check_payment_sign(record: dict[str, Any], amount) -> None:
+    """A payment must point the same way as the document it pays.
+
+    Moneybird accepts a positive payment on a credit document (verified 2026-10-04):
+    the credit then stays open for twice its amount instead of being paid.
+    """
+    total = money_decimal(record.get("total_price_incl_tax") or 0)
+    if amount > 0 and total < 0:
+        raise MoneybirdError(
+            f"Document {record.get('id')} is a credit ({total}); money returned on it "
+            "is a negative payment. Pass a negative price, or settle it against the "
+            "original invoice with settle_with_document_id."
+        )
+    if amount < 0 and total >= 0:
+        raise MoneybirdError(
+            f"A negative payment belongs on a credit document; document "
+            f"{record.get('id')} totals {total}."
+        )
+
+
 def _payment_keys(record: dict[str, Any]) -> list[list[str]]:
     return [
         list(_payment_key(payment))
@@ -242,6 +325,10 @@ def prepare_register_payment(
         str,
         Field(description="Balance ledger account to settle against (manual_payment_action 'balance_settlement'), e.g. a payment-processor clearing account or prepaid credit. The account must allow payments."),
     ] = "",
+    settle_with_document_id: Annotated[
+        str,
+        Field(description="Credit (negative) purchase invoice of the same contact to settle this positive purchase invoice against (manual_payment_action 'invoices_settlement'). Moneybird books the opposite payment on the credit itself."),
+    ] = "",
 ) -> dict[str, Any]:
     """Use this to record (register) a payment on a sales invoice, purchase invoice, or receipt
     (mark it fully or partially paid). document_type is sales_invoice, purchase_invoice, or
@@ -249,19 +336,51 @@ def prepare_register_payment(
     when one exists; use this for payments outside the bank feed (cash, private, foreign PSP).
     To settle against a balance account instead of money (fees withheld by a payment
     processor, prepaid credit), pass ledger_account_id; the action becomes
-    balance_settlement. Do not execute the write until the user explicitly confirms."""
+    balance_settlement. To net a purchase invoice against a credit purchase invoice of the
+    same supplier, register the settlement on the positive invoice and pass the credit as
+    settle_with_document_id; both end up paid. Money returned on a credit purchase invoice
+    or receipt is a negative price. Do not execute the write until the user explicitly
+    confirms."""
     kind = _normalize_payable_document_type(document_type)
     if not payment_date.strip():
         raise MoneybirdError("payment_date is required (YYYY-MM-DD).")
     amount = parse_decimal_number(price, label="price")
-    if amount <= 0:
-        raise MoneybirdError("price must be greater than zero.")
+    if amount == 0:
+        raise MoneybirdError("price must not be zero.")
+    if amount < 0 and kind == "sales_invoice":
+        # Only purchase invoices and receipts have been verified against Moneybird.
+        raise MoneybirdError(
+            "Negative payments are supported on credit purchase invoices and receipts, "
+            "not on sales invoices."
+        )
     action = manual_payment_action.strip()
     ledger_account_id = ledger_account_id.strip()
-    if action == _INVOICES_SETTLEMENT:
+    settle_with_document_id = settle_with_document_id.strip()
+    if settle_with_document_id:
+        if action and action != _INVOICES_SETTLEMENT:
+            raise MoneybirdError(
+                "settle_with_document_id is only used with manual_payment_action "
+                f"'{_INVOICES_SETTLEMENT}', not '{action}'."
+            )
+        if ledger_account_id or financial_account_id.strip() or financial_mutation_id.strip():
+            raise MoneybirdError(
+                "An invoice settlement moves no money: leave ledger_account_id, "
+                "financial_account_id and financial_mutation_id empty."
+            )
+        # Only purchase invoice pairs have been verified against Moneybird.
+        if kind != "purchase_invoice":
+            raise MoneybirdError(
+                "settle_with_document_id is supported for purchase invoices only."
+            )
+        if amount < 0:
+            raise MoneybirdError(
+                "An invoice settlement amount is positive; Moneybird books the negative "
+                "side on the credit itself."
+            )
+        action = _INVOICES_SETTLEMENT
+    elif action == _INVOICES_SETTLEMENT:
         raise MoneybirdError(
-            "invoices_settlement is not supported yet: Moneybird books the opposite "
-            "payment on the other document itself, which this tool cannot verify."
+            f"manual_payment_action '{_INVOICES_SETTLEMENT}' needs settle_with_document_id."
         )
     if ledger_account_id and not action:
         action = _BALANCE_SETTLEMENT
@@ -278,15 +397,22 @@ def prepare_register_payment(
     client = ctx.get_client()
     record = _fetch_payable_record(client, kind, document_id)
     summary = _payable_record_summary(client, kind, record)
+    _check_payment_sign(record, amount)
     settlement_ledger = (
         _check_balance_ledger_account(client, ledger_account_id)
         if ledger_account_id
         else None
     )
 
+    counter = None
+    counter_summary = None
     warnings: list[str] = []
     open_amount = money_decimal(summary["open_amount"])
-    if amount > open_amount:
+    if settle_with_document_id:
+        counter = _fetch_payable_record(client, kind, settle_with_document_id)
+        counter_summary = _payable_record_summary(client, kind, counter)
+        warnings.extend(_check_settlement_pair(kind, record, counter, amount))
+    elif (amount > 0) != (open_amount > 0) or abs(amount) > abs(open_amount):
         warnings.append(
             f"Payment {amount} is higher than the open amount {open_amount}."
         )
@@ -309,27 +435,46 @@ def prepare_register_payment(
             "transaction_identifier": transaction_identifier.strip(),
             "manual_payment_action": action,
             "ledger_account_id": ledger_account_id,
+            "invoice_id": settle_with_document_id,
         }
     )
     precondition = _payment_precondition(record)
+    counter_payload = (
+        {
+            "document_id": settle_with_document_id,
+            "total_before": str(counter.get("total_price_incl_tax") or "0"),
+            "attachments_before": _attachment_count(counter),
+            "precondition": _payment_precondition(counter),
+        }
+        if counter is not None
+        else None
+    )
     fingerprint_payload = {
         "document_type": kind,
         "document_id": str(document_id),
         "payment": payment,
         "precondition": precondition,
+        "counter_document": counter_payload,
     }
     return stage_write(
         "register_payment",
-        summary=f"Register payment of {amount} on {summary['title']}",
+        summary=(
+            f"Settle {amount} of {summary['title']} against {counter_summary['title']}"
+            if counter_summary
+            else f"Register payment of {amount} on {summary['title']}"
+        ),
         payload={
             "document_type": kind,
             "document_id": str(document_id),
             "payment": payment,
             "total_before": str(record.get("total_price_incl_tax") or "0"),
+            "attachments_before": _attachment_count(record),
             "precondition": precondition,
+            **({"counter_document": counter_payload} if counter_payload else {}),
         },
         preview={
             "document": summary,
+            **({"settle_with_document": counter_summary} if counter_summary else {}),
             "payment": payment,
             **(
                 {"settlement_ledger_account": settlement_ledger}
@@ -358,6 +503,21 @@ def _execute_register_payment(client, payload: dict[str, Any]) -> dict[str, Any]
         payload.get("precondition") or {},
         document_id=document_id,
     )
+    counter_payload = payload.get("counter_document")
+    if counter_payload:
+        counter_before = _fetch_payable_record(
+            client, kind, counter_payload["document_id"]
+        )
+        _assert_payment_precondition(
+            counter_before,
+            counter_payload["precondition"],
+            document_id=counter_payload["document_id"],
+        )
+        payment_ids_before = {
+            str(item.get("id"))
+            for doc in (before, counter_before)
+            for item in doc.get("payments") or []
+        }
     mark_write_dispatch_started()
     if kind == "sales_invoice":
         client.register_sales_invoice_payment(document_id, payload["payment"])
@@ -397,7 +557,13 @@ def _execute_register_payment(client, payload: dict[str, Any]) -> dict[str, Any]
         and exact_payment_delta
         and open_amount_delta_matches
     )
-    return {
+    settlement = None
+    if counter_payload:
+        settlement = _verify_settlement_pair(
+            client, kind, payload, record, payment_ids_before
+        )
+        fully_verified = fully_verified and settlement["fully_verified"]
+    result = {
         "_status": (
             "payment_registered"
             if fully_verified
@@ -435,6 +601,78 @@ def _execute_register_payment(client, payload: dict[str, Any]) -> dict[str, Any]
             "expected_open_amount_after": str(expected_open_after),
             "open_amount_delta_matches": open_amount_delta_matches,
             "open_amount_after": summary["open_amount"],
+        },
+    }
+    if settlement:
+        result["verification"]["settlement"] = settlement
+        result["_audit"]["settlement_fully_verified"] = settlement["fully_verified"]
+    return result
+
+
+def _verify_settlement_pair(
+    client,
+    kind: str,
+    payload: dict[str, Any],
+    record: dict[str, Any],
+    payment_ids_before: set[str],
+) -> dict[str, Any]:
+    """Prove Moneybird booked exactly one linked, opposite payment on the credit."""
+    counter_payload = payload["counter_document"]
+    counter_id = counter_payload["document_id"]
+    counter = _fetch_payable_record(client, kind, counter_id)
+    amount = money_decimal(payload["payment"]["price"])
+
+    def new_payments(doc):
+        return [
+            item
+            for item in doc.get("payments") or []
+            if str(item.get("id")) not in payment_ids_before
+        ]
+
+    added = new_payments(record)
+    counter_added = new_payments(counter)
+    one_each = len(added) == 1 and len(counter_added) == 1
+    linked = signed = same_date = False
+    if one_each:
+        main, other = added[0], counter_added[0]
+        linked = (
+            str(main.get("linked_payment_id") or "") == str(other.get("id"))
+            and str(other.get("linked_payment_id") or "") == str(main.get("id"))
+        )
+        signed = (
+            money_decimal(main.get("price") or 0) == amount
+            and money_decimal(other.get("price") or 0) == -amount
+            and other.get("manual_payment_action") == _INVOICES_SETTLEMENT
+        )
+        same_date = str(other.get("payment_date")) == payload["payment"]["payment_date"]
+    counter_open_after = money_decimal(_open_amount(counter))
+    expected_counter_open = (
+        money_decimal(counter_payload["precondition"]["open_amount"]) + amount
+    )
+    checks = {
+        "counter_record_id_matches": str(counter.get("id") or "") == str(counter_id),
+        "one_new_payment_on_each_document": one_each,
+        "payments_linked_to_each_other": linked,
+        "opposite_signed_amounts": signed,
+        "same_payment_date": same_date,
+        "counter_total_unchanged_to_the_cent": money_decimal(
+            counter.get("total_price_incl_tax") or 0
+        )
+        == money_decimal(counter_payload["total_before"]),
+        "counter_open_amount_delta_matches": counter_open_after == expected_counter_open,
+        "attachments_unchanged": (
+            _attachment_count(record) == payload["attachments_before"]
+            and _attachment_count(counter) == counter_payload["attachments_before"]
+        ),
+    }
+    return {
+        **checks,
+        "fully_verified": all(checks.values()),
+        "counter_document": _payable_record_summary(client, kind, counter),
+        "counter_open_amount_after": str(counter_open_after),
+        "payment_ids": {
+            "document": [str(item.get("id")) for item in added],
+            "counter_document": [str(item.get("id")) for item in counter_added],
         },
     }
 
