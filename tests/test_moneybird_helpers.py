@@ -1148,14 +1148,17 @@ class RegisterPaymentTests(unittest.TestCase):
                 price="10",
             )
 
-    def test_payment_verifies_when_moneybird_fills_in_its_own_ledger(self) -> None:
-        # Moneybird returns a plain payment with the debtor ledger account set.
+    def test_payment_verifies_when_moneybird_fills_in_its_own_fields(self) -> None:
+        # Seen live on 2026-10-04: a plain payment comes back with the debtor ledger
+        # account and the invoice's own id as invoice_id.
         from moneybird_mcp import tools
 
         fake = self.FakeClient()
 
         def register(invoice_id, payment):
-            fake.invoice["payments"] = [{**payment, "ledger_account_id": "debtors"}]
+            fake.invoice["payments"] = [
+                {**payment, "ledger_account_id": "debtors", "invoice_id": invoice_id}
+            ]
             fake.invoice["total_unpaid"] = "0.00"
 
         fake.register_sales_invoice_payment = register
@@ -1204,7 +1207,9 @@ class BalanceSettlementPaymentTests(unittest.TestCase):
 
         def register_document_payment(self, kind, document_id, payment):
             self.sent_payments.append(dict(payment))
-            self.document["payments"].append(dict(payment))
+            self.document["payments"].append(
+                {**payment, "invoice_id": document_id, "linked_payment_id": None}
+            )
             self.document["version"] += 1
 
     def _prepare(self, fake, **overrides):
@@ -1235,6 +1240,7 @@ class BalanceSettlementPaymentTests(unittest.TestCase):
             prepared["preview"]["settlement_ledger_account"]["name"],
             "Stripe-tussenrekening",
         )
+        self.assertEqual(prepared["preview"]["warnings"], [])
         self.assertEqual(
             fake.sent_payments,
             [

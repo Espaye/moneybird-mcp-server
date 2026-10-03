@@ -20,11 +20,10 @@ versioning while allowing pre-1.0 breaking changes.
   and receipts now register payments with `POST …/payments` instead of
   `PATCH …/register_payment`, which Moneybird deprecated with a sunset date of
   2026-12-31.
-- **Payment verification covers the ledger account and settlement target.** The
-  before/after comparison now includes `ledger_account_id` and `invoice_id`, and the
-  new payment must carry every field the request set. Fields the request left empty
-  are no longer compared, so a ledger account Moneybird fills in by itself no longer
-  fails verification.
+- **Payment verification covers the ledger account.** The before/after comparison
+  now includes `ledger_account_id`, and the new payment must carry every field the
+  request set. Fields the request left empty are no longer compared: Moneybird fills
+  in the creditor or debtor ledger account on a plain payment by itself.
 
 ## 0.8.3 — 2026-09-27
 

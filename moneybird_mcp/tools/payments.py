@@ -93,8 +93,10 @@ def _payable_record_summary(
     }
 
 
-# Every payment field the request can set. The before/after multiset compares all of
-# them, so a changed ledger or settlement target is a changed payment.
+# Payment fields the request can set, as Moneybird reports them back. The before/after
+# multiset compares all of them, so a payment moved to another ledger is a changed
+# payment. invoice_id is left out: on a recorded payment it is the document the payment
+# belongs to, not the request's settlement target.
 _PAYMENT_KEY_FIELDS = (
     "payment_date",
     "price",
@@ -103,7 +105,6 @@ _PAYMENT_KEY_FIELDS = (
     "transaction_identifier",
     "manual_payment_action",
     "ledger_account_id",
-    "invoice_id",
 )
 
 
@@ -146,11 +147,15 @@ def _check_balance_ledger_account(client, ledger_account_id: str) -> dict[str, A
     if ledger.get("active") is False:
         raise MoneybirdError(f"Ledger account {ledger_account_id} is inactive.")
     allowed_types = set(ledger.get("allowed_document_types") or [])
+    # Moneybird's API accepts a balance settlement on any ledger account (verified
+    # 2026-10-04), but only accounts that allow payments are offered for it in
+    # Moneybird itself, so anything else is very likely the wrong account.
     if "payment" not in allowed_types:
         raise MoneybirdError(
             f"Ledger account {ledger_account_id} ({ledger.get('name')}) does not "
-            "allow payments, so Moneybird cannot settle a balance on it. Use a "
-            "balance ledger account whose allowed_document_types includes 'payment'."
+            "allow payments, so it is not meant for settling invoices. Choose a "
+            "balance account that allows payments, or allow payments on this one in "
+            "Moneybird's ledger account settings first."
         )
     return {
         "id": str(ledger.get("id") or ledger_account_id),
@@ -289,7 +294,7 @@ def prepare_register_payment(
         warnings.append(
             f"Partial payment: {amount} of open amount {open_amount}; the document stays partly open."
         )
-    if not financial_account_id and not financial_mutation_id and not manual_payment_action:
+    if not financial_account_id and not financial_mutation_id and not action:
         warnings.append(
             "No financial_account_id, financial_mutation_id, or manual_payment_action given; "
             "Moneybird will book this as a plain manual payment."
