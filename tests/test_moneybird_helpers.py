@@ -1301,13 +1301,262 @@ class BalanceSettlementPaymentTests(unittest.TestCase):
         with self.assertRaisesRegex(server.MoneybirdError, "only used with"):
             self._prepare(self.FakeClient(), manual_payment_action="private_payment")
 
-    def test_invoices_settlement_is_refused_until_it_can_be_verified(self) -> None:
-        with self.assertRaisesRegex(server.MoneybirdError, "not supported yet"):
+    def test_invoices_settlement_needs_the_other_document(self) -> None:
+        with self.assertRaisesRegex(server.MoneybirdError, "needs settle_with_document_id"):
             self._prepare(
                 self.FakeClient(),
                 ledger_account_id="",
                 manual_payment_action="invoices_settlement",
             )
+
+
+class InvoicePairSettlementTests(unittest.TestCase):
+    """Shapes taken from the live Developer-administration probe of 2026-10-04."""
+
+    class FakeClient:
+        administration_id = "admin"
+
+        def __init__(self, *, counter_total="-0.82", counter_contact="sup-1"):
+            self.documents = {
+                "pos": self._doc("pos", "0.82", "sup-1"),
+                "neg": self._doc("neg", counter_total, counter_contact),
+            }
+            self.sent = []
+            self.book_counter = True
+            self.link = True
+
+        @staticmethod
+        def _doc(doc_id, total, contact_id):
+            return {
+                "id": doc_id,
+                "reference": f"REF-{doc_id}",
+                "state": "open",
+                "date": "2026-10-04",
+                "contact": {"id": contact_id, "company_name": "Stripe"},
+                "currency": "EUR",
+                "total_price_incl_tax": total,
+                "payments": [],
+                "attachments": [{"id": f"att-{doc_id}"}],
+                "version": 1,
+            }
+
+        def get_document(self, kind, document_id):
+            return copy.deepcopy(self.documents[document_id])
+
+        def register_document_payment(self, kind, document_id, payment):
+            self.sent.append((document_id, dict(payment)))
+            counter_id = payment["invoice_id"]
+            main = {
+                "id": "p-main",
+                "invoice_id": document_id,
+                "price": payment["price"],
+                "payment_date": payment["payment_date"],
+                "manual_payment_action": "invoices_settlement",
+                "ledger_account_id": "verrekeningen",
+                "linked_payment_id": "p-counter" if self.link else None,
+            }
+            self.documents[document_id]["payments"].append(main)
+            self.documents[document_id]["version"] += 1
+            if self.book_counter:
+                self.documents[counter_id]["payments"].append(
+                    {
+                        **main,
+                        "id": "p-counter",
+                        "invoice_id": counter_id,
+                        "price": "-" + payment["price"],
+                        "linked_payment_id": "p-main" if self.link else None,
+                    }
+                )
+                self.documents[counter_id]["version"] += 1
+
+    def _run(self, fake, **overrides):
+        from moneybird_mcp import tools
+
+        arguments = {
+            "document_type": "purchase_invoice",
+            "document_id": "pos",
+            "payment_date": "2026-10-04",
+            "price": "0.82",
+            "settle_with_document_id": "neg",
+        }
+        arguments.update(overrides)
+        with _ToolPatches(fake):
+            prepared = tools.prepare_register_payment(**arguments)
+            return prepared, tools.register_payment_from_approval(prepared["approval_id"])
+
+    def test_pair_settles_and_verifies_both_documents(self) -> None:
+        fake = self.FakeClient()
+        prepared, result = self._run(fake)
+        self.assertEqual(
+            fake.sent,
+            [
+                (
+                    "pos",
+                    {
+                        "payment_date": "2026-10-04",
+                        "price": "0.82",
+                        "manual_payment_action": "invoices_settlement",
+                        "invoice_id": "neg",
+                    },
+                )
+            ],
+        )
+        self.assertEqual(prepared["preview"]["settle_with_document"]["id"], "neg")
+        self.assertEqual(prepared["preview"]["warnings"], [])
+        settlement = result["verification"]["settlement"]
+        self.assertTrue(settlement["fully_verified"], settlement)
+        self.assertEqual(settlement["counter_open_amount_after"], "0.00")
+        self.assertEqual(result["status"], "payment_registered")
+
+    def test_missing_counter_payment_is_not_verified(self) -> None:
+        fake = self.FakeClient()
+        fake.book_counter = False
+        _, result = self._run(fake)
+        self.assertFalse(
+            result["verification"]["settlement"]["one_new_payment_on_each_document"]
+        )
+        self.assertEqual(result["status"], "completed_with_verification_errors")
+
+    def test_unlinked_payments_are_not_verified(self) -> None:
+        fake = self.FakeClient()
+        fake.link = False
+        _, result = self._run(fake)
+        self.assertFalse(
+            result["verification"]["settlement"]["payments_linked_to_each_other"]
+        )
+        self.assertEqual(result["status"], "completed_with_verification_errors")
+
+    def test_partial_settlement_warns(self) -> None:
+        fake = self.FakeClient(counter_total="-0.50")
+        prepared, result = self._run(fake, price="0.50")
+        self.assertTrue(
+            any("Partial settlement" in w for w in prepared["preview"]["warnings"])
+        )
+        self.assertTrue(result["verification"]["settlement"]["fully_verified"])
+        self.assertEqual(result["verification"]["open_amount_after"], "0.32")
+
+    def test_refusals(self) -> None:
+        cases = {
+            "same sign": (self.FakeClient(counter_total="0.82"), {}, "credit"),
+            "other contact": (
+                self.FakeClient(counter_contact="sup-2"),
+                {},
+                "same contact",
+            ),
+            "too much": (self.FakeClient(), {"price": "1.00"}, "exceeds"),
+            "negative side first": (
+                self.FakeClient(),
+                {"document_id": "neg", "settle_with_document_id": "pos"},
+                "is a credit",
+            ),
+            "itself": (self.FakeClient(), {"settle_with_document_id": "pos"}, "different"),
+            "with ledger": (
+                self.FakeClient(),
+                {"ledger_account_id": "clearing"},
+                "moves no money",
+            ),
+            "other action": (
+                self.FakeClient(),
+                {"manual_payment_action": "private_payment"},
+                "only used with",
+            ),
+            "sales invoice": (
+                self.FakeClient(),
+                {"document_type": "sales_invoice"},
+                "purchase invoices only",
+            ),
+        }
+        for name, (fake, overrides, message) in cases.items():
+            with self.subTest(name), self.assertRaisesRegex(
+                server.MoneybirdError, message
+            ):
+                self._run(fake, **overrides)
+            self.assertEqual(fake.sent, [], name)
+
+    def test_credit_changed_after_preview_blocks_the_write(self) -> None:
+        from moneybird_mcp import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = tools.prepare_register_payment(
+                document_type="purchase_invoice",
+                document_id="pos",
+                payment_date="2026-10-04",
+                price="0.82",
+                settle_with_document_id="neg",
+            )
+            fake.documents["neg"]["version"] += 1
+            with self.assertRaisesRegex(server.MoneybirdError, "changed after"):
+                tools.register_payment_from_approval(prepared["approval_id"])
+        self.assertEqual(fake.sent, [])
+
+
+class PaymentSignTests(unittest.TestCase):
+    """Moneybird accepts a payment in the wrong direction; the tool must not."""
+
+    def _fake(self, total):
+        fake = BalanceSettlementPaymentTests.FakeClient()
+        fake.document["total_price_incl_tax"] = total
+        return fake
+
+    def _prepare(self, fake, price, **extra):
+        from moneybird_mcp import tools
+
+        return tools.prepare_register_payment(
+            document_type=extra.pop("document_type", "purchase_invoice"),
+            document_id="doc-1",
+            payment_date="2026-10-04",
+            price=price,
+            **extra,
+        )
+
+    def test_negative_payment_on_a_credit_registers_and_verifies(self) -> None:
+        from moneybird_mcp import tools
+
+        fake = self._fake("-3.00")
+        with _ToolPatches(fake):
+            prepared = self._prepare(fake, "-3.00", manual_payment_action="private_payment")
+            result = tools.register_payment_from_approval(prepared["approval_id"])
+        self.assertEqual(fake.sent_payments[0]["price"], "-3.00")
+        self.assertNotIn(
+            True, ["higher than" in w for w in prepared["preview"]["warnings"]]
+        )
+        self.assertEqual(result["status"], "payment_registered")
+        self.assertEqual(result["verification"]["open_amount_after"], "0.00")
+
+    def test_negative_overpayment_warns(self) -> None:
+        fake = self._fake("-3.00")
+        with _ToolPatches(fake):
+            prepared = self._prepare(fake, "-5.00")
+        self.assertTrue(
+            any("higher than the open amount" in w for w in prepared["preview"]["warnings"])
+        )
+
+    def test_wrong_direction_is_refused_before_any_write(self) -> None:
+        cases = {
+            "positive on a credit": ("-4.00", "4.00", {}, "is a credit"),
+            "negative on an invoice": ("4.00", "-4.00", {}, "belongs on a credit"),
+            "zero": ("4.00", "0", {}, "must not be zero"),
+            "negative on a sales invoice": (
+                "-4.00",
+                "-4.00",
+                {"document_type": "sales_invoice"},
+                "not on sales invoices",
+            ),
+            "negative settlement": (
+                "4.00",
+                "-4.00",
+                {"settle_with_document_id": "doc-2"},
+                "settlement amount is positive",
+            ),
+        }
+        for name, (total, price, extra, message) in cases.items():
+            fake = self._fake(total)
+            with self.subTest(name), _ToolPatches(fake), self.assertRaisesRegex(
+                server.MoneybirdError, message
+            ):
+                self._prepare(fake, price, **extra)
+            self.assertEqual(fake.sent_payments, [], name)
 
 
 class PaymentEndpointTests(unittest.TestCase):
