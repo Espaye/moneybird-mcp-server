@@ -11,11 +11,28 @@ versioning while allowing pre-1.0 breaking changes.
   `ledger_account_id` to book a payment as Moneybird's `balance_settlement`, for
   example fees a payment processor withheld or prepaid credit. The preview names the
   account, and the tool refuses one that is inactive or does not allow payments.
-  `invoices_settlement` is refused explicitly until pairing two documents can be
-  verified on both sides.
+- **Settle a purchase invoice against a credit purchase invoice.** Pass the credit
+  as `settle_with_document_id` to `prepare_register_payment` on the positive invoice.
+  Both must belong to the same contact and currency, and the amount may not exceed
+  either open amount. Moneybird books the opposite payment on the credit itself;
+  verification proves exactly one new payment on each document, opposite amounts,
+  mutual `linked_payment_id`, both open amounts and totals, and unchanged
+  attachments.
+
+- **Negative payments on credit documents.** Money returned on a credit purchase
+  invoice or receipt is registered as a negative price, plain or as a balance
+  settlement.
 
 ### Changed
 
+- **A payment must point the same way as its document.** Moneybird's API accepts a
+  positive payment on a credit document and leaves the credit open for twice its
+  amount; the tool now refuses it, and a negative payment on a normal invoice, before
+  anything is written. Negative payments on sales invoices are refused until verified.
+- **A reconciled purchase document must have left `new`.** Saving its lines is what
+  processes an uploaded document; `prepare_reconcile_purchase_invoice` now reports
+  `verified_left_new_state` and treats a document still in `new` as a verification
+  failure.
 - **Payments use Moneybird's current endpoint.** Sales invoices, purchase invoices
   and receipts now register payments with `POST …/payments` instead of
   `PATCH …/register_payment`, which Moneybird deprecated with a sunset date of

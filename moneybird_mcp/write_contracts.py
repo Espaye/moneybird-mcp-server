@@ -151,10 +151,12 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "inspect the target document id and exact desired signature",
     ),
     "register_payment": _spec(
-        "version, total, open amount, and payment multiset",
-        "independent GET proves exactly one requested payment delta",
-        "payment intent plus source payment multiset",
-        "compare before/after payment ids or multiset delta",
+        "version, total, open amount, and payment multiset; for an invoice "
+        "settlement the same for the credit document",
+        "independent GET proves exactly one requested payment delta; for an invoice "
+        "settlement also one opposite, mutually linked payment on the credit",
+        "payment intent plus source payment multiset (and the credit's)",
+        "compare before/after payment ids or multiset delta on both documents",
     ),
     "resume_sales_invoice_workflow": _spec(
         "invoice version/state/paused snapshot",
