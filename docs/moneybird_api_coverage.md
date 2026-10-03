@@ -149,9 +149,9 @@ per-IP scope must be considered whenever several processes use the same egress a
 | POST | `/documents/purchase_invoices/{id}/attachments` | Add attachment to purchase invoice | — |
 | DELETE | `/documents/purchase_invoices/{id}/attachments/{attachment_id}` | Delete an attachment | — |
 | GET | `/documents/purchase_invoices/{id}/attachments/{attachment_id}/download` | Download attachment | ✅ read_document_attachment |
-| POST | `/documents/purchase_invoices/{id}/payments` | Create a payment | — |
+| POST | `/documents/purchase_invoices/{id}/payments` | Create a payment | ✅ `prepare_register_payment` |
 | DELETE | `/documents/purchase_invoices/{id}/payments/{payment_id}` | Delete a payment | — |
-| PATCH | `/documents/purchase_invoices/{id}/register_payment` | Register a payment for a purchase invoice | ✅ `prepare_register_payment` |
+| PATCH | `/documents/purchase_invoices/{id}/register_payment` | Register a payment for a purchase invoice | — |
 | POST | `/documents/purchase_invoices/{purchase_invoice_id}/notes` | Adds note to entity | — |
 | DELETE | `/documents/purchase_invoices/{purchase_invoice_id}/notes/{id}` | Destroys note from entity | — |
 | GET | `/documents/purchase_invoices/synchronization` | List ids and versions of purchase invoices | ✅ `sync_search_index` |
@@ -169,9 +169,9 @@ per-IP scope must be considered whenever several processes use the same egress a
 | POST | `/documents/receipts/{id}/attachments` | Add attachment to receipt | — |
 | DELETE | `/documents/receipts/{id}/attachments/{attachment_id}` | Delete an attachment | — |
 | GET | `/documents/receipts/{id}/attachments/{attachment_id}/download` | Download attachment | ✅ read_document_attachment |
-| POST | `/documents/receipts/{id}/payments` | Create a payment | — |
+| POST | `/documents/receipts/{id}/payments` | Create a payment | ✅ `prepare_register_payment` |
 | DELETE | `/documents/receipts/{id}/payments/{payment_id}` | Delete a payment | — |
-| PATCH | `/documents/receipts/{id}/register_payment` | Register a payment for a receipt | ✅ `prepare_register_payment` |
+| PATCH | `/documents/receipts/{id}/register_payment` | Register a payment for a receipt | — |
 | POST | `/documents/receipts/{receipt_id}/notes` | Adds note to entity | — |
 | DELETE | `/documents/receipts/{receipt_id}/notes/{id}` | Destroys note from entity | — |
 | GET | `/documents/receipts/synchronization` | List ids and versions of receipts | ✅ `sync_search_index` |
@@ -384,14 +384,14 @@ per-IP scope must be considered whenever several processes use the same egress a
 | PATCH | `/sales_invoices/{id}/mark_as_uncollectible` | Mark as uncollectible | — |
 | POST | `/sales_invoices/{id}/pause` | Pause sales invoice | ✅ `prepare_pause_sales_invoice_workflow` |
 | PATCH | `/sales_invoices/{id}/register_payment_creditinvoice` | Register a payment for a creditinvoice | — |
-| PATCH | `/sales_invoices/{id}/register_payment` | Register a payment | ✅ `prepare_register_payment` |
+| PATCH | `/sales_invoices/{id}/register_payment` | Register a payment | — |
 | POST | `/sales_invoices/{id}/resume` | Resume sales invoice | ✅ `prepare_resume_sales_invoice_workflow` |
 | PATCH | `/sales_invoices/{id}/send_invoice` | Sends an invoice | ✅ `prepare_send_sales_invoice` |
 | DELETE | `/sales_invoices/{sales_invoice_id}/attachments/{id}` | Delete an attachment | — |
 | GET | `/sales_invoices/{sales_invoice_id}/attachments/{id}/download` | Download attachment | — |
 | POST | `/sales_invoices/{sales_invoice_id}/notes` | Adds note to entity | — |
 | DELETE | `/sales_invoices/{sales_invoice_id}/notes/{id}` | Destroys note from entity | — |
-| POST | `/sales_invoices/{sales_invoice_id}/payments` | Create a payment | — |
+| POST | `/sales_invoices/{sales_invoice_id}/payments` | Create a payment | ✅ `prepare_register_payment` |
 | DELETE | `/sales_invoices/{sales_invoice_id}/payments/{id}` | Delete a payment | — |
 | GET | `/sales_invoices/find_by_invoice_id/{invoice_id}` | Get an invoice by invoice_id | ✅ `client get_sales_invoice_by_invoice_id` |
 | GET | `/sales_invoices/find_by_reference/{reference}` | Get an invoice by reference | ✅ `client get_sales_invoice_by_reference` |

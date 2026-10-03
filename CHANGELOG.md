@@ -3,6 +3,28 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning while allowing pre-1.0 breaking changes.
 
+## Unreleased
+
+### Added
+
+- **`prepare_register_payment` can settle against a balance account.** Pass
+  `ledger_account_id` to book a payment as Moneybird's `balance_settlement`, for
+  example fees a payment processor withheld or prepaid credit. The preview names the
+  account, and the tool refuses one that is inactive or does not allow payments.
+  `invoices_settlement` is refused explicitly until pairing two documents can be
+  verified on both sides.
+
+### Changed
+
+- **Payments use Moneybird's current endpoint.** Sales invoices, purchase invoices
+  and receipts now register payments with `POST …/payments` instead of
+  `PATCH …/register_payment`, which Moneybird deprecated with a sunset date of
+  2026-12-31.
+- **Payment verification covers the ledger account.** The before/after comparison
+  now includes `ledger_account_id`, and the new payment must carry every field the
+  request set. Fields the request left empty are no longer compared: Moneybird fills
+  in the creditor or debtor ledger account on a plain payment by itself.
+
 ## 0.8.3 — 2026-09-27
 
 ### Fixed
