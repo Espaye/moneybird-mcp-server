@@ -53,11 +53,11 @@ def _client_operations() -> list[tuple[str, str, str]]:
         path = raw_path.replace("/{self.administration_id}", "").removesuffix(".json")
         expansions = [path]
         if "{config['collection_path']}" in path:
-            # register_payment exists only for purchase invoices and receipts; the
-            # client enforces the same restriction in register_document_payment.
+            # Payments exist only for purchase invoices and receipts; the client
+            # enforces the same restriction in register_document_payment.
             collections = (
                 DOCUMENT_COLLECTION_PATHS[:2]
-                if "register_payment" in path
+                if path.endswith("/payments")
                 else DOCUMENT_COLLECTION_PATHS
             )
             expansions = [

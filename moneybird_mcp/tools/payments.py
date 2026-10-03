@@ -93,16 +93,70 @@ def _payable_record_summary(
     }
 
 
+# Every payment field the request can set. The before/after multiset compares all of
+# them, so a changed ledger or settlement target is a changed payment.
+_PAYMENT_KEY_FIELDS = (
+    "payment_date",
+    "price",
+    "financial_account_id",
+    "financial_mutation_id",
+    "transaction_identifier",
+    "manual_payment_action",
+    "ledger_account_id",
+    "invoice_id",
+)
+
+
 def _payment_key(payment: dict[str, Any]) -> tuple[str, ...]:
     amount = money_decimal(payment.get("price") or 0)
-    return (
-        str(payment.get("payment_date") or ""),
-        format(amount.normalize(), "f"),
-        str(payment.get("financial_account_id") or ""),
-        str(payment.get("financial_mutation_id") or ""),
-        str(payment.get("transaction_identifier") or ""),
-        str(payment.get("manual_payment_action") or ""),
+    return tuple(
+        format(amount.normalize(), "f")
+        if field == "price"
+        else str(payment.get(field) or "")
+        for field in _PAYMENT_KEY_FIELDS
     )
+
+
+def _payment_key_matches_request(
+    key: tuple[str, ...], requested: tuple[str, ...]
+) -> bool:
+    """True when the recorded payment carries every field the request set.
+
+    Fields the request left empty are not compared: Moneybird fills some of them in
+    itself (a plain payment comes back with the creditor or debtor ledger account).
+    """
+    return all(
+        not want or have == want for have, want in zip(key, requested, strict=True)
+    )
+
+
+def _payment_key_summary(key: tuple[str, ...], count: int) -> dict[str, Any]:
+    return {
+        **{field: value or None for field, value in zip(_PAYMENT_KEY_FIELDS, key)},
+        "count": count,
+    }
+
+
+_BALANCE_SETTLEMENT = "balance_settlement"
+_INVOICES_SETTLEMENT = "invoices_settlement"
+
+
+def _check_balance_ledger_account(client, ledger_account_id: str) -> dict[str, Any]:
+    ledger = client.get_ledger_account(ledger_account_id)
+    if ledger.get("active") is False:
+        raise MoneybirdError(f"Ledger account {ledger_account_id} is inactive.")
+    allowed_types = set(ledger.get("allowed_document_types") or [])
+    if "payment" not in allowed_types:
+        raise MoneybirdError(
+            f"Ledger account {ledger_account_id} ({ledger.get('name')}) does not "
+            "allow payments, so Moneybird cannot settle a balance on it. Use a "
+            "balance ledger account whose allowed_document_types includes 'payment'."
+        )
+    return {
+        "id": str(ledger.get("id") or ledger_account_id),
+        "name": ledger.get("name"),
+        "account_type": ledger.get("account_type"),
+    }
 
 
 def _payment_keys(record: dict[str, Any]) -> list[list[str]]:
@@ -177,24 +231,53 @@ def prepare_register_payment(
     ] = "",
     manual_payment_action: Annotated[
         str,
-        Field(description="Optional Moneybird manual_payment_action, e.g. 'private_payment', 'cash_payment', 'payment_without_proof', 'rounding_error'."),
+        Field(description="Optional Moneybird manual_payment_action, e.g. 'private_payment', 'cash_payment', 'payment_without_proof', 'rounding_error', 'balance_settlement'."),
+    ] = "",
+    ledger_account_id: Annotated[
+        str,
+        Field(description="Balance ledger account to settle against (manual_payment_action 'balance_settlement'), e.g. a payment-processor clearing account or prepaid credit. The account must allow payments."),
     ] = "",
 ) -> dict[str, Any]:
     """Use this to record (register) a payment on a sales invoice, purchase invoice, or receipt
     (mark it fully or partially paid). document_type is sales_invoice, purchase_invoice, or
     receipt. Prefer linking the actual bank mutation instead (prepare_link_bank_mutation_booking)
     when one exists; use this for payments outside the bank feed (cash, private, foreign PSP).
-    Do not execute the write until the user explicitly confirms."""
+    To settle against a balance account instead of money (fees withheld by a payment
+    processor, prepaid credit), pass ledger_account_id; the action becomes
+    balance_settlement. Do not execute the write until the user explicitly confirms."""
     kind = _normalize_payable_document_type(document_type)
     if not payment_date.strip():
         raise MoneybirdError("payment_date is required (YYYY-MM-DD).")
     amount = parse_decimal_number(price, label="price")
     if amount <= 0:
         raise MoneybirdError("price must be greater than zero.")
+    action = manual_payment_action.strip()
+    ledger_account_id = ledger_account_id.strip()
+    if action == _INVOICES_SETTLEMENT:
+        raise MoneybirdError(
+            "invoices_settlement is not supported yet: Moneybird books the opposite "
+            "payment on the other document itself, which this tool cannot verify."
+        )
+    if ledger_account_id and not action:
+        action = _BALANCE_SETTLEMENT
+    if ledger_account_id and action != _BALANCE_SETTLEMENT:
+        raise MoneybirdError(
+            "ledger_account_id is only used with manual_payment_action "
+            f"'{_BALANCE_SETTLEMENT}', not '{action}'."
+        )
+    if action == _BALANCE_SETTLEMENT and not ledger_account_id:
+        raise MoneybirdError(
+            f"manual_payment_action '{_BALANCE_SETTLEMENT}' needs ledger_account_id."
+        )
 
     client = ctx.get_client()
     record = _fetch_payable_record(client, kind, document_id)
     summary = _payable_record_summary(client, kind, record)
+    settlement_ledger = (
+        _check_balance_ledger_account(client, ledger_account_id)
+        if ledger_account_id
+        else None
+    )
 
     warnings: list[str] = []
     open_amount = money_decimal(summary["open_amount"])
@@ -219,7 +302,8 @@ def prepare_register_payment(
             "financial_account_id": financial_account_id.strip(),
             "financial_mutation_id": financial_mutation_id.strip(),
             "transaction_identifier": transaction_identifier.strip(),
-            "manual_payment_action": manual_payment_action.strip(),
+            "manual_payment_action": action,
+            "ledger_account_id": ledger_account_id,
         }
     )
     precondition = _payment_precondition(record)
@@ -242,6 +326,11 @@ def prepare_register_payment(
         preview={
             "document": summary,
             "payment": payment,
+            **(
+                {"settlement_ledger_account": settlement_ledger}
+                if settlement_ledger
+                else {}
+            ),
             "warnings": warnings,
         },
         fingerprint=duplicate_fingerprint(
@@ -286,7 +375,10 @@ def _execute_register_payment(client, payload: dict[str, Any]) -> dict[str, Any]
     exact_payment_delta = (
         not removed_payments
         and sum(added_payments.values()) == 1
-        and added_payments[requested_key] == 1
+        and all(
+            _payment_key_matches_request(key, requested_key)
+            for key in added_payments
+        )
     )
     expected_open_after = (
         money_decimal(payload["precondition"]["open_amount"])
@@ -328,27 +420,11 @@ def _execute_register_payment(client, payload: dict[str, Any]) -> dict[str, Any]
             "payment_visible_on_document": exact_payment_delta,
             "exact_new_payment_delta": exact_payment_delta,
             "payments_added": [
-                {
-                    "payment_date": key[0],
-                    "price": key[1],
-                    "financial_account_id": key[2] or None,
-                    "financial_mutation_id": key[3] or None,
-                    "transaction_identifier": key[4] or None,
-                    "manual_payment_action": key[5] or None,
-                    "count": count,
-                }
+                _payment_key_summary(key, count)
                 for key, count in sorted(added_payments.items())
             ],
             "payments_removed": [
-                {
-                    "payment_date": key[0],
-                    "price": key[1],
-                    "financial_account_id": key[2] or None,
-                    "financial_mutation_id": key[3] or None,
-                    "transaction_identifier": key[4] or None,
-                    "manual_payment_action": key[5] or None,
-                    "count": count,
-                }
+                _payment_key_summary(key, count)
                 for key, count in sorted(removed_payments.items())
             ],
             "expected_open_amount_after": str(expected_open_after),

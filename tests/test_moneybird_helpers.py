@@ -1148,6 +1148,195 @@ class RegisterPaymentTests(unittest.TestCase):
                 price="10",
             )
 
+    def test_payment_verifies_when_moneybird_fills_in_its_own_ledger(self) -> None:
+        # Moneybird returns a plain payment with the debtor ledger account set.
+        from moneybird_mcp import tools
+
+        fake = self.FakeClient()
+
+        def register(invoice_id, payment):
+            fake.invoice["payments"] = [{**payment, "ledger_account_id": "debtors"}]
+            fake.invoice["total_unpaid"] = "0.00"
+
+        fake.register_sales_invoice_payment = register
+        with _ToolPatches(fake):
+            prepared = tools.prepare_register_payment(
+                document_type="sales_invoice",
+                document_id="inv-1",
+                payment_date="2026-06-15",
+                price="121.00",
+            )
+            result = tools.register_payment_from_approval(prepared["approval_id"])
+        self.assertTrue(result["verification"]["exact_new_payment_delta"])
+
+
+class BalanceSettlementPaymentTests(unittest.TestCase):
+    class FakeClient:
+        administration_id = "admin"
+
+        def __init__(self, allowed_document_types=("financial_mutation", "payment")):
+            self.document = {
+                "id": "doc-1",
+                "reference": "STRIPE-2026-02",
+                "state": "open",
+                "date": "2026-02-08",
+                "contact": {"company_name": "Stripe"},
+                "total_price_incl_tax": "2.09",
+                "payments": [],
+                "version": 1,
+            }
+            self.ledger = {
+                "id": "clearing",
+                "name": "Stripe-tussenrekening",
+                "account_type": "current_assets",
+                "active": True,
+                "allowed_document_types": list(allowed_document_types),
+            }
+            self.sent_payments = []
+
+        def get_document(self, kind, document_id):
+            return copy.deepcopy(self.document)
+
+        def get_ledger_account(self, ledger_account_id):
+            if ledger_account_id != self.ledger["id"]:
+                raise server.MoneybirdError("not found")
+            return dict(self.ledger)
+
+        def register_document_payment(self, kind, document_id, payment):
+            self.sent_payments.append(dict(payment))
+            self.document["payments"].append(dict(payment))
+            self.document["version"] += 1
+
+    def _prepare(self, fake, **overrides):
+        from moneybird_mcp import tools
+
+        arguments = {
+            "document_type": "purchase_invoice",
+            "document_id": "doc-1",
+            "payment_date": "2026-02-08",
+            "price": "2.09",
+            "ledger_account_id": "clearing",
+        }
+        arguments.update(overrides)
+        return tools.prepare_register_payment(**arguments)
+
+    def test_ledger_account_settles_and_verifies(self) -> None:
+        from moneybird_mcp import tools
+
+        fake = self.FakeClient()
+        with _ToolPatches(fake):
+            prepared = self._prepare(fake)
+            result = tools.register_payment_from_approval(prepared["approval_id"])
+        self.assertEqual(
+            prepared["preview"]["payment"]["manual_payment_action"],
+            "balance_settlement",
+        )
+        self.assertEqual(
+            prepared["preview"]["settlement_ledger_account"]["name"],
+            "Stripe-tussenrekening",
+        )
+        self.assertEqual(
+            fake.sent_payments,
+            [
+                {
+                    "payment_date": "2026-02-08",
+                    "price": "2.09",
+                    "manual_payment_action": "balance_settlement",
+                    "ledger_account_id": "clearing",
+                }
+            ],
+        )
+        self.assertEqual(result["status"], "payment_registered")
+        self.assertEqual(
+            result["verification"]["payments_added"][0]["ledger_account_id"],
+            "clearing",
+        )
+
+    def test_payment_booked_on_another_ledger_is_not_verified(self) -> None:
+        from moneybird_mcp import tools
+
+        fake = self.FakeClient()
+
+        def register(kind, document_id, payment):
+            fake.document["payments"].append({**payment, "ledger_account_id": "other"})
+            fake.document["version"] += 1
+
+        fake.register_document_payment = register
+        with _ToolPatches(fake):
+            prepared = self._prepare(fake)
+            result = tools.register_payment_from_approval(prepared["approval_id"])
+        self.assertFalse(result["verification"]["exact_new_payment_delta"])
+        self.assertEqual(result["status"], "completed_with_verification_errors")
+
+    def test_ledger_that_does_not_allow_payments_is_rejected(self) -> None:
+        fake = self.FakeClient(allowed_document_types=("purchase_invoice",))
+        with _ToolPatches(fake), self.assertRaisesRegex(
+            server.MoneybirdError, "does not allow payments"
+        ):
+            self._prepare(fake)
+
+    def test_inactive_ledger_is_rejected(self) -> None:
+        fake = self.FakeClient()
+        fake.ledger["active"] = False
+        with _ToolPatches(fake), self.assertRaisesRegex(
+            server.MoneybirdError, "inactive"
+        ):
+            self._prepare(fake)
+
+    def test_balance_settlement_needs_a_ledger_account(self) -> None:
+        with self.assertRaisesRegex(server.MoneybirdError, "needs ledger_account_id"):
+            self._prepare(
+                self.FakeClient(),
+                ledger_account_id="",
+                manual_payment_action="balance_settlement",
+            )
+
+    def test_ledger_account_with_another_action_is_rejected(self) -> None:
+        with self.assertRaisesRegex(server.MoneybirdError, "only used with"):
+            self._prepare(self.FakeClient(), manual_payment_action="private_payment")
+
+    def test_invoices_settlement_is_refused_until_it_can_be_verified(self) -> None:
+        with self.assertRaisesRegex(server.MoneybirdError, "not supported yet"):
+            self._prepare(
+                self.FakeClient(),
+                ledger_account_id="",
+                manual_payment_action="invoices_settlement",
+            )
+
+
+class PaymentEndpointTests(unittest.TestCase):
+    """POST .../payments replaces PATCH .../register_payment (sunset 2026-12-31)."""
+
+    def test_sales_invoice_payment_posts_to_payments(self) -> None:
+        import moneybird_mcp.client as client_module
+
+        client = client_module.MoneybirdClient("token", "123")
+        payment = {"payment_date": "2026-06-15", "price": "121.0"}
+        with mock.patch.object(client, "_request", return_value={}) as request:
+            client.register_sales_invoice_payment("456", payment)
+        request.assert_called_once_with(
+            "POST",
+            "/123/sales_invoices/456/payments.json",
+            body={"payment": payment},
+        )
+
+    def test_document_payments_post_to_payments(self) -> None:
+        import moneybird_mcp.client as client_module
+
+        client = client_module.MoneybirdClient("token", "123")
+        payment = {"payment_date": "2026-06-15", "price": "12.1"}
+        for kind, collection in (
+            ("purchase_invoice", "documents/purchase_invoices"),
+            ("receipt", "documents/receipts"),
+        ):
+            with mock.patch.object(client, "_request", return_value={}) as request:
+                client.register_document_payment(kind, "456", payment)
+            request.assert_called_once_with(
+                "POST",
+                f"/123/{collection}/456/payments.json",
+                body={"payment": payment},
+            )
+
 
 class LinkBankMutationTests(unittest.TestCase):
     class FakeClient:
