@@ -1990,9 +1990,11 @@ class MoneybirdClient:
             sales_invoice_id,
             "sales_invoice_id",
         )
+        # POST .../payments replaces the deprecated PATCH .../register_payment
+        # (sunset 2026-12-31) and accepts the same payment fields.
         return self._request(
-            "PATCH",
-            f"/{self.administration_id}/sales_invoices/{sales_invoice_id}/register_payment.json",
+            "POST",
+            f"/{self.administration_id}/sales_invoices/{sales_invoice_id}/payments.json",
             body={"payment": payment},
         )
 
@@ -2009,8 +2011,8 @@ class MoneybirdClient:
             )
         document_id = validate_moneybird_id(document_id, "document_id")
         return self._request(
-            "PATCH",
-            f"/{self.administration_id}/{config['collection_path']}/{document_id}/register_payment.json",
+            "POST",
+            f"/{self.administration_id}/{config['collection_path']}/{document_id}/payments.json",
             body={"payment": payment},
         )
 

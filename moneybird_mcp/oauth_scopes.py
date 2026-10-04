@@ -99,7 +99,7 @@ CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
             "GET /sales_invoices",
             "POST /sales_invoices",
             "PATCH /sales_invoices/*/send_invoice",
-            "PATCH /sales_invoices/*/register_payment",
+            "POST /sales_invoices/*/payments",
             "GET /recurring_sales_invoices",
         ),
     ),
