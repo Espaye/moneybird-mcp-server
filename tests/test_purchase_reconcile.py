@@ -410,6 +410,29 @@ class ReconcileExecutionSafetyTests(unittest.TestCase):
         self.assertTrue(result["verified_prices_are_incl_tax"])
         self.assertEqual(result["version_before"], "20")
         self.assertEqual(result["version_after"], 21)
+        self.assertEqual(result["state_before"], "new")
+        self.assertTrue(result["verified_left_new_state"])
+
+    def test_document_still_new_after_saving_is_not_completed(self):
+        from moneybird_mcp.tools.purchases import _execute_reconcile
+
+        client = FakeClient([_reference_june(), _target_july()])
+        client.save_processes_new = False
+        payload = build_reconcile_purchase_invoice(
+            client,
+            document_id="tgt",
+            reference_document_id="ref",
+        )["payload"]
+
+        with (
+            mock.patch("moneybird_mcp.tools.purchases.mark_write_dispatch_started"),
+            mock.patch("moneybird_mcp.tools.purchases.mark_write_verifying"),
+        ):
+            result = _execute_reconcile(client, payload)
+
+        self.assertTrue(result["verified_lines_match"])
+        self.assertFalse(result["verified_left_new_state"])
+        self.assertEqual(result["_status"], "completed_with_verification_errors")
 
     def test_aborts_before_write_when_document_version_changed(self):
         from moneybird_mcp.tools.purchases import _execute_reconcile

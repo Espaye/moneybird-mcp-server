@@ -61,6 +61,7 @@ class FakeClient:
         self.administration_id = "ADMIN"
         self._docs = {str(document["id"]): document for document in documents}
         self.update_calls = 0
+        self.save_processes_new = True
 
     def get_document(self, kind, document_id):
         return self._docs[str(document_id)]
@@ -136,4 +137,7 @@ class FakeClient:
         target["total_price_incl_tax"] = str(total_incl.quantize(Decimal("0.01")))
         target["version"] = int(target.get("version") or 0) + 1
         target["updated_at"] = "2026-07-22T15:00:00Z"
+        # Saving lines processes an uploaded document, as Moneybird does.
+        if target.get("state") == "new" and self.save_processes_new:
+            target["state"] = "open"
         return target
