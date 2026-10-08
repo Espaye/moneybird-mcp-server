@@ -14,6 +14,11 @@ one of them suffices. See [Moneybird OAuth](oauth.md) for what this server reque
 > 296 operations in the API: **83** with a dedicated tool or flow, **52** readable
 > through the generic `moneybird_request` escape hatch, **161** not exposed by this server.
 
+This is **current-source** coverage of the pinned snapshot, not a claim about every latest
+Moneybird operation or the published wheel. The [Unreleased changelog](../CHANGELOG.md#unreleased)
+includes source changes not in the last published package. `python scripts/check_docs.py` validates
+all endpoint rows/counts against `moneybird_api_paths.json`; snapshot updates remain deliberate.
+
 Legend: ✅ dedicated tool/flow · 🔎 reachable read-only via `moneybird_request` (no dedicated
 tool) · — not exposed (writes are only ever exposed as an explicit `prepare_*` preview
 followed by `execute_approved_action`; unexposed writes cannot be triggered through this

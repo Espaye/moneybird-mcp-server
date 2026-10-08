@@ -137,10 +137,15 @@ which credential source actually wins.
 
 ### Logout is not revocation
 
-Moneybird publishes **no OAuth token revocation endpoint**. `auth logout`
-deletes this machine's stored credentials; the authorization itself stays valid
-until you withdraw it in Moneybird at
-<https://moneybird.com/user/applications>. The command says so every time.
+Moneybird now documents `POST https://moneybird.com/oauth/revoke`, authenticated with the
+issuing application's credentials. Revoking either token invalidates the paired authorization;
+unknown/already-revoked tokens also return `200`, so success alone does not prove a token existed.
+[Official authentication reference](https://developer.moneybird.com/authentication/), checked 2026-10-08.
+
+The current core **does not implement provider revocation**: `auth logout` deletes local credentials
+only. Withdraw access in Moneybird at <https://moneybird.com/user/applications> when retiring a grant.
+The CLI's claim that no endpoint exists is stale; [the roadmap](roadmap.md) records the separate
+runtime follow-up. Do not assume deleting the local store ends upstream access.
 
 ## Where credentials are stored
 

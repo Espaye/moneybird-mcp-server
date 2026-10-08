@@ -147,7 +147,7 @@ moneybird-mcp auth login --env-file /absolute/path/operator.env
 
 De uitwisseling in stap 4 verbruikt de autorisatiecode, dus de tokens worden bewaard vóórdat ze geverifieerd worden: mislukt die controle, dan meldt het commando dat en houdt het de gegevens, in plaats van je opnieuw te laten autoriseren. De administratievraag overslaan mag ook — de verbinding blijft dan bewaard zonder administratie, en een latere login of `MONEYBIRD_ADMINISTRATION_ID` vult hem aan. Er wordt nooit iets geraden.
 
-Beheer de verbinding met `moneybird-mcp auth status` en `moneybird-mcp auth logout`. Geen van beide toont ooit een token of het client secret. `logout` verwijdert uitsluitend de lokale gegevens: Moneybird publiceert geen intrekkingsendpoint, dus toegang trek je in op <https://moneybird.com/user/applications>.
+Beheer de verbinding met `moneybird-mcp auth status` en `moneybird-mcp auth logout`. Geen van beide toont ooit een token of het client secret. `logout` verwijdert uitsluitend de lokale gegevens: de core roept Moneybirds gedocumenteerde intrekkings-API niet aan. Trek toegang in op <https://moneybird.com/user/applications>; zie [logout en intrekking](oauth.md#logout-is-not-revocation).
 
 `python -m moneybird_mcp.oauth_login` blijft werken en is hetzelfde commando; in een clone is `python scripts/oauth_login.py` een gelijkwaardige wrapper.
 

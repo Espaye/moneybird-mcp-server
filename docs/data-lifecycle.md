@@ -49,7 +49,7 @@ There is no automatic retention or deletion service.
 - Pending approvals normally expire after 15 minutes.
 - Claimed, partial, ambiguous, and verification-failed write outcomes remain durable for reconciliation.
 - Audit logs and local indexes remain until the operator removes them.
-- OAuth tokens remain until removed or revoked.
+- The local OAuth store remains until logout/file removal; upstream revocation does not delete it.
 
 ## Back up
 
