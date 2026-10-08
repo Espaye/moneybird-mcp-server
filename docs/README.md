@@ -13,6 +13,6 @@
 | Version and publication | `pyproject.toml` is source version; [changelog](../CHANGELOG.md) is released/unreleased history; [releasing](releasing.md) owns mandatory publication gates |
 
 Use **implemented**, **offline-tested**, **published** and **live-verified** precisely. A commit/version
-bump is not PyPI publication; a test proves only its named environment/contract. Commercial-layer
-plans and deployment evidence belong in their private repositories. No local docs mirror their queues.
+bump is not PyPI publication; a test proves only its named environment/contract. This documentation
+covers this package alone and does not mirror external product plans or deployment queues.
 `python scripts/check_docs.py` checks links/anchors and source facts offline without installing dependencies.

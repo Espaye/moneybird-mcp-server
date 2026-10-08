@@ -3,8 +3,7 @@
 This queue covers only the independently released public core. Source version is in
 [pyproject.toml](../pyproject.toml); [release history](../CHANGELOG.md) separates Unreleased work
 from published releases. The supported product remains local stdio, read-first with supervised
-experimental writes. Hosted launch, model, billing and deployment decisions are owned privately;
-M2/M3 hosted milestone statements formerly here were stale and are removed.
+experimental writes. This queue covers public-package improvements and publication only.
 
 ## Active tasks
 

@@ -1,9 +1,9 @@
 # Public core architecture boundaries
 
-The public core is standalone. Proprietary advanced workflows extend it through installed
-`moneybird_mcp.tools` entry points and may import only `moneybird_mcp.api`; hosted embeds selected
-client/pure helpers and has its own authenticated approval/store/writer boundary. The core depends
-on neither commercial layer. This describes existing boundaries, not a newly accepted design.
+The public package is standalone. Optional extensions register through installed
+`moneybird_mcp.tools` entry points and consume the public `moneybird_mcp.api` interface.
+The package must work with no extension installed. This describes existing boundaries,
+not a newly accepted design.
 
 | Change | Read |
 |---|---|

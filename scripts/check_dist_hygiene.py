@@ -46,6 +46,7 @@ from collections.abc import Iterable
 PUBLIC_ROOT_FILES = frozenset(
     {
         ".env.example",
+        "AGENTS.md",
         ".gitignore",
         "CHANGELOG.md",
         "CONTRIBUTING.md",
@@ -64,6 +65,9 @@ PUBLIC_ROOT_FILES = frozenset(
 
 PUBLIC_DOCS = frozenset(
     {
+        "docs/README.md",
+        "docs/architecture.md",
+        "docs/checks.json",
         "docs/data-lifecycle.md",
         "docs/data-lifecycle.nl.md",
         "docs/data_handling.md",
@@ -89,6 +93,7 @@ PUBLIC_SCRIPTS = frozenset(
         "scripts/build_mcpb.py",
         "scripts/build_sbom.py",
         "scripts/check_dist_hygiene.py",
+        "scripts/check_docs.py",
         "scripts/check_reproducible_build.py",
         "scripts/healthcheck_readonly.py",
         "scripts/oauth_login.py",
