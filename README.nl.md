@@ -142,7 +142,7 @@ De belangrijkste instellingen zijn:
 | `MONEYBIRD_OAUTH_PROFILE` | `default` | Welke opgeslagen OAuth-verbinding deze server gebruikt; `auth login --profile` schrijft hem |
 | `MONEYBIRD_CAPABILITY_MODE` | `read_only` | `read_only` of `write_enabled` |
 | `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` voor het geïnstalleerde commando | Lokale goedkeuringen, auditgegevens, OAuth-gegevens en zoekstatus |
-| `MCP_TOOL_DISCOVERY` | `search` | Compacte ontdekking; gebruik `full` voor oudere clients |
+| `MCP_TOOL_DISCOVERY` | `full` | Volledige toollijst; gebruik `search` voor compacte ontdekking |
 | `MCP_TRANSPORT` | `stdio` | `stdio`, `http` of legacy-`sse` |
 
 Het pakket zoekt nooit automatisch naar `.env`-bestanden. Gebruik het omgevingsblok van de MCP-client of selecteer expliciet een bestand:
