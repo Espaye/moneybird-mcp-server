@@ -943,7 +943,7 @@ class TokenSessionTests(_StoreCase):
         self.assertIsNone(oauth.get_access_token())
         self.assertFalse(oauth.delete_connection())
 
-    def test_moneybird_documents_no_revocation_endpoint(self) -> None:
+    def test_core_has_no_provider_revocation_implementation(self) -> None:
         """Pinned so a future change to this claim has to be deliberate."""
         self.assertFalse(oauth.REVOCATION_SUPPORTED)
 

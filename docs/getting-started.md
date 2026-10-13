@@ -149,7 +149,7 @@ The exchange in step 4 spends the authorization code, so the tokens are stored b
 
 Logging in again always stores a **new** grant, with **no** administration selected: the second login is not necessarily the same Moneybird account as the first, so an inherited selection could point later reads and writes at books this login never showed you. Refreshing an existing grant is a different thing and keeps its administration.
 
-Manage the connection with `moneybird-mcp auth status` and `moneybird-mcp auth logout`. Neither ever prints a token or the client secret. `logout` deletes local credentials only: Moneybird publishes no revocation endpoint, so access is withdrawn at <https://moneybird.com/user/applications>.
+Manage the connection with `moneybird-mcp auth status` and `moneybird-mcp auth logout`. Neither ever prints a token or the client secret. `logout` deletes local credentials only: the core does not call Moneybird’s documented revocation API. Withdraw upstream access at <https://moneybird.com/user/applications>; see [logout versus revocation](oauth.md#logout-is-not-revocation).
 
 `python -m moneybird_mcp.oauth_login` still works and is the same command; in a source checkout `python scripts/oauth_login.py` is an equivalent wrapper.
 

@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 
 from moneybird_mcp._registration import (
@@ -246,30 +247,26 @@ class CoreWithoutExtensionsTests(unittest.TestCase):
 class NoPrivateDependencyTests(unittest.TestCase):
     """T2: this distribution cannot name or import what it must not depend on."""
 
-    #: Substrings that would mean the dependency arrow had been reversed. Written
-    #: in pieces so this guard is not itself a hit for the scan it performs.
-    FORBIDDEN = (
-        "moneybird" + "_mcp_advanced",
-        "moneybird" + "-mcp-advanced",
-        "moneybird" + "_hosted",
-        "moneybird" + "-hosted",
-    )
+    PUBLIC_IMPORT_ROOTS = frozenset({"moneybird_mcp", "moneybird_mcp_server"})
 
     def source_files(self) -> list[pathlib.Path]:
         return sorted((ROOT / "moneybird_mcp").rglob("*.py"))
 
-    def test_no_source_file_mentions_a_private_distribution(self) -> None:
-        offenders = []
-        for path in self.source_files():
-            text = path.read_text(encoding="utf-8")
-            for number, line in enumerate(text.splitlines(), start=1):
-                for forbidden in self.FORBIDDEN:
-                    if forbidden in line:
-                        offenders.append(f"{path.relative_to(ROOT)}:{number}: {forbidden}")
-        self.assertEqual(offenders, [], "\n".join(offenders))
+    def test_no_declared_dependency_names_an_external_moneybird_distribution(self) -> None:
+        """Keep the package independent without naming any external repository."""
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        dependencies = [*project["dependencies"]]
+        for extra in project.get("optional-dependencies", {}).values():
+            dependencies.extend(extra)
+        for dependency in dependencies:
+            name = dependency.split("[", 1)[0]
+            for separator in ("<", ">", "=", "!", "~", ";", " "):
+                name = name.split(separator, 1)[0]
+            name = name.lower().replace("_", "-")
+            self.assertFalse(name.startswith("moneybird") and name != "moneybird-mcp", name)
 
     def test_no_source_file_imports_anything_outside_the_allowed_set(self) -> None:
-        """A textual scan misses an import assembled at runtime; the AST does not."""
+        """Reject imports of any sibling package without storing its name here."""
         offenders = []
         for path in self.source_files():
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -282,7 +279,7 @@ class NoPrivateDependencyTests(unittest.TestCase):
                     continue
                 for name in names:
                     root_package = name.split(".", 1)[0]
-                    if any(root_package.startswith(f.split(".")[0]) and root_package != "moneybird_mcp" for f in self.FORBIDDEN):
+                    if root_package.startswith("moneybird") and root_package not in self.PUBLIC_IMPORT_ROOTS:
                         offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}: {name}")
         self.assertEqual(offenders, [], "\n".join(offenders))
 

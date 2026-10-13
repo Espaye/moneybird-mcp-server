@@ -1,0 +1,51 @@
+{
+  "repository": "Espaye/moneybird-mcp-server",
+  "facts": [
+    {
+      "document": "README.md",
+      "pattern": "\\*\\*Beta (\\d+\\.\\d+\\.\\d+)",
+      "source": "pyproject.toml",
+      "source_pattern": "^version = \"([^\"\\n]+)\""
+    },
+    {
+      "document": "README.nl.md",
+      "pattern": "\\*\\*B\\u00e8ta (\\d+\\.\\d+\\.\\d+)",
+      "source": "pyproject.toml",
+      "source_pattern": "^version = \"([^\"\\n]+)\""
+    },
+    {
+      "document": "moneybird_mcp/__init__.py",
+      "pattern": "__version__ = \"([^\"]+)\"",
+      "source": "pyproject.toml",
+      "source_pattern": "^version = \"([^\"\\n]+)\""
+    },
+    {
+      "document": "docs/moneybird_api_coverage.md",
+      "pattern": "spec version `([^`]+)`",
+      "source": "docs/moneybird_api_paths.json",
+      "pointer": "info/version"
+    },
+    {
+      "document": "docs/moneybird_api_coverage.md",
+      "pattern": "> (\\d+) operations in the API",
+      "source": "docs/moneybird_api_paths.json",
+      "pointer": "paths",
+      "sum_lengths": true
+    },
+    {
+      "document": "mcpb/manifest.json",
+      "pattern": "\"version\":\\s*\"([^\"\\n]+)\"",
+      "source": "pyproject.toml",
+      "source_pattern": "^version = \"([^\"\\n]+)\""
+    }
+  ],
+  "api_coverage": {
+    "snapshot": "docs/moneybird_api_paths.json",
+    "document": "docs/moneybird_api_coverage.md",
+    "totals": {
+      "✅": "\\*\\*(\\d+)\\*\\* with a dedicated",
+      "🔎": "\\*\\*(\\d+)\\*\\* readable",
+      "—": "\\*\\*(\\d+)\\*\\* not exposed"
+    }
+  }
+}

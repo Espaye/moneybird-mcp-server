@@ -711,7 +711,7 @@ class LogoutTests(_CliCase):
         self.assertIn("deleted", out)
 
     def test_logout_distinguishes_deletion_from_revocation(self) -> None:
-        """Moneybird documents no revocation endpoint; saying otherwise misleads."""
+        """Current logout only removes local state; upstream authorization remains valid."""
         oauth.store_tokens(FAKE_TOKENS)
         _, out, _ = self.run_cli(["logout"])
         self.assertIn("local credentials only", out)

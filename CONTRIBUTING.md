@@ -6,7 +6,7 @@ Thank you for helping improve Moneybird MCP.
 
 This project is source-available, not OSI-approved open source: it is distributed under the
 MIT License with the "Commons Clause" License Condition v1.0. See [`LICENSE`](LICENSE) and the
-licensing section of [`README.md`](README.md#8-licensing).
+licensing section of [`README.md`](README.md#licence).
 
 By opening a pull request you confirm that:
 
@@ -26,15 +26,11 @@ commercial licence go to the repository owner via an issue.
 
 Use Python 3.11 or newer in a fresh virtual environment:
 
-```powershell
-python -m pip install -r requirements.txt
-python -m pip install ruff==0.16.1 pytest-cov==7.1.0
-ruff check moneybird_mcp scripts tests moneybird_mcp_server.py
-python -m pytest -q
-python -m pytest --cov=moneybird_mcp --cov-report=term-missing --cov-fail-under=70
-python -m pip install -c requirements-minimum.txt -r requirements.txt pytest
-python -m pytest -q
-```
+Install the development dependencies needed for the change in an isolated virtual environment.
+Choose [targeted checks](AGENTS.md) by risk: prose uses the offline checker; behavior uses affected
+positive/adversarial tests and Ruff; shared safety/client/lifecycle changes may require the full suite.
+Minimum-dependency checks are required when dependency bounds or used APIs change, and releases
+retain the [full publication gates](docs/releasing.md).
 
 No real Moneybird credential is needed for the test suite. Keep `.env`, OAuth stores,
 approvals, audit logs, sync indexes, FTS databases, and downloaded attachments out of commits
@@ -62,7 +58,7 @@ weakening deliberate fail-closed handling.
 3. Preserve tenant and administration confinement at every boundary.
 4. For writes, define the action precondition, immutable preview/payload representation,
    verifier, idempotency key, partial-failure behavior, and ambiguous-result reconciliation.
-5. Run the full suite and distribution-hygiene check.
+5. Run risk-appropriate checks; releases/build changes retain distribution-hygiene gates.
 6. Update README, threat/data documentation, and changelog when behavior or durable state
    changes.
 
@@ -84,7 +80,7 @@ roll forward or enter read-only reconciliation mode; it must not restore legacy 
 ## Pull-request checklist
 
 - [ ] Focused tests pass.
-- [ ] Full `python -m pytest -q` passes.
+- [ ] Full suite passes when shared behavioral impact warrants it; mandatory CI remains green.
 - [ ] Minimum-dependency tests pass when dependency bounds or used APIs change.
 - [ ] `scripts/check_reproducible_build.py` passes for release/build changes.
 - [ ] New dependency is direct, bounded, and justified.

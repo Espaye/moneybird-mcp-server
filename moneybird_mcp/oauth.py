@@ -10,7 +10,8 @@ Verified against https://developer.moneybird.com/authentication (2026-08-08):
   documentation asks integrations to store the refresh token and be ready for
   that to change. :func:`get_access_token` therefore refreshes on expiry
   metadata when it appears, and does nothing extra while it does not.
-- Moneybird documents **no revocation endpoint**. See :data:`REVOCATION_SUPPORTED`.
+- Moneybird now documents a revocation endpoint; this core does not implement it.
+  :data:`REVOCATION_SUPPORTED` describes local implementation support, not provider capability.
 
 This module is the protocol layer and holds no presentation logic: URL
 construction, the two token grants, and the refresh-on-read session helper. The
@@ -58,8 +59,7 @@ from .oauth_store import (
 OAUTH_AUTHORIZE_URL = "https://moneybird.com/oauth/authorize"
 OAUTH_TOKEN_URL = "https://moneybird.com/oauth/token"
 
-# Where a user registers an application and, because there is no revocation API,
-# where they withdraw an authorization again.
+# Where a user registers an application and can withdraw authorization manually.
 APPLICATIONS_URL = "https://moneybird.com/user/applications"
 REGISTER_APPLICATION_URL = "https://moneybird.com/user/applications/new"
 
@@ -71,10 +71,10 @@ OOB_REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
 CLIENT_ID_ENV = "MONEYBIRD_OAUTH_CLIENT_ID"
 CLIENT_SECRET_ENV = "MONEYBIRD_OAUTH_CLIENT_SECRET"
 
-# Moneybird documents no token revocation endpoint (checked 2026-08-08), so
-# `auth logout` can only delete local credentials. Access is withdrawn by the
-# user at APPLICATIONS_URL. Kept as a named constant rather than a comment
-# because the CLI has to tell the user which of the two actually happened.
+# Implementation support only: this core does not call the provider revocation API.
+# Moneybird documents POST /oauth/revoke (checked 2026-10-08). Logout remains
+# local-only; provider revoke-before-delete behavior is a separately scoped task.
+# The stale CLI message is tracked in docs/roadmap.md; do not flip this flag alone.
 REVOCATION_SUPPORTED = False
 
 # The scope string a default login requests. Kept as a module constant because
@@ -484,7 +484,7 @@ def save_connection(
 def delete_connection(profile: str = DEFAULT_PROFILE) -> bool:
     """Remove local credentials for ``profile``. Returns False if there were none.
 
-    This deletes only local state. Moneybird publishes no revocation endpoint
+    This deletes only local state. The core does not call Moneybird's revocation endpoint
     (:data:`REVOCATION_SUPPORTED`), so the grant itself stays valid until the
     user withdraws it at :data:`APPLICATIONS_URL`.
     """
