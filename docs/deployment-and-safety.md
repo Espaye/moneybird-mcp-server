@@ -86,21 +86,19 @@ Relevant documentation:
 
 ## Tool discovery
 
-The default is compact Tool Search:
+The default exposes the complete native catalogue at connection time:
 
 ```text
-MCP_TOOL_DISCOVERY=search
+MCP_TOOL_DISCOVERY=full
+```
+
+For a client that cannot take the full list, use compact Tool Search:
+
+```bash
+moneybird-mcp --tool-discovery search
 ```
 
 This exposes the core tools plus `search_tools` and `call_tool`, allowing the model to discover schemas on demand.
-
-For an older client that cannot use Tool Search:
-
-```bash
-moneybird-mcp --tool-discovery full
-```
-
-The full mode exposes the complete native catalogue at connection time.
 
 ## Credential resolution
 

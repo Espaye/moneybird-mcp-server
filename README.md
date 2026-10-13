@@ -142,7 +142,7 @@ The most useful settings are:
 | `MONEYBIRD_OAUTH_PROFILE` | `default` | Which stored OAuth connection this server uses; `auth login --profile` writes it |
 | `MONEYBIRD_CAPABILITY_MODE` | `read_only` | `read_only` or `write_enabled` |
 | `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` for the installed command | Local approvals, audit, OAuth, and search state |
-| `MCP_TOOL_DISCOVERY` | `search` | Compact discovery; use `full` for older clients |
+| `MCP_TOOL_DISCOVERY` | `full` | Full tool list; use `search` for compact discovery |
 | `MCP_TRANSPORT` | `stdio` | `stdio`, `http`, or legacy `sse` |
 
 The package never discovers `.env` files automatically. Use an MCP-client environment block or an explicitly selected file:
