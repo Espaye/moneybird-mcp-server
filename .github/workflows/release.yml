@@ -318,12 +318,12 @@ jobs:
           python scripts/build_sbom.py
           --expected-version "${{ needs.check.outputs.version }}"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: candidate-dist-${{ needs.check.outputs.version }}
           path: dist/
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: candidate-sbom-${{ needs.check.outputs.version }}
           path: sbom/
@@ -350,7 +350,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: candidate-dist-${{ needs.check.outputs.version }}
           path: dist/
@@ -492,7 +492,7 @@ jobs:
           print(f"Re-verified tag at {current['sha']}")
           PY
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: candidate-dist-${{ needs.check.outputs.version }}
           path: dist/
@@ -534,7 +534,7 @@ jobs:
           pypi-attestations==0.0.30
           cyclonedx-bom==7.3.1
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         if: needs.check.outputs.candidate_needed == 'true'
         with:
           name: candidate-dist-${{ needs.check.outputs.version }}
@@ -720,7 +720,7 @@ jobs:
           --expected-version "${{ needs.check.outputs.version }}"
           --output-dir dist
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pypi-dist-${{ needs.check.outputs.version }}
           path: dist/
@@ -736,7 +736,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: pypi-dist-${{ needs.check.outputs.version }}
           path: dist/
