@@ -5,6 +5,14 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+### Security
+
+- Require pypdf 6.21.2 or newer for PDF attachment extraction in the `[pdf]`
+  extra, git-clone installs, and minimum-dependency tests. This includes fixes
+  for excessive cross-reference parsing work
+  ([GHSA-gmh7-3g9r-mjh5](https://github.com/py-pdf/pypdf/security/advisories/GHSA-gmh7-3g9r-mjh5),
+  [GHSA-jr96-gvgh-j3r4](https://github.com/py-pdf/pypdf/security/advisories/GHSA-jr96-gvgh-j3r4)).
+
 ### Added
 
 - **`prepare_register_payment` can settle against a balance account.** Pass
