@@ -29,7 +29,7 @@ from ._registry import mcp
 # distribution, said out loud. Nothing may register without a distribution being
 # credited, so this block is what makes the built-in surface registrable at all
 # -- and, more to the point, what stops an extension module imported outside the
-# loader from registering under the credit meant for these fourteen imports.
+# loader from registering under the credit meant for these fifteen imports.
 with registering_as_core():
     from .approvals import *  # noqa: F401,F403
     from .bank import *  # noqa: F401,F403
@@ -39,6 +39,7 @@ with registering_as_core():
     from .ledger import *  # noqa: F401,F403
     from .payments import *  # noqa: F401,F403
     from .products import *  # noqa: F401,F403
+    from .projects import *  # noqa: F401,F403
     from .purchases import *  # noqa: F401,F403
     from .reference import *  # noqa: F401,F403
     from .reports import *  # noqa: F401,F403

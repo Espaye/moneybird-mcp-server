@@ -293,6 +293,11 @@ Twee technische randvoorwaarden:
    oude en nieuwe grootboek en project. Ligt het document in een afgesloten periode, dan
    weigert de tool; heropen de periode eerst in Moneybird. Btw-tarief en
    omschrijving wijzigt deze tool niet; gebruik daarvoor `prepare_reconcile_purchase_invoice`.
+   Bestaat het project nog niet, maak het dan met `prepare_create_project` (een naam die
+   geen ander project heeft, ook geen gearchiveerd; budget optioneel, in hele uren).
+   `prepare_update_project` hernoemt een project of wijzigt het budget. `prepare_delete_project`
+   verwijdert een project waar niets aan hangt en archiveert het als er nog regels of
+   uren aan gekoppeld zijn; via de API is dat niet terug te draaien.
    Toon de preview, wacht op akkoord, en rond af met `execute_approved_action`.
 
 ---

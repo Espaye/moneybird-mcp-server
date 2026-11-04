@@ -11,8 +11,8 @@ operation's `Required scope(s)` description text rather than its `security` arra
 because that array is the same flat list whether the scopes are needed *together* or any
 one of them suffices. See [Moneybird OAuth](oauth.md) for what this server requests.
 
-> 296 operations in the API: **83** with a dedicated tool or flow, **52** readable
-> through the generic `moneybird_request` escape hatch, **161** not exposed by this server.
+> 296 operations in the API: **86** with a dedicated tool or flow, **52** readable
+> through the generic `moneybird_request` escape hatch, **158** not exposed by this server.
 
 This is **current-source** coverage of the pinned snapshot, not a claim about every latest
 Moneybird operation or the published wheel. The [Unreleased changelog](../CHANGELOG.md#unreleased)
@@ -317,10 +317,10 @@ per-IP scope must be considered whenever several processes use the same egress a
 | Method | Endpoint | Summary | Server coverage |
 |---|---|---|---|
 | GET | `/projects` | List all projects of an administration | ✅ `list_projects` |
-| POST | `/projects` | Creates a new project | — |
-| DELETE | `/projects/{id}` | Deletes a project | — |
+| POST | `/projects` | Creates a new project | ✅ `prepare_create_project` |
+| DELETE | `/projects/{id}` | Deletes a project | ✅ `prepare_delete_project` |
 | GET | `/projects/{id}` | Returns information about a project | 🔎 moneybird_request (generic GET) |
-| PATCH | `/projects/{id}` | Updates a project | — |
+| PATCH | `/projects/{id}` | Updates a project | ✅ `prepare_update_project` |
 
 ## Purchase transactions
 

@@ -173,9 +173,10 @@ CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
         area="Settings and reference data",
         scopes=("settings",),
         reason=(
-            "Financial accounts, products, projects, and creating a ledger "
-            "account. Reading ledger accounts and tax rates is satisfied by any "
-            "of several scopes, but these four accept no substitute. Naming a "
+            "Financial accounts, products, projects (reading and maintaining "
+            "them), and creating a ledger account. Reading ledger accounts and "
+            "tax rates is satisfied by any of several scopes, but these four "
+            "accept no substitute. Naming a "
             "project on an invoice or receipt line or a bank booking reads the "
             "projects, so it needs settings as well; clearing one does not."
         ),
@@ -185,6 +186,9 @@ CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
             "audit_products",
             "prepare_bulk_update_product_prices",
             "list_projects",
+            "prepare_create_project",
+            "prepare_update_project",
+            "prepare_delete_project",
             "prepare_create_ledger_account",
             "prepare_update_ledger_account",
             "prepare_delete_empty_ledger_account",
@@ -194,6 +198,10 @@ CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
             "GET /products",
             "PATCH /products/*",
             "GET /projects",
+            "GET /projects/*",
+            "POST /projects",
+            "PATCH /projects/*",
+            "DELETE /projects/*",
             "POST /ledger_accounts",
             "PATCH /ledger_accounts/*",
             "DELETE /ledger_accounts/*",

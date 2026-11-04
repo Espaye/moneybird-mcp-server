@@ -102,6 +102,13 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "canonical account and RGS payload",
         "match exact account attributes; ambiguous matches stay manual",
     ),
+    "create_project": _spec(
+        "complete state:all listing has no project with the same name, ignoring case, "
+        "at preview and again before the POST",
+        "independent GET proves the returned id, exact name, budget, and active state",
+        "canonical project name and budget",
+        "list projects by name; adopt only an exact name and budget match",
+    ),
     "create_sales_invoice_draft": _spec(
         "contact scope validation and returned provider id",
         "independent GET compares every controlled header and line, including "
@@ -114,6 +121,13 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "independent ledger GET proves HTTP 404 deletion or provider-documented inactive state with invariant identity",
         "exact ledger occurrence plus complete empty-state and test-provenance evidence",
         "re-read the exact id; accept only 404 or inactive with all identity fields unchanged",
+    ),
+    "delete_project": _spec(
+        "exact active project occurrence: id, name, state, and budget",
+        "independent GET proves HTTP 404 deletion or an archived state with id, "
+        "name, and budget unchanged",
+        "exact project occurrence",
+        "re-read the exact id; accept only 404 or archived with everything else unchanged",
     ),
     "link_bank_mutation_booking": _spec(
         "mutation occurrence/booking state and exact target occurrence",
@@ -208,6 +222,13 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "independent GET compares every requested field",
         "contact occurrence plus update payload",
         "inspect contact id and requested fields",
+    ),
+    "update_project": _spec(
+        "exact project occurrence: id, name, state, and budget; a new name unused "
+        "by any other project, ignoring case",
+        "independent GET proves the exact name and budget with id and state unchanged",
+        "project occurrence plus the name and budget patch",
+        "re-read the exact id and compare name, budget, and state",
     ),
 }
 

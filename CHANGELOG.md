@@ -59,6 +59,13 @@ versioning while allowing pre-1.0 breaking changes.
     `project_name` for a `LedgerAccount` booking and verifies it on the new booking.
   - `prepare_reclassify_bank_mutation_bookings` can change or clear the booking's
     project, with or without a new ledger account.
+- **Create, rename and delete projects.** `prepare_create_project` creates a project
+  with an optional budget in whole hours, `prepare_update_project` renames it or
+  changes or clears its budget, and `prepare_delete_project` deletes it. Moneybird
+  deletes a project nothing is linked to and archives one that is still in use;
+  the read-back reports which happened. A name already used by another project,
+  archived ones included and ignoring case, is refused. Each write is verified by
+  an independent read of the project, and all three need the `settings` scope.
 
 ### Changed
 

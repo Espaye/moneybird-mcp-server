@@ -1362,6 +1362,37 @@ class MoneybirdClient:
             query,
         )
 
+    def get_project(self, project_id: str) -> dict[str, Any]:
+        project_id = validate_moneybird_id(project_id, "project_id")
+        return self._request(
+            "GET",
+            f"/{self.administration_id}/projects/{project_id}.json",
+        )
+
+    def create_project(self, project: dict[str, Any]) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/{self.administration_id}/projects.json",
+            body={"project": project},
+        )
+
+    def update_project(
+        self, project_id: str, project: dict[str, Any]
+    ) -> dict[str, Any]:
+        project_id = validate_moneybird_id(project_id, "project_id")
+        return self._request(
+            "PATCH",
+            f"/{self.administration_id}/projects/{project_id}.json",
+            body={"project": project},
+        )
+
+    def delete_project(self, project_id: str) -> None:
+        project_id = validate_moneybird_id(project_id, "project_id")
+        self._request(
+            "DELETE",
+            f"/{self.administration_id}/projects/{project_id}.json",
+        )
+
     def list_time_entries(
         self,
         *,

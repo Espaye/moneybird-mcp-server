@@ -236,7 +236,7 @@ every claim here against it.
 | Estimates | `estimates` | `list_estimates` only |
 | Bank mutations | `bank` | Mutations and their bookings |
 | Time registration | `time_entries` | `list_time_entries` only |
-| Settings and reference data | `settings` | Financial **accounts**, products, projects, creating a ledger account |
+| Settings and reference data | `settings` | Financial **accounts**, products, projects (reading and maintaining them), creating a ledger account |
 | Reports: balance sheet, cash flow, general ledger | `bank` | Filed under bank, not settings |
 | Reports: profit and loss, tax, journal entries | `documents` **and** `sales_invoices` | Both together; backs `analyze_vat_settlement` |
 | Reports: debtors, revenue, subscriptions | `sales_invoices` | Debtors, debtors aging, revenue by contact/project, subscriptions |
