@@ -112,15 +112,30 @@ class ClientSpecConformanceTests(unittest.TestCase):
         coverage = COVERAGE_PATH.read_text(encoding="utf-8")
         self.assertIn(f"spec version `{spec['info']['version']}`", coverage)
         rows = re.findall(
-            r"^\| (GET|POST|PATCH|PUT|DELETE) \| `[^`]+` \| .* \| (.*?) \|$",
+            r"^\| (GET|POST|PATCH|PUT|DELETE) \| `([^`]+)` \| .* \| (.*?) \|$",
             coverage,
             flags=re.MULTILINE,
         )
-        self.assertEqual(len(rows), 296)
-        dedicated = sum("✅" in status for _, status in rows)
-        generic = sum("🔎" in status for _, status in rows)
-        unexposed = sum(status.strip() == "—" for _, status in rows)
-        self.assertEqual((dedicated, generic, unexposed), (86, 52, 158))
+        # The table lists every operation in the snapshot once, and nothing else.
+        listed = [(method, _normalize(path)) for method, path, _ in rows]
+        self.assertEqual(len(listed), len(set(listed)))
+        self.assertEqual(set(listed), _spec_operations())
+        dedicated = sum("✅" in status for _, _, status in rows)
+        generic = sum("🔎" in status for _, _, status in rows)
+        unexposed = sum(status.strip() == "—" for _, _, status in rows)
+        self.assertEqual(dedicated + generic + unexposed, len(rows))
+        # The summary at the top of the page is counted from the table, not kept here.
+        summary = re.search(
+            r"> (\d+) operations in the API: \*\*(\d+)\*\* with a dedicated tool or flow, "
+            r"\*\*(\d+)\*\* readable\s*> through the generic `moneybird_request` escape hatch, "
+            r"\*\*(\d+)\*\* not exposed by this server\.",
+            coverage,
+        )
+        self.assertIsNotNone(summary, "coverage summary line not found")
+        self.assertEqual(
+            tuple(int(group) for group in summary.groups()),
+            (len(rows), dedicated, generic, unexposed),
+        )
         self.assertIn(
             "| PATCH | `/products/{id}` | Updates a product | ✅ `prepare_bulk_update_product_prices` |",
             coverage,
