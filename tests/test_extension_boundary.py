@@ -542,8 +542,14 @@ print("RESULT:" + json.dumps({{
     "executor_origin": APPROVAL_EXECUTOR_REGISTRY.registration("{ACTION}").origin if "{ACTION}" in APPROVAL_EXECUTOR_REGISTRY else None,
     "tool_visible_over_mcp": "{TOOL_NAME}" in names,
     "core_tool_still_visible": "list_contacts" in names,
-    "tool_count": len(TOOL_REGISTRY),
-    "spec_count": len(WRITE_SPEC_REGISTRY),
+    "tools_by_origin": {{
+        origin: sorted(name for name in TOOL_REGISTRY if TOOL_REGISTRY.origin_of(name) == origin)
+        for origin in TOOL_REGISTRY.origins()
+    }},
+    "specs_by_origin": {{
+        origin: sorted(name for name in WRITE_SPEC_REGISTRY if WRITE_SPEC_REGISTRY.origin_of(name) == origin)
+        for origin in WRITE_SPEC_REGISTRY.origins()
+    }},
     "frozen": [TOOL_REGISTRY.frozen, WRITE_SPEC_REGISTRY.frozen, APPROVAL_EXECUTOR_REGISTRY.frozen],
     "frozen_refusal": frozen_refusal,
     "spec_origins": list(WRITE_SPEC_REGISTRY.origins()),
@@ -599,8 +605,25 @@ class ExtensionEndToEndTests(unittest.TestCase):
         self.assertTrue(self.payload["core_tool_still_visible"])
 
     def test_the_surface_grows_by_exactly_what_the_extension_added(self) -> None:
-        self.assertEqual(self.payload["tool_count"], 66)
-        self.assertEqual(self.payload["spec_count"], 30)
+        """The core surface comes through whole: compared with the one this process
+        loaded, not with a pinned count, so a new core tool needs no edit here."""
+        from moneybird_mcp.tools._registry import TOOL_REGISTRY
+        from moneybird_mcp.write_contracts import WRITE_SPEC_REGISTRY
+
+        def core(registry):
+            return sorted(name for name in registry if registry.origin_of(name) == CORE_ORIGIN)
+
+        self.assertEqual(
+            self.payload["tools_by_origin"],
+            {
+                CORE_ORIGIN: core(TOOL_REGISTRY),
+                DISTRIBUTION: sorted([TOOL_NAME, f"prepare_{ACTION}"]),
+            },
+        )
+        self.assertEqual(
+            self.payload["specs_by_origin"],
+            {CORE_ORIGIN: core(WRITE_SPEC_REGISTRY), DISTRIBUTION: [ACTION]},
+        )
         self.assertEqual(self.payload["spec_origins"], [CORE_ORIGIN, DISTRIBUTION])
 
     def test_validation_sealed_every_registry(self) -> None:
