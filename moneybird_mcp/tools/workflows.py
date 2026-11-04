@@ -81,7 +81,9 @@ def prepare_bookkeeping_correction_batch(
             description=(
                 "Optional direct bank-booking moves. Each dict needs "
                 "financial_mutation_id, ledger_account_booking_id, and a target "
-                "ledger account id or exact name."
+                "ledger account id or exact name, a project change (project_id, "
+                "project_name or clear_project), or both, as in "
+                "prepare_reclassify_bank_mutation_bookings."
             )
         ),
     ] = None,

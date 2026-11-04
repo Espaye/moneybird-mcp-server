@@ -287,8 +287,18 @@ Twee technische randvoorwaarden:
    }
    ```
 
-   Optioneel per regel: `tax_rate_id`, `description`. Toon de preview, wacht op akkoord, en
-   rond af met `execute_approved_action`.
+   Optioneel per regel: een project (kostenplaats) met `project_id` of `project_name`; dat
+   moet een actief project zijn. `clear_project: true` haalt het project van de regel. Alleen
+   een project zetten of weghalen mag ook, zonder grootboek. De preview toont per regel het
+   oude en nieuwe grootboek en project. Ligt het document in een afgesloten periode, dan
+   weigert de tool; heropen de periode eerst in Moneybird. Btw-tarief en
+   omschrijving wijzigt deze tool niet; gebruik daarvoor `prepare_reconcile_purchase_invoice`.
+   Bestaat het project nog niet, maak het dan met `prepare_create_project` (een naam die
+   geen ander project heeft, ook geen gearchiveerd; budget optioneel, in hele uren).
+   `prepare_update_project` hernoemt een project of wijzigt het budget. `prepare_delete_project`
+   verwijdert een project waar niets aan hangt en archiveert het als er nog regels of
+   uren aan gekoppeld zijn; via de API is dat niet terug te draaien.
+   Toon de preview, wacht op akkoord, en rond af met `execute_approved_action`.
 
 ---
 
@@ -413,7 +423,10 @@ Voor de diagnose van één blijvend onverwerkte mutatie werk je zo:
 
 Moeten meerdere reeds verwerkte bankmutaties van het ene rechtstreekse grootboek naar het
 andere, gebruik dan `prepare_reclassify_bank_mutation_bookings` in plaats van losse
-unlink/link-approvals. Selecteer per mutatie de exacte `ledger_account_booking_id`. De batch
+unlink/link-approvals. Selecteer per mutatie de exacte `ledger_account_booking_id`. De nieuwe
+boeking houdt het project en de omschrijving van de oude; met `project_id`, `project_name` of
+`clear_project` verander of wis je het project, met of zonder ander grootboek. Een directe
+grootboekboeking via `prepare_link_bank_mutation_booking` kan ook meteen een project krijgen. De batch
 controleert alle mutatieversies en bronboekingen voordat de eerste write plaatsvindt, behoudt het
 ondertekende bedrag, verifieert `state` en `amount_open`, en probeert bij een mislukte doelkoppeling
 de bronboeking te herstellen. Moneybird heeft hiervoor geen API-transactie over meerdere
@@ -446,6 +459,9 @@ mutatie weer `processed` is.
    zo'n regel, geef expliciete defaults; neem nooit automatisch de eerste huurregel over.
 4. Gebruik een stabiele periodereferentie zoals `STROOM-2026-K2-B5` voor betrouwbare
    duplicaatcontrole.
+   Een project neemt de tool nooit over van de vorige meterfactuur: geef het per meter
+   (`project_id` of `project_name`) of voor de hele run (`default_project_id` of
+   `default_project_name`).
 5. Plan nieuwe facturen direct in dezelfde voorbereide batch. Bestaan de concepten al,
    gebruik `prepare_batch_schedule_sales_invoices`.
 6. Na akkoord voert `execute_approved_action` uit én verifieert per factuur:

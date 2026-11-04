@@ -315,7 +315,8 @@ def prepare_create_sales_invoice_draft(
         Field(
             description=(
                 "Invoice lines. Each dict needs description and price (decimal string); "
-                "amount, ledger_account_id, product_id, and period are optional. "
+                "amount, ledger_account_id, product_id, period, and an active project "
+                "(project_id or project_name; needs the settings scope) are optional. "
                 "tax_rate_id is optional only when product_id supplies a tax rate or "
                 "the contact has a previous invoice whose tax rate can be previewed."
             )

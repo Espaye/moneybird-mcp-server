@@ -140,6 +140,8 @@ Write families include:
 - ledger and journals: create ledger accounts, correct a ledger account's RGS
   taxonomy or name, remove an empty recently created test ledger, and create
   general journal documents;
+- projects: create, rename or re-budget, and delete (Moneybird archives a project
+  that is still in use);
 - purchase documents: line reclassification and reconciliation;
 - banking: link, unlink, and reclassify mutation bookings; exact multi-mutation purchase
   settlements use `prepare_settle_purchase_invoice_from_bank_mutations` for one preview and

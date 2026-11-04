@@ -47,7 +47,8 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
     ),
     "batch_create_sales_invoices": _spec(
         "duplicate/merge preview for every proposed invoice",
-        "independent batch GET compares every controlled header and line",
+        "independent batch GET compares every controlled header and line, "
+        "including each line's project",
         "canonical complete batch payload",
         "reconcile every returned or uniquely matched invoice as a child outcome",
     ),
@@ -58,8 +59,10 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "reconcile each invoice schedule state independently",
     ),
     "batch_update_sales_invoices": _spec(
-        "complete-batch version or targeted-field preflight",
-        "independent GET compares every patched header and line field",
+        "complete-batch version or targeted-field preflight, and the period lock "
+        "for sent invoices and new invoice dates",
+        "independent GET compares every patched header and line field, including "
+        "a set or cleared project",
         "canonical patches plus source snapshots",
         "reconcile each invoice and retain partial child outcomes",
     ),
@@ -99,9 +102,17 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "canonical account and RGS payload",
         "match exact account attributes; ambiguous matches stay manual",
     ),
+    "create_project": _spec(
+        "complete state:all listing has no project with the same name, ignoring case, "
+        "at preview and again before the POST",
+        "independent GET proves the returned id, exact name, budget, and active state",
+        "canonical project name and budget",
+        "list projects by name; adopt only an exact name and budget match",
+    ),
     "create_sales_invoice_draft": _spec(
         "contact scope validation and returned provider id",
-        "independent GET compares every controlled header and line",
+        "independent GET compares every controlled header and line, including "
+        "each line's project",
         "canonical complete invoice payload",
         "match returned id or exact draft signature",
     ),
@@ -111,9 +122,17 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "exact ledger occurrence plus complete empty-state and test-provenance evidence",
         "re-read the exact id; accept only 404 or inactive with all identity fields unchanged",
     ),
+    "delete_project": _spec(
+        "exact active project occurrence: id, name, state, and budget",
+        "independent GET proves HTTP 404 deletion or an archived state with id, "
+        "name, and budget unchanged",
+        "exact project occurrence",
+        "re-read the exact id; accept only 404 or archived with everything else unchanged",
+    ),
     "link_bank_mutation_booking": _spec(
         "mutation occurrence/booking state and exact target occurrence",
-        "independent GET proves one new matching booking id/type and amount-open delta",
+        "independent GET proves one new matching booking id/type and amount-open "
+        "delta, and the requested project on a ledger booking",
         "mutation occurrence, target occurrence, and booking payload",
         "inspect mutation booking delta and adopt/absent/manual",
     ),
@@ -124,8 +143,9 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "inspect current paused state and version history",
     ),
     "reclassify_bank_mutation_bookings": _spec(
-        "all mutation versions, totals, and source bookings",
-        "immediate plus independent batch GET verifies replacement bookings",
+        "all mutation versions, totals, and source bookings with their projects",
+        "immediate plus independent batch GET verifies replacement bookings, "
+        "including the kept, changed or cleared project",
         "canonical child moves plus source versions",
         "retain each child and restoration outcome",
     ),
@@ -140,13 +160,15 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
     ),
     "reclassify_document_lines": _spec(
         "complete-batch document versions or targeted-line snapshots",
-        "independent GET compares every target ledger plus exact journal lines",
+        "independent GET compares every target ledger and project, both document "
+        "totals, plus exact journal lines",
         "canonical updates/journals plus source snapshots",
         "retain each document/journal child result",
     ),
     "reconcile_purchase_invoice": _spec(
-        "document version/updated_at and total",
-        "independent GET proves total, tax mode, and complete line signature",
+        "document version/updated_at, total, and the period lock",
+        "independent GET proves total, tax mode, complete line signature, and each "
+        "line's resulting project",
         "document occurrence plus exact desired lines",
         "inspect the target document id and exact desired signature",
     ),
@@ -200,6 +222,13 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "independent GET compares every requested field",
         "contact occurrence plus update payload",
         "inspect contact id and requested fields",
+    ),
+    "update_project": _spec(
+        "exact project occurrence: id, name, state, and budget; a new name unused "
+        "by any other project, ignoring case",
+        "independent GET proves the exact name and budget with id and state unchanged",
+        "project occurrence plus the name and budget patch",
+        "re-read the exact id and compare name, budget, and state",
     ),
 }
 
@@ -445,6 +474,7 @@ SALES_INVOICE_LINE_FIELDS = (
     "tax_rate_id",
     "ledger_account_id",
     "product_id",
+    "project_id",
 )
 SALES_INVOICE_LINE_DECIMALS = ("price", "amount")
 
@@ -652,14 +682,23 @@ def verify_sales_invoice_patch(
 def verify_document_reclassification(
     expected_details: Any,
     record: dict[str, Any],
+    *,
+    expected_totals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    field_mismatches = compare_controlled_fields(
+        expected_totals or {},
+        record,
+        fields=("total_price_excl_tax", "total_price_incl_tax"),
+        decimal_fields=("total_price_excl_tax", "total_price_incl_tax"),
+    )
     line_mismatches = compare_controlled_rows(
         expected_details,
         _actual_rows(record, "details"),
-        fields=("id", "ledger_account_id"),
+        fields=("id", "ledger_account_id", "project_id"),
         match_by_id=True,
     )
     return {
+        "field_mismatches": field_mismatches,
         "line_mismatches": line_mismatches,
-        "fully_verified": not line_mismatches,
+        "fully_verified": not field_mismatches and not line_mismatches,
     }

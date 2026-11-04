@@ -15,7 +15,7 @@ from ..credentials import (
     CREDENTIAL_MODE_HOSTED_REQUEST_ONLY,
     get_credential_mode,
 )
-from ..document_lines import line_signatures
+from ..document_lines import line_project_signatures, line_signatures
 from ..formatting import (
     MONEYBIRD_DOCUMENTED_DEFAULT_PERIODS,
     compact_document_summary,
@@ -358,7 +358,9 @@ def prepare_reconcile_purchase_invoice(
             description=(
                 "Optional exact line allocation transcribed from the actual invoice/PDF. "
                 "Each dict requires description, price, ledger_account_id, and tax_rate_id; "
-                "amount must be 1 when supplied. When set, no proportional reference scaling "
+                "amount must be 1 when supplied, and project_id (an active project) or "
+                "clear_project: true (remove the reused line's project) is optional. "
+                "When set, no proportional reference scaling "
                 "is used and the calculated total must equal the current invoice total."
             )
         ),
@@ -390,7 +392,9 @@ def prepare_reconcile_purchase_invoice(
     to the cent; when the totals differ, the per-line split is a flagged assumption. To remove
     that assumption, read the PDF with read_document_attachment and pass its exact amounts,
     descriptions, ledger ids, and tax ids as ``desired_lines``. Existing lines are reused by
-    ledger+tax to keep their identity; extra lines are added and leftover lines removed. A document
+    ledger+tax to keep their identity and project; extra lines are added and leftover lines
+    removed, and the preview lists any project only removed lines carried. A document
+    dated inside the locked period is refused. A document
     version snapshot is stored in both modes so execution aborts if the invoice changes after the
     preview. Nothing is written until reconcile_purchase_invoice_from_approval is called.
     """
@@ -515,6 +519,11 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
     verified_lines = not expected_lines or line_signatures(
         after.get("details") or []
     ) == line_signatures(expected_lines)
+    # Approvals staged before projects were checked carry no expectation.
+    expected_line_projects = payload.get("expected_line_projects")
+    verified_line_projects = expected_line_projects is None or line_project_signatures(
+        after.get("details") or []
+    ) == line_project_signatures(expected_line_projects)
     verified_tax_mode = bool(after.get("prices_are_incl_tax")) == bool(
         payload["prices_are_incl_tax"]
     )
@@ -526,6 +535,7 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
         record_id_matches
         and verified_total
         and verified_lines
+        and verified_line_projects
         and verified_tax_mode
         and verified_left_new_state
     )
@@ -536,6 +546,7 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
             "price": f'{money_decimal(detail.get("price")):.2f}',
             "ledger_account_id": str(detail.get("ledger_account_id") or ""),
             "tax_rate_id": str(detail.get("tax_rate_id") or ""),
+            "project_id": str(detail.get("project_id") or ""),
         }
         for detail in (after.get("details") or [])
     ]
@@ -550,6 +561,7 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
             "verified_total_unchanged": verified_total,
             "record_id_matches": record_id_matches,
             "verified_lines_match": verified_lines,
+            "verified_line_projects_match": verified_line_projects,
             "verified_prices_are_incl_tax": verified_tax_mode,
             "verified_left_new_state": verified_left_new_state,
         },
@@ -565,6 +577,7 @@ def _execute_reconcile(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
         "verified_total_unchanged": verified_total,
         "record_id_matches": record_id_matches,
         "verified_lines_match": verified_lines,
+        "verified_line_projects_match": verified_line_projects,
         "verified_prices_are_incl_tax": verified_tax_mode,
         "state_before": state_before,
         "verified_left_new_state": verified_left_new_state,

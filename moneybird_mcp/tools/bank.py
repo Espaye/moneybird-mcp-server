@@ -42,6 +42,12 @@ from ..invoicing import (
     details_attributes_payload,
     parse_decimal_number,
 )
+from ..projects import (
+    fetch_all_projects,
+    names_project,
+    requested_project_id,
+    resolve_project_reference,
+)
 from ..task_context import MoneybirdTaskContext
 from . import _context as ctx
 from ._params import (
@@ -508,6 +514,7 @@ def _mutation_link_state(record: dict[str, Any]) -> dict[str, Any]:
                 "ledger_account_id": str(item.get("ledger_account_id") or "") or None,
                 "price": item.get("price"),
                 "description": item.get("description"),
+                "project_id": str(item.get("project_id") or "") or None,
             }
             for item in record.get("ledger_account_bookings") or []
         ],
@@ -517,7 +524,7 @@ def _mutation_link_state(record: dict[str, Any]) -> dict[str, Any]:
 def _resolve_bank_reclassification_target(
     ledger_accounts: list[dict[str, Any]],
     entry: dict[str, Any],
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     target_id = str(entry.get("target_ledger_account_id") or "").strip()
     target_name = str(entry.get("target_ledger_account_name") or "").strip()
     if target_id:
@@ -544,10 +551,7 @@ def _resolve_bank_reclassification_target(
             )
         target = matches[0]
     else:
-        raise MoneybirdError(
-            "Each bank-booking reclassification needs "
-            "target_ledger_account_id or target_ledger_account_name."
-        )
+        return None
     if target.get("active") is False:
         raise MoneybirdError(
             f"Target ledger account {target.get('name') or target.get('id')} is inactive."
@@ -555,8 +559,34 @@ def _resolve_bank_reclassification_target(
     return target
 
 
+def _bank_project_label(project_names: dict[str, Any], project_id: str) -> str:
+    if not project_id:
+        return "(none)"
+    return str(project_names.get(project_id) or project_id)
+
+
+def _ledger_booking_link(
+    ledger_account_id: str,
+    price: str,
+    *,
+    project_id: str = "",
+    description: Any = None,
+) -> dict[str, Any]:
+    """A ``link_booking`` body for a direct ledger booking, project and description included."""
+    booking: dict[str, Any] = {
+        "booking_type": "LedgerAccount",
+        "booking_id": ledger_account_id,
+        "price": price,
+    }
+    if project_id:
+        booking["project_id"] = project_id
+    if description not in (None, ""):
+        booking["description"] = description
+    return booking
+
+
 def _render_bank_reclassification_table(rows: list[dict[str, Any]]) -> str:
-    headers = ["date", "mutation", "amount", "from", "to", "status"]
+    headers = ["date", "mutation", "amount", "from", "to", "project", "status"]
     values = [
         [
             str(row.get("date") or ""),
@@ -564,6 +594,7 @@ def _render_bank_reclassification_table(rows: list[dict[str, Any]]) -> str:
             str(row.get("price") or ""),
             str(row.get("source_ledger_account") or ""),
             str(row.get("target_ledger_account") or ""),
+            str(row.get("project") or ""),
             str(row.get("status") or ""),
         ]
         for row in rows
@@ -597,8 +628,12 @@ def prepare_reclassify_bank_mutation_bookings(
         Field(
             description=(
                 "Direct bank-booking moves. Each dict requires "
-                "financial_mutation_id, ledger_account_booking_id, and either "
-                "target_ledger_account_id or target_ledger_account_name."
+                "financial_mutation_id and ledger_account_booking_id, plus a "
+                "target_ledger_account_id or target_ledger_account_name, a "
+                "project change (project_id or project_name; active projects "
+                "only, needs the settings scope) or clear_project: true, or "
+                "both. The booking keeps its project and description unless the "
+                "entry changes the project."
             )
         ),
     ],
@@ -606,9 +641,11 @@ def prepare_reclassify_bank_mutation_bookings(
     """Prepare a guarded batch move of direct bank bookings between ledger accounts.
 
     The preview binds every move to the mutation version and exact source booking
-    (id, ledger, amount and description). Execution preflights the complete batch,
-    then unlinks and re-links each amount, verifies the mutation is still fully
-    reconciled, and attempts to restore the source booking if a re-link fails.
+    (id, ledger, amount, description and project). Execution preflights the
+    complete batch, then unlinks and re-links each amount with its description
+    and project, verifies the mutation is still fully reconciled and the new
+    booking carries the previewed project, and attempts to restore the source
+    booking if a re-link fails. Projects are read only when an entry names one.
     """
     if not entries:
         raise MoneybirdError("Provide at least one bank-booking reclassification.")
@@ -656,6 +693,14 @@ def prepare_reclassify_bank_mutation_bookings(
             }
         )
 
+    # Reading projects needs the settings scope, so a ledger-only batch never
+    # asks for them.
+    projects = (
+        fetch_all_projects(client)
+        if any(names_project(entry) for entry in normalized_entries)
+        else []
+    )
+    project_names = {str(item.get("id")): item.get("name") for item in projects}
     mutations = task.financial_mutations(seen_mutations)
 
     for entry in normalized_entries:
@@ -686,11 +731,33 @@ def prepare_reclassify_bank_mutation_bookings(
         target_ledger = _resolve_bank_reclassification_target(
             ledger_accounts, entry
         )
+        requested_project = requested_project_id(entry, projects)
+        source_project_id = str(source_booking.get("project_id") or "")
+        target_project_id = (
+            source_project_id if requested_project is None else requested_project
+        )
+        if target_ledger is None:
+            if requested_project is None:
+                raise MoneybirdError(
+                    "Each bank-booking reclassification needs "
+                    "target_ledger_account_id or target_ledger_account_name, a "
+                    "project_id or project_name, or clear_project."
+                )
+            target_ledger = ledger_by_id.get(source_ledger_id)
+            if target_ledger is None or target_ledger.get("active") is False:
+                raise MoneybirdError(
+                    f"Ledger account {source_ledger_id} of booking {booking_id} "
+                    "is missing or inactive; name the target ledger account."
+                )
         target_ledger_id = str(target_ledger.get("id") or "")
-        if source_ledger_id == target_ledger_id:
+        if (
+            source_ledger_id == target_ledger_id
+            and source_project_id == target_project_id
+        ):
             raise MoneybirdError(
                 f"Financial mutation {mutation_id} is already booked to "
-                f"{target_ledger.get('name') or target_ledger_id}."
+                f"{target_ledger.get('name') or target_ledger_id}"
+                + (" with that project." if requested_project is not None else ".")
             )
 
         price = money_decimal(source_booking.get("price"))
@@ -712,9 +779,11 @@ def prepare_reclassify_bank_mutation_bookings(
                     "ledger_account_id": source_ledger_id,
                     "price": f"{price:.2f}",
                     "description": source_booking.get("description"),
+                    "project_id": source_project_id,
                 },
                 "target_ledger_account_id": target_ledger_id,
                 "target_ledger_account_name": target_ledger.get("name"),
+                "target_project_id": target_project_id,
             }
         )
         source_label = " ".join(
@@ -749,6 +818,19 @@ def prepare_reclassify_bank_mutation_bookings(
                 "source_ledger_account": source_label,
                 "target_ledger_account_id": target_ledger_id,
                 "target_ledger_account": target_label,
+                "booking_description": source_booking.get("description"),
+                "source_project_id": source_project_id or None,
+                "target_project_id": target_project_id or None,
+                "project": (
+                    f"{_bank_project_label(project_names, source_project_id)} -> "
+                    f"{_bank_project_label(project_names, target_project_id)}"
+                    if target_project_id != source_project_id
+                    else (
+                        f"{_bank_project_label(project_names, source_project_id)} (kept)"
+                        if source_project_id
+                        else ""
+                    )
+                ),
                 "status": "ready",
             }
         )
@@ -773,9 +855,11 @@ def prepare_reclassify_bank_mutation_bookings(
             "safety": {
                 "full_batch_preflight_before_writes": True,
                 "source_restore_attempt_on_failed_relink": True,
+                "relink_keeps_description_and_project": True,
                 "post_write_verification": (
-                    "source booking removed, new target booking visible, "
-                    "amount/state/open amount unchanged"
+                    "source booking removed, new target booking visible with the "
+                    "previewed project, amount/state/open amount unchanged; "
+                    "whether the description was kept is reported, not required"
                 ),
                 "api_transaction_available": False,
             },
@@ -829,11 +913,13 @@ def _preflight_bank_reclassification(
             str(booking.get("ledger_account_id") or ""),
             f"{money_decimal(booking.get('price')):.2f}",
             booking.get("description"),
+            str(booking.get("project_id") or "") if "project_id" in source else "",
         )
         expected_signature = (
             source["ledger_account_id"],
             source["price"],
             source.get("description"),
+            str(source.get("project_id") or ""),
         )
         if current_signature != expected_signature:
             raise MoneybirdError(
@@ -898,7 +984,18 @@ def _verify_bank_reclassification_result(
         ),
         "state_unchanged": mutation.get("state") == item["expected_state"],
     }
+    if "target_project_id" in item:
+        verification["target_project_matches"] = (
+            new_target is not None
+            and str(new_target.get("project_id") or "") == item["target_project_id"]
+        )
     return new_target, verification
+
+
+def _description_kept(booking: dict[str, Any] | None, source: dict[str, Any]) -> bool:
+    return booking is not None and str(booking.get("description") or "") == str(
+        source.get("description") or ""
+    )
 
 
 def _restore_source_bank_booking(
@@ -909,6 +1006,7 @@ def _restore_source_bank_booking(
 ) -> dict[str, Any]:
     mutation_id = item["financial_mutation_id"]
     source = item["source_booking"]
+    source_project_id = str(source.get("project_id") or "")
     current = client.get_financial_mutation(mutation_id)
     new_target = _matching_new_target_booking(
         current,
@@ -936,34 +1034,62 @@ def _restore_source_bank_booking(
             )
         )
 
-    source_present = any(
-        is_restored_source(booking)
-        for booking in current.get("ledger_account_bookings") or []
-    )
-    if not source_present:
-        client.link_financial_mutation_booking(
-            mutation_id,
-            {
-                "booking_type": "LedgerAccount",
-                "booking_id": source["ledger_account_id"],
-                "price": source["price"],
-            },
+    def restored_source(record: dict[str, Any]) -> dict[str, Any] | None:
+        # Prefer the candidate carrying the source's project, so a move that
+        # kept the ledger and changed only the project is never mistaken for
+        # the restored source.
+        candidates = [
+            booking
+            for booking in record.get("ledger_account_bookings") or []
+            if is_restored_source(booking)
+        ]
+        return next(
+            (
+                booking
+                for booking in candidates
+                if str(booking.get("project_id") or "") == source_project_id
+            ),
+            candidates[0] if candidates else None,
         )
+
+    if restored_source(current) is None:
+        restore_link = _ledger_booking_link(
+            source["ledger_account_id"],
+            source["price"],
+            project_id=source_project_id,
+            description=source.get("description"),
+        )
+        try:
+            client.link_financial_mutation_booking(mutation_id, restore_link)
+        except MoneybirdError:
+            plain_link = _ledger_booking_link(
+                source["ledger_account_id"], source["price"]
+            )
+            if restore_link == plain_link:
+                raise
+            # A link refused for its project or description must still put the
+            # amount back on the source ledger.
+            if restored_source(client.get_financial_mutation(mutation_id)) is None:
+                client.link_financial_mutation_booking(mutation_id, plain_link)
     restored = client.get_financial_mutation(mutation_id)
-    source_restored = any(
-        is_restored_source(booking)
-        for booking in restored.get("ledger_account_bookings") or []
-    )
+    restored_booking = restored_source(restored)
+    restored_id = str((restored_booking or {}).get("id") or "")
     target_absent = not any(
         str(booking.get("ledger_account_id") or "")
         == item["target_ledger_account_id"]
         and f"{money_decimal(booking.get('price')):.2f}" == source["price"]
         and str(booking.get("id") or "") not in prior_booking_ids
+        and str(booking.get("id") or "") != restored_id
         for booking in restored.get("ledger_account_bookings") or []
     )
     return {
         "attempted": True,
-        "source_restored": source_restored,
+        "source_restored": restored_booking is not None,
+        "project_restored": (
+            restored_booking is not None
+            and str(restored_booking.get("project_id") or "") == source_project_id
+        ),
+        "description_restored": _description_kept(restored_booking, source),
         "new_target_removed": target_absent,
         "amount_open_restored": (
             f"{money_decimal(restored.get('amount_open')):.2f}"
@@ -1019,11 +1145,12 @@ def _execute_reclassify_bank_mutation_bookings(
 
             link_result = client.link_financial_mutation_booking(
                 mutation_id,
-                {
-                    "booking_type": "LedgerAccount",
-                    "booking_id": item["target_ledger_account_id"],
-                    "price": source["price"],
-                },
+                _ledger_booking_link(
+                    item["target_ledger_account_id"],
+                    source["price"],
+                    project_id=item.get("target_project_id", ""),
+                    description=source.get("description"),
+                ),
             )
             after = (
                 link_result
@@ -1049,10 +1176,12 @@ def _execute_reclassify_bank_mutation_bookings(
                         "target_ledger_account_id"
                     ],
                     "target_booking_id": str(new_target.get("id")),
+                    "target_project_id": item.get("target_project_id") or None,
                     "price": source["price"],
                     "version_before": item.get("expected_version") or None,
                     "version_after": after.get("version"),
                     "verification": verification,
+                    "description_kept": _description_kept(new_target, source),
                 }
             )
         except Exception as exc:
@@ -1120,6 +1249,9 @@ def _execute_reclassify_bank_mutation_bookings(
             row["target_booking_id"] = str(new_target.get("id"))
             row["version_after"] = final_records[mutation_id].get("version")
             row["verification"] = final_verification
+            row["description_kept"] = _description_kept(
+                new_target, item["source_booking"]
+            )
             row["verification_source"] = "independent_batch_refetch"
         failures.extend(final_failures)
 
@@ -1174,6 +1306,14 @@ def prepare_link_bank_mutation_booking(
         str,
         Field(description="Optional partial amount as a decimal string, e.g. '121.00'. Empty = use the mutation's current amount_open."),
     ] = "",
+    project_id: Annotated[
+        str,
+        Field(description="Optional project (cost centre) for a LedgerAccount booking: an active project id. Reading projects needs the settings scope."),
+    ] = "",
+    project_name: Annotated[
+        str,
+        Field(description="Optional exact name of an active project, instead of project_id. LedgerAccount bookings only."),
+    ] = "",
 ) -> dict[str, Any]:
     """Book a bank transaction to a ledger, invoice, or purchase document. Dutch: bankmutatie koppelen aan factuur or bankmutatie boeken op grootboek.
 
@@ -1186,7 +1326,8 @@ def prepare_link_bank_mutation_booking(
     A Document still in state 'new' is not booked by a payment link alone, so once the
     link verifies the document is saved unchanged to book it through to 'paid' — unless
     the payment leaves an open balance, in which case it stays 'new' on purpose. The
-    result reports the resulting state under 'document'. Do not execute the write until
+    result reports the resulting state under 'document'. A LedgerAccount booking can
+    carry a project; the new booking must show it. Do not execute the write until
     the user explicitly confirms."""
     booking_type = str(booking_type).strip()
     if booking_type not in FINANCIAL_MUTATION_LINK_BOOKING_TYPES:
@@ -1202,8 +1343,22 @@ def prepare_link_bank_mutation_booking(
         )
     if not str(booking_id).strip():
         raise MoneybirdError("booking_id is required.")
+    project_request = {
+        "project_id": str(project_id or "").strip(),
+        "project_name": str(project_name or "").strip(),
+    }
+    if names_project(project_request) and booking_type != "LedgerAccount":
+        raise MoneybirdError(
+            "A project can only be set on a LedgerAccount booking; an invoice or "
+            "document carries its projects on its own lines."
+        )
 
     client = ctx.get_client()
+    project = None
+    if names_project(project_request):
+        project = resolve_project_reference(
+            fetch_all_projects(client), **project_request
+        )
     mutation = client.get_financial_mutation(financial_mutation_id)
     target_snapshot, target_preview, target_record = _link_target_contract(
         client,
@@ -1242,6 +1397,7 @@ def prepare_link_bank_mutation_booking(
             "booking_type": booking_type,
             "booking_id": str(booking_id).strip(),
             "price": str(amount),
+            "project_id": str(project.get("id")) if project else "",
         }
     )
     warnings: list[str] = []
@@ -1304,6 +1460,11 @@ def prepare_link_bank_mutation_booking(
             },
             "booking": booking,
             "booking_target": target_preview,
+            "project": (
+                {"id": str(project.get("id")), "name": project.get("name")}
+                if project
+                else None
+            ),
             "warnings": warnings,
             "price_note": (
                 f"Price defaulted to the mutation's amount_open: {amount}."
@@ -1411,6 +1572,17 @@ def _execute_link_booking(client, payload: dict[str, Any]) -> dict[str, Any]:
         "new_link_price_matches": any(
             f"{money_decimal(item.get('price')):.2f}" == expected_link_price
             for item in target_links
+        ),
+        **(
+            {
+                "new_link_project_matches": any(
+                    str(item.get("project_id") or "")
+                    == str(payload["booking"]["project_id"])
+                    for item in target_links
+                )
+            }
+            if payload["booking"].get("project_id")
+            else {}
         ),
         "amount_open_matches": (
             f"{money_decimal(after.get('amount_open')):.2f}"

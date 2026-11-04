@@ -34,6 +34,7 @@ from typing import Any
 
 from .config import MoneybirdError
 from .formatting import money_decimal
+from .projects import clears_project, fetch_all_projects, resolve_project_reference
 
 #: Quantisation unit for money. Every total here is exact to the cent.
 CENT = Decimal("0.01")
@@ -52,6 +53,11 @@ def line_ledger_account_id(line: dict[str, Any]) -> str:
 def line_tax_rate_id(line: dict[str, Any]) -> str:
     """The tax rate id on a document line, as a string, or ``""``."""
     return str(line.get("tax_rate_id") or "")
+
+
+def line_project_id(line: dict[str, Any]) -> str:
+    """The project id on a document line, as a string, or ``""``."""
+    return str(line.get("project_id") or "")
 
 
 def line_total_incl_tax(
@@ -105,6 +111,11 @@ def line_signatures(lines: Any) -> list[tuple[str, str, str, str]]:
     return sorted(line_signature(line) for line in lines)
 
 
+def line_project_signatures(lines: Any) -> list[tuple[str, str, str, str, str]]:
+    """:func:`line_signatures` with each line's project appended, sorted."""
+    return sorted((*line_signature(line), line_project_id(line)) for line in lines)
+
+
 def booking_line_snapshot(lines: Any) -> list[dict[str, Any]]:
     """The booking fields of a line set that a save must leave alone.
 
@@ -154,20 +165,13 @@ def line_view(lines: Any) -> list[dict[str, str]]:
     ]
 
 
-def details_attributes_for_lines(
-    current: Any,
-    desired: Any,
-) -> list[dict[str, Any]]:
-    """Turn a desired line set into ``details_attributes`` ops against current lines.
-
-    Reuses an existing line (by matching ledger + tax) for each desired line to
-    keep detail identity stable, appends the rest as new lines, and marks any
-    leftover current line for deletion via ``_destroy``.
-    """
-    current = list(current)
-    ops: list[dict[str, Any]] = []
+def _reused_line_indexes(
+    current: list[dict[str, Any]],
+    desired: list[dict[str, Any]],
+) -> list[int | None]:
+    """For each desired line, the current line it reuses (same ledger + tax), or None."""
     used = [False] * len(current)
-
+    matches: list[int | None] = []
     for want in desired:
         matched = None
         for index, line in enumerate(current):
@@ -178,34 +182,90 @@ def details_attributes_for_lines(
                 and line_tax_rate_id(line) == want["tax_rate_id"]
             ):
                 matched = index
+                used[index] = True
                 break
+        matches.append(matched)
+    return matches
+
+
+def details_attributes_for_lines(
+    current: Any,
+    desired: Any,
+) -> list[dict[str, Any]]:
+    """Turn a desired line set into ``details_attributes`` ops against current lines.
+
+    Reuses an existing line (by matching ledger + tax) for each desired line to
+    keep detail identity stable, appends the rest as new lines, and marks any
+    leftover current line for deletion via ``_destroy``. A desired line's
+    ``project_id`` is sent when stated, and ``clear_project`` removes a reused
+    line's project; a reused line otherwise keeps its own.
+    """
+    current = list(current)
+    desired = list(desired)
+    ops: list[dict[str, Any]] = []
+    matches = _reused_line_indexes(current, desired)
+
+    for want, matched in zip(desired, matches):
         price_text = f'{want["price"]:.2f}'
         if matched is not None:
-            used[matched] = True
-            ops.append(
-                {
-                    "id": str(current[matched].get("id")),
-                    "description": want["description"],
-                    "price": price_text,
-                    "amount": "1",
-                }
-            )
+            op = {
+                "id": str(current[matched].get("id")),
+                "description": want["description"],
+                "price": price_text,
+                "amount": "1",
+            }
         else:
-            ops.append(
-                {
-                    "description": want["description"],
-                    "price": price_text,
-                    "amount": "1",
-                    "ledger_account_id": want["ledger_account_id"],
-                    "tax_rate_id": want["tax_rate_id"],
-                }
-            )
+            op = {
+                "description": want["description"],
+                "price": price_text,
+                "amount": "1",
+                "ledger_account_id": want["ledger_account_id"],
+                "tax_rate_id": want["tax_rate_id"],
+            }
+        if line_project_id(want):
+            op["project_id"] = line_project_id(want)
+        elif want.get("clear_project") and matched is not None:
+            op["project_id"] = None
+        ops.append(op)
 
     for index, line in enumerate(current):
-        if not used[index]:
+        if index not in matches:
             ops.append({"id": str(line.get("id")), "_destroy": "true"})
 
     return ops
+
+
+def resulting_line_projects(current: Any, desired: Any) -> list[str]:
+    """The project each desired line ends up with after :func:`details_attributes_for_lines`.
+
+    A stated ``project_id`` wins, ``clear_project`` leaves none, a reused line
+    otherwise keeps its own project, and a new line has none.
+    """
+    current = list(current)
+    desired = list(desired)
+    return [
+        ""
+        if want.get("clear_project")
+        else line_project_id(want)
+        or (line_project_id(current[matched]) if matched is not None else "")
+        for want, matched in zip(desired, _reused_line_indexes(current, desired))
+    ]
+
+
+def dropped_line_projects(current: Any, desired: Any) -> list[str]:
+    """Projects that only removed lines carried, so the rewrite loses them.
+
+    A reused line whose project the caller changes on purpose is not a drop.
+    """
+    current = list(current)
+    desired = list(desired)
+    reused = _reused_line_indexes(current, desired)
+    removed = {
+        line_project_id(line)
+        for index, line in enumerate(current)
+        if index not in reused and line_project_id(line)
+    }
+    return sorted(removed - set(resulting_line_projects(current, desired)))
 
 
 @dataclass(frozen=True)
@@ -213,7 +273,9 @@ class ExplicitDocumentLines:
     """A validated line set and the gross total it comes to.
 
     ``lines`` are normalised: a stripped description, an exact :class:`Decimal`
-    price, and ledger/tax ids proved to exist. ``total_incl_tax`` is the sum of
+    price, ledger/tax ids proved to exist, and a ``project_id`` only when the
+    caller stated one, proved active, or ``clear_project: True`` when the
+    caller asked to remove it. ``total_incl_tax`` is the sum of
     their gross totals, quantised to the cent. What the caller does with that
     total -- require it to match the document, require it to be positive, refuse
     it outright -- is the caller's rule, not this one's.
@@ -246,7 +308,9 @@ def validate_explicit_document_lines(
     account exists, is active, and accepts this kind of document; the tax rate
     exists, is active, and is for this kind of document -- before any arithmetic
     happens, so a refusal names the line and the reason rather than producing a
-    total nobody should trust.
+    total nobody should trust. A line may also state a ``project_id``; only then
+    is a third read made, of the projects, and the project must be active. A
+    line with ``clear_project: true`` instead has its project removed.
 
     ``document_kind`` is the provider's own document kind. A receipt is filed
     under purchase-invoice ledger and tax typing, which is Moneybird's rule and
@@ -263,6 +327,11 @@ def validate_explicit_document_lines(
         str(account.get("id")): account for account in client.list_ledger_accounts()
     }
     tax_rates = {str(rate.get("id")): rate for rate in client.list_tax_rates()}
+    projects = (
+        fetch_all_projects(client)
+        if any(line_project_id(raw_line) for raw_line in lines)
+        else []
+    )
 
     kind = str(document_kind)
     ledger_document_type = "purchase_invoice" if kind == "receipt" else kind
@@ -325,6 +394,19 @@ def validate_explicit_document_lines(
                 "tax_rate_id": tax_id,
             }
         )
+        project_id = line_project_id(raw_line).strip()
+        try:
+            clear = clears_project(raw_line)
+        except MoneybirdError as exc:
+            raise MoneybirdError(f"{field_name}[{index}] {exc}") from exc
+        if clear:
+            validated[-1]["clear_project"] = True
+        elif project_id:
+            try:
+                resolve_project_reference(projects, project_id=project_id)
+            except MoneybirdError as exc:
+                raise MoneybirdError(f"{field_name}[{index}] {exc}") from exc
+            validated[-1]["project_id"] = project_id
         total_incl_tax += line_total_incl_tax(
             validated[-1],
             prices_are_incl_tax=bool(prices_are_incl_tax),

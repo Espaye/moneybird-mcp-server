@@ -19,13 +19,22 @@ from ..formatting import (
     render_preview_table,
 )
 from ..invoicing import (
+    administration_locked_until,
     apply_batch_group_merge_checks,
+    assert_document_date_unlocked,
     build_batch_invoice_payload,
     build_merge_snapshot_from_invoice,
     build_meter_usage_entries,
+    entries_name_a_project,
     evaluate_merge_compatibility,
     list_scheduled_merge_candidates,
     summarize_batch_preview,
+)
+from ..projects import (
+    clears_project,
+    fetch_all_projects,
+    names_project,
+    requested_project_id,
 )
 from ..safety import (
     approval_execution_state,
@@ -85,9 +94,12 @@ def _prepare_batch_create_sales_invoices(
     if not entries:
         raise MoneybirdError("Provide at least one batch entry.")
     batch_items: list[dict[str, Any]] = []
+    projects = fetch_all_projects(client) if entries_name_a_project(entries) else []
     for index, entry in enumerate(entries):
         try:
-            batch_items.append(build_batch_invoice_payload(client, entry))
+            batch_items.append(
+                build_batch_invoice_payload(client, entry, projects=projects)
+            )
         except MoneybirdError as exc:
             reference = str(entry.get("reference") or "").strip()
             context = f"entry[{index}]"
@@ -125,7 +137,7 @@ def _prepare_batch_create_sales_invoices(
 def prepare_batch_create_sales_invoices(
     entries: Annotated[
         list[dict[str, Any]],
-        Field(description="One dict per invoice: contact_id or customer_id, details (invoice lines), and optional reference, invoice_date, scheduled_send_on."),
+        Field(description="One dict per invoice: contact_id or customer_id, details (invoice lines), and optional reference, invoice_date, scheduled_send_on. A line may name an active project with project_id or project_name; reading projects needs the settings scope."),
     ],
     skip_if_duplicate: Annotated[bool, Field(description="Silently skip entries whose fingerprint already succeeded per the audit log.")] = True,
     fail_on_duplicate: Annotated[bool, Field(description="Raise instead of skipping when a duplicate is detected.")] = False,
@@ -318,10 +330,13 @@ def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
 def prepare_batch_update_sales_invoices(
     entries: Annotated[
         list[dict[str, Any]],
-        Field(description="One dict per update: an explicit invoice id plus a reference replacement, date changes, and/or detail_updates; or a customer id plus filters to locate one invoice. Unknown keys and empty patches are rejected, and an invalid reference field names the supported replacement key."),
+        Field(description="One dict per update: an explicit invoice id plus a reference replacement, date changes, and/or detail_updates; or a customer id plus filters to locate one invoice. Each detail_updates dict picks a line by row_order and sets description, period, price, amount, tax_rate_id, ledger_account_id and/or an active project (project_id or project_name), or removes the line's project with clear_project: true. Unknown keys and empty patches are rejected, and an invalid reference field names the supported replacement key."),
     ],
 ) -> dict[str, Any]:
-    """Use this before updating one or more existing sales invoices, either by explicit invoice id or by customer lookup plus filters."""
+    """Use this before updating one or more existing sales invoices, either by explicit invoice id or by customer lookup plus filters.
+
+    A sent invoice dated inside the locked period, or a new invoice_date inside
+    it, is refused before anything is staged."""
     if not entries:
         raise MoneybirdError("Provide at least one batch update entry.")
 
@@ -351,7 +366,13 @@ def prepare_batch_update_sales_invoices(
         "amount",
         "tax_rate_id",
         "ledger_account_id",
+        "project_id",
+        "project_name",
+        "clear_project",
     }
+    projects: list[dict[str, Any]] | None = None
+    locked_until: str | None = None
+    line_changes: list[dict[str, Any]] = []
 
     for entry_index, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -405,6 +426,28 @@ def prepare_batch_update_sales_invoices(
             )
         seen_invoice_ids.add(resolved_invoice_id)
 
+        # A draft is not booked yet, so only its new date can fall in the lock.
+        is_draft = str(invoice.get("state") or "") == "draft"
+        current_invoice_date = str(invoice.get("invoice_date") or "")
+        new_invoice_date = str(entry.get("invoice_date") or "").strip()
+        if (current_invoice_date and not is_draft) or new_invoice_date:
+            if locked_until is None:
+                locked_until = administration_locked_until(client)
+            invoice_label = (
+                f"Sales invoice {invoice.get('invoice_id') or resolved_invoice_id}"
+            )
+            if not is_draft:
+                assert_document_date_unlocked(
+                    locked_until,
+                    current_invoice_date,
+                    record_label=invoice_label,
+                )
+            assert_document_date_unlocked(
+                locked_until,
+                new_invoice_date,
+                record_label=f"{invoice_label} with the new invoice_date",
+            )
+
         raw_detail_updates = entry.get("detail_updates", [])
         if not isinstance(raw_detail_updates, list):
             raise MoneybirdError(
@@ -442,10 +485,38 @@ def prepare_batch_update_sales_invoices(
                     "ledger_account_id": detail_update.get("ledger_account_id"),
                 }
             )
+            if names_project(detail_update) or clears_project(detail_update):
+                if names_project(detail_update) and projects is None:
+                    projects = fetch_all_projects(client)
+                # None removes the project; clean_dict would drop it, so it is
+                # added after cleaning.
+                detail_patch["project_id"] = (
+                    requested_project_id(detail_update, projects or []) or None
+                )
             if not (set(detail_patch) - {"id"}):
                 raise MoneybirdError(
                     f"entries[{entry_index}].detail_updates[{detail_index}] produces "
                     "an empty line patch. Provide at least one supported line field."
+                )
+            if {"ledger_account_id", "project_id"} & set(detail_patch):
+                line_changes.append(
+                    {
+                        "sales_invoice_id": resolved_invoice_id,
+                        "row_order": row_order,
+                        "description": matching.get("description"),
+                        "ledger_account_id": {
+                            "before": matching.get("ledger_account_id"),
+                            "after": detail_patch.get(
+                                "ledger_account_id", matching.get("ledger_account_id")
+                            ),
+                        },
+                        "project_id": {
+                            "before": matching.get("project_id"),
+                            "after": detail_patch.get(
+                                "project_id", matching.get("project_id")
+                            ),
+                        },
+                    }
                 )
             details_patch.append(detail_patch)
 
@@ -504,6 +575,17 @@ def prepare_batch_update_sales_invoices(
         "preview_table": render_preview_table(preview_rows),
         "item_count": len(prepared_items),
     }
+    if line_changes:
+        project_names = {
+            str(item.get("id")): item.get("name") for item in projects or []
+        }
+        for change in line_changes:
+            for side in ("before", "after"):
+                project_id = change["project_id"][side]
+                change["project_id"][f"{side}_name"] = (
+                    project_names.get(str(project_id)) if project_id else None
+                )
+        approval["preview"]["line_changes"] = line_changes
     approval["payload"] = {"items": prepared_items, "fingerprint": fingerprint}
     return approval
 
@@ -948,7 +1030,7 @@ def batch_schedule_sales_invoices_from_approval(approval_id: ApprovalId) -> dict
 def prepare_meter_usage_sales_invoices(
     rows: Annotated[
         list[dict[str, Any]],
-        Field(description="One dict per meter: meter (name), optional customer_id, and either usage_kwh or begin_reading + end_reading; optional action ('skip', 'draft', 'schedule', 'merge', 'separate') and per-row price/tax/ledger overrides."),
+        Field(description="One dict per meter: meter (name), optional customer_id, and either usage_kwh or begin_reading + end_reading; optional action ('skip', 'draft', 'schedule', 'merge', 'separate') and per-row price/tax/ledger/project (project_id or project_name) overrides."),
     ],
     period_label: Annotated[str, Field(description="Human-readable usage period for the line description, e.g. 'juni 2026'.")],
     invoice_date: DateString,
@@ -958,6 +1040,8 @@ def prepare_meter_usage_sales_invoices(
     default_unit_price: Annotated[str, Field(description="Fallback price per kWh when no previous meter line supplies one.")] = "",
     default_tax_rate_id: Annotated[str, Field(description="Fallback tax rate id when no previous meter line supplies one.")] = "",
     default_ledger_account_id: Annotated[str, Field(description="Fallback ledger account id when no previous meter line supplies one.")] = "",
+    default_project_id: Annotated[str, Field(description="Active project id for every meter line without its own project. Never taken from a previous invoice.")] = "",
+    default_project_name: Annotated[str, Field(description="Exact name of an active project, instead of default_project_id.")] = "",
     skip_meters: Annotated[list[str] | None, Field(description="Meter names to exclude from the run.")] = None,
 ) -> dict[str, Any]:
     """Prepare a complete metered-usage invoice run from readings or supplied usage.
@@ -966,6 +1050,7 @@ def prepare_meter_usage_sales_invoices(
     ``begin_reading`` + ``end_reading``. ``action`` may be ``skip``, ``draft``,
     ``schedule``, ``merge`` or ``separate``. When price/tax/ledger are omitted, the
     newest matching invoice line (for example ``Elektra B5``) supplies those defaults.
+    A project comes only from the row or the run default, never from that line.
     """
     client = ctx.get_client()
     prepared_usage = build_meter_usage_entries(
@@ -979,6 +1064,8 @@ def prepare_meter_usage_sales_invoices(
         default_unit_price=default_unit_price,
         default_tax_rate_id=default_tax_rate_id,
         default_ledger_account_id=default_ledger_account_id,
+        default_project_id=default_project_id,
+        default_project_name=default_project_name,
         skip_meters=skip_meters,
     )
     approval = _prepare_batch_create_sales_invoices(
