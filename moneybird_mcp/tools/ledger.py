@@ -675,7 +675,7 @@ def create_general_journal_document_from_approval(approval_id: ApprovalId) -> di
 def prepare_reclassify_document_lines(
     entries: Annotated[
         list[dict[str, Any]],
-        Field(description="Line moves. Each dict: document_kind ('purchase_invoice' or 'receipt'), document_id, detail_id (or row_order) to pick the line, and a target ledger_account_id or ledger_account_name, a target project_id or project_name (an active project), or both."),
+        Field(description="Line moves. Each dict: document_kind ('purchase_invoice' or 'receipt'), document_id, detail_id (or row_order) to pick the line, and a target ledger_account_id or ledger_account_name, a target project_id or project_name (an active project) or clear_project: true to remove the line's project, or both."),
     ],
 ) -> dict[str, Any]:
     """Use this before reclassifying purchase invoice or receipt lines to other ledger accounts or projects. It can optionally prepare balancing general journal documents for asset or liability moves."""

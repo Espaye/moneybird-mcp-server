@@ -44,6 +44,7 @@ from .document_lines import (
     validate_explicit_document_lines,
 )
 from .formatting import money_decimal, normalize_document_kind
+from .invoicing import administration_locked_until, assert_document_date_unlocked
 from .purchase_review import list_documents_for_contact
 
 _DUTCH_MONTHS = [
@@ -279,6 +280,11 @@ def build_reconcile_purchase_invoice(
         raise MoneybirdError("document_id is required.")
 
     target = client.get_document(kind, document_id)
+    assert_document_date_unlocked(
+        administration_locked_until(client),
+        str(target.get("date") or ""),
+        record_label=f"{kind} document {document_id}",
+    )
 
     reference_document_id = str(reference_document_id).strip()
     if reference_document_id:
@@ -457,6 +463,11 @@ def build_explicit_purchase_invoice_reconcile(
         raise MoneybirdError("desired_lines must contain at least one exact invoice line.")
 
     target = client.get_document(kind, normalized_document_id)
+    assert_document_date_unlocked(
+        administration_locked_until(client),
+        str(target.get("date") or ""),
+        record_label=f"{kind} document {normalized_document_id}",
+    )
     resolved_incl_flag = (
         bool(target.get("prices_are_incl_tax"))
         if prices_are_incl_tax is None

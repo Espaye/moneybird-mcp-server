@@ -175,9 +175,9 @@ CAPABILITY_SCOPES: tuple[CapabilityScope, ...] = (
         reason=(
             "Financial accounts, products, projects, and creating a ledger "
             "account. Reading ledger accounts and tax rates is satisfied by any "
-            "of several scopes, but these four accept no substitute. Setting a "
-            "project on an invoice or receipt line reads the projects, so it "
-            "needs settings as well."
+            "of several scopes, but these four accept no substitute. Naming a "
+            "project on an invoice or receipt line or a bank booking reads the "
+            "projects, so it needs settings as well; clearing one does not."
         ),
         examples=(
             "list_financial_accounts",

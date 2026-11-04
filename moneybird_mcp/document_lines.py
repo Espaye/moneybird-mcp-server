@@ -34,7 +34,7 @@ from typing import Any
 
 from .config import MoneybirdError
 from .formatting import money_decimal
-from .projects import fetch_all_projects, resolve_project_reference
+from .projects import clears_project, fetch_all_projects, resolve_project_reference
 
 #: Quantisation unit for money. Every total here is exact to the cent.
 CENT = Decimal("0.01")
@@ -197,7 +197,8 @@ def details_attributes_for_lines(
     Reuses an existing line (by matching ledger + tax) for each desired line to
     keep detail identity stable, appends the rest as new lines, and marks any
     leftover current line for deletion via ``_destroy``. A desired line's
-    ``project_id`` is sent when stated; a reused line otherwise keeps its own.
+    ``project_id`` is sent when stated, and ``clear_project`` removes a reused
+    line's project; a reused line otherwise keeps its own.
     """
     current = list(current)
     desired = list(desired)
@@ -223,6 +224,8 @@ def details_attributes_for_lines(
             }
         if line_project_id(want):
             op["project_id"] = line_project_id(want)
+        elif want.get("clear_project") and matched is not None:
+            op["project_id"] = None
         ops.append(op)
 
     for index, line in enumerate(current):
@@ -235,13 +238,15 @@ def details_attributes_for_lines(
 def resulting_line_projects(current: Any, desired: Any) -> list[str]:
     """The project each desired line ends up with after :func:`details_attributes_for_lines`.
 
-    A stated ``project_id`` wins, a reused line keeps its own project, and a new
-    line has none.
+    A stated ``project_id`` wins, ``clear_project`` leaves none, a reused line
+    otherwise keeps its own project, and a new line has none.
     """
     current = list(current)
     desired = list(desired)
     return [
-        line_project_id(want)
+        ""
+        if want.get("clear_project")
+        else line_project_id(want)
         or (line_project_id(current[matched]) if matched is not None else "")
         for want, matched in zip(desired, _reused_line_indexes(current, desired))
     ]
@@ -269,7 +274,8 @@ class ExplicitDocumentLines:
 
     ``lines`` are normalised: a stripped description, an exact :class:`Decimal`
     price, ledger/tax ids proved to exist, and a ``project_id`` only when the
-    caller stated one, proved active. ``total_incl_tax`` is the sum of
+    caller stated one, proved active, or ``clear_project: True`` when the
+    caller asked to remove it. ``total_incl_tax`` is the sum of
     their gross totals, quantised to the cent. What the caller does with that
     total -- require it to match the document, require it to be positive, refuse
     it outright -- is the caller's rule, not this one's.
@@ -303,7 +309,8 @@ def validate_explicit_document_lines(
     exists, is active, and is for this kind of document -- before any arithmetic
     happens, so a refusal names the line and the reason rather than producing a
     total nobody should trust. A line may also state a ``project_id``; only then
-    is a third read made, of the projects, and the project must be active.
+    is a third read made, of the projects, and the project must be active. A
+    line with ``clear_project: true`` instead has its project removed.
 
     ``document_kind`` is the provider's own document kind. A receipt is filed
     under purchase-invoice ledger and tax typing, which is Moneybird's rule and
@@ -388,7 +395,13 @@ def validate_explicit_document_lines(
             }
         )
         project_id = line_project_id(raw_line).strip()
-        if project_id:
+        try:
+            clear = clears_project(raw_line)
+        except MoneybirdError as exc:
+            raise MoneybirdError(f"{field_name}[{index}] {exc}") from exc
+        if clear:
+            validated[-1]["clear_project"] = True
+        elif project_id:
             try:
                 resolve_project_reference(projects, project_id=project_id)
             except MoneybirdError as exc:

@@ -358,8 +358,9 @@ def prepare_reconcile_purchase_invoice(
             description=(
                 "Optional exact line allocation transcribed from the actual invoice/PDF. "
                 "Each dict requires description, price, ledger_account_id, and tax_rate_id; "
-                "amount must be 1 when supplied, and project_id (an active project) is "
-                "optional. When set, no proportional reference scaling "
+                "amount must be 1 when supplied, and project_id (an active project) or "
+                "clear_project: true (remove the reused line's project) is optional. "
+                "When set, no proportional reference scaling "
                 "is used and the calculated total must equal the current invoice total."
             )
         ),
@@ -393,6 +394,7 @@ def prepare_reconcile_purchase_invoice(
     descriptions, ledger ids, and tax ids as ``desired_lines``. Existing lines are reused by
     ledger+tax to keep their identity and project; extra lines are added and leftover lines
     removed, and the preview lists any project only removed lines carried. A document
+    dated inside the locked period is refused. A document
     version snapshot is stored in both modes so execution aborts if the invoice changes after the
     preview. Nothing is written until reconcile_purchase_invoice_from_approval is called.
     """

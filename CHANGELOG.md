@@ -33,18 +33,32 @@ versioning while allowing pre-1.0 breaking changes.
 - **Projects on invoice and receipt lines** ([#102](https://github.com/Espaye/moneybird-mcp-server/issues/102)).
   Moneybird books a line on a project (cost centre) next to its ledger account; the
   write tools can now set it. The project must exist and be active, and naming one
-  needs the `settings` scope.
+  needs the `settings` scope. `clear_project: true` removes a line's project
+  instead; it cannot be combined with a project and never reads projects.
   - `prepare_reclassify_document_lines` takes `project_id` or `project_name` per
-    line, with or without a new ledger account. The preview lists the old and new
-    ledger and project of every line, and the verifier checks each line's project.
-    A project change cannot share a line with a balancing journal.
-  - `prepare_batch_update_sales_invoices` accepts `project_id` in `detail_updates`,
-    shows the change in `line_changes` and verifies it.
-  - `prepare_reconcile_purchase_invoice` takes an optional `project_id` per
-    `desired_lines` entry. A reused line keeps its project; the preview shows the
-    project of every line before and after, and `projects_dropped` plus a warning
-    name any project that only removed lines carried. Execution verifies the
-    resulting projects as `verified_line_projects_match`.
+    line, or `clear_project`, with or without a new ledger account. The preview
+    lists the old and new ledger and project of every line, and the verifier checks
+    each line's project. A project change cannot share a line with a balancing
+    journal.
+  - `prepare_batch_update_sales_invoices` accepts `project_id`, `project_name` or
+    `clear_project` in `detail_updates`, shows the change in `line_changes` and
+    verifies it.
+  - `prepare_reconcile_purchase_invoice` takes an optional `project_id` or
+    `clear_project` per `desired_lines` entry. A reused line keeps its project; the
+    preview shows the project of every line before and after, and
+    `projects_dropped` plus a warning name any project that only removed lines
+    carried. Execution verifies the resulting projects as
+    `verified_line_projects_match`.
+  - New sales invoices: `prepare_batch_create_sales_invoices` and
+    `prepare_create_sales_invoice_draft` take `project_id` or `project_name` per
+    line, and the post-write check covers it. A batch reads the projects once.
+  - `prepare_meter_usage_sales_invoices` takes a project per row, or
+    `default_project_id` / `default_project_name` for the whole run. A project is
+    never copied from the previous meter invoice.
+  - `prepare_link_bank_mutation_booking` takes an optional `project_id` or
+    `project_name` for a `LedgerAccount` booking and verifies it on the new booking.
+  - `prepare_reclassify_bank_mutation_bookings` can change or clear the booking's
+    project, with or without a new ledger account.
 
 ### Changed
 
@@ -69,6 +83,21 @@ versioning while allowing pre-1.0 breaking changes.
   period before staging, and the verifier now also requires the document's totals
   excluding and including tax to be unchanged. Approvals staged before this change
   still verify on their lines alone.
+- **Sales invoice updates and purchase reconciliation check the period lock.**
+  `prepare_batch_update_sales_invoices` refuses a sent invoice dated inside the
+  locked period, and a new `invoice_date` inside it, before staging; a draft is only
+  checked on its new date. `prepare_reconcile_purchase_invoice` refuses a document
+  dated inside the locked period, in both modes.
+
+### Fixed
+
+- **Moving a bank booking to another ledger account kept neither its project nor its
+  description.** `prepare_reclassify_bank_mutation_bookings` relinks the booking, and
+  the new link was sent without them. It now resends both, verifies the project on
+  the new booking and reports whether the description survived. A failed move that
+  restores the source booking resends them too; if Moneybird refuses that, the
+  restore falls back to the ledger account and amount and reports
+  `project_restored: false`.
 
 ## 0.8.3 — 2026-09-27
 

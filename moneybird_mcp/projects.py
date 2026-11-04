@@ -58,3 +58,46 @@ def resolve_project_reference(
             "only an active project can be set on a line."
         )
     return match
+
+
+def names_project(entry: dict[str, Any]) -> bool:
+    """Whether an entry names a project to set, so projects must be read."""
+    return any(
+        entry.get(field) not in (None, "") for field in ("project_id", "project_name")
+    )
+
+
+def clears_project(entry: dict[str, Any]) -> bool:
+    """Whether an entry asks to remove the project, refusing a contradictory one.
+
+    Clearing is explicit (``clear_project: true``) rather than an empty
+    ``project_id``, so a blank field can never wipe a project by accident.
+    """
+    flag = entry.get("clear_project")
+    if isinstance(flag, str):
+        flag = flag.strip().lower() in {"true", "1", "yes"}
+    if not flag:
+        return False
+    if names_project(entry):
+        raise MoneybirdError(
+            "clear_project cannot be combined with project_id or project_name."
+        )
+    return True
+
+
+def requested_project_id(
+    entry: dict[str, Any],
+    projects: list[dict[str, Any]],
+) -> str | None:
+    """The project an entry asks for: an active project id, ``""`` to clear, or None to keep."""
+    if clears_project(entry):
+        return ""
+    if not names_project(entry):
+        return None
+    return str(
+        resolve_project_reference(
+            projects,
+            project_id=str(entry.get("project_id") or ""),
+            project_name=str(entry.get("project_name") or ""),
+        ).get("id")
+    )

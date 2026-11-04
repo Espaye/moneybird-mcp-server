@@ -47,7 +47,8 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
     ),
     "batch_create_sales_invoices": _spec(
         "duplicate/merge preview for every proposed invoice",
-        "independent batch GET compares every controlled header and line",
+        "independent batch GET compares every controlled header and line, "
+        "including each line's project",
         "canonical complete batch payload",
         "reconcile every returned or uniquely matched invoice as a child outcome",
     ),
@@ -58,8 +59,10 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "reconcile each invoice schedule state independently",
     ),
     "batch_update_sales_invoices": _spec(
-        "complete-batch version or targeted-field preflight",
-        "independent GET compares every patched header and line field",
+        "complete-batch version or targeted-field preflight, and the period lock "
+        "for sent invoices and new invoice dates",
+        "independent GET compares every patched header and line field, including "
+        "a set or cleared project",
         "canonical patches plus source snapshots",
         "reconcile each invoice and retain partial child outcomes",
     ),
@@ -101,7 +104,8 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
     ),
     "create_sales_invoice_draft": _spec(
         "contact scope validation and returned provider id",
-        "independent GET compares every controlled header and line",
+        "independent GET compares every controlled header and line, including "
+        "each line's project",
         "canonical complete invoice payload",
         "match returned id or exact draft signature",
     ),
@@ -113,7 +117,8 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
     ),
     "link_bank_mutation_booking": _spec(
         "mutation occurrence/booking state and exact target occurrence",
-        "independent GET proves one new matching booking id/type and amount-open delta",
+        "independent GET proves one new matching booking id/type and amount-open "
+        "delta, and the requested project on a ledger booking",
         "mutation occurrence, target occurrence, and booking payload",
         "inspect mutation booking delta and adopt/absent/manual",
     ),
@@ -124,8 +129,9 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "inspect current paused state and version history",
     ),
     "reclassify_bank_mutation_bookings": _spec(
-        "all mutation versions, totals, and source bookings",
-        "immediate plus independent batch GET verifies replacement bookings",
+        "all mutation versions, totals, and source bookings with their projects",
+        "immediate plus independent batch GET verifies replacement bookings, "
+        "including the kept, changed or cleared project",
         "canonical child moves plus source versions",
         "retain each child and restoration outcome",
     ),
@@ -146,7 +152,7 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
         "retain each document/journal child result",
     ),
     "reconcile_purchase_invoice": _spec(
-        "document version/updated_at and total",
+        "document version/updated_at, total, and the period lock",
         "independent GET proves total, tax mode, complete line signature, and each "
         "line's resulting project",
         "document occurrence plus exact desired lines",

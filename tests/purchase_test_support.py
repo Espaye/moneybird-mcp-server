@@ -62,6 +62,13 @@ class FakeClient:
         self._docs = {str(document["id"]): document for document in documents}
         self.update_calls = 0
         self.save_processes_new = True
+        self.period_locked_until = ""
+
+    def require_current_administration_access(self):
+        return {
+            "id": self.administration_id,
+            "period_locked_until": self.period_locked_until,
+        }
 
     def get_document(self, kind, document_id):
         return self._docs[str(document_id)]

@@ -30,7 +30,12 @@ from .formatting import (
     render_preview_table,
     year_period_for_date,
 )
-from .projects import fetch_all_projects, resolve_project_reference
+from .projects import (
+    fetch_all_projects,
+    names_project,
+    requested_project_id,
+    resolve_project_reference,
+)
 from .write_contracts import build_patch_precondition
 
 
@@ -132,6 +137,12 @@ def _reference_label(reference: dict[str, Any] | None) -> str:
     if reference is None:
         return "(none)"
     return str(reference.get("name") or reference["id"])
+
+
+def administration_locked_until(client: MoneybirdClient) -> str:
+    """The administration's ``period_locked_until`` date, or ``""`` when unlocked."""
+    administration = client.require_current_administration_access()
+    return str(administration.get("period_locked_until") or "")
 
 
 def assert_document_date_unlocked(
@@ -632,10 +643,16 @@ def build_meter_usage_entries(
     default_unit_price: str = "",
     default_tax_rate_id: str = "",
     default_ledger_account_id: str = "",
+    default_project_id: str = "",
+    default_project_name: str = "",
     skip_meters: list[str] | None = None,
 ) -> dict[str, Any]:
     if not rows:
         raise MoneybirdError("Provide at least one meter row.")
+    if str(default_project_id or "").strip() and str(default_project_name or "").strip():
+        raise MoneybirdError(
+            "Provide default_project_id or default_project_name, not both."
+        )
     if not period_label.strip():
         raise MoneybirdError("period_label is required (for example 2026-K2).")
     if not invoice_date.strip():
@@ -751,6 +768,18 @@ def build_meter_usage_entries(
             row.get("reference")
             or f"STROOM-{period_label.strip()}-{meter.upper()}"
         )
+        # A project is never inherited from the previous meter invoice: it is
+        # set per row, or for the whole run by the default.
+        if names_project(row):
+            line_project = {
+                "project_id": str(row.get("project_id") or "").strip(),
+                "project_name": str(row.get("project_name") or "").strip(),
+            }
+        else:
+            line_project = {
+                "project_id": str(default_project_id or "").strip(),
+                "project_name": str(default_project_name or "").strip(),
+            }
         entry = {
             "contact_id": str(contact["id"]),
             "customer_id": customer_id,
@@ -765,6 +794,7 @@ def build_meter_usage_entries(
                     "tax_rate_id": tax_rate_id,
                     "ledger_account_id": ledger_account_id,
                     "period": row.get("period", ""),
+                    **{key: value for key, value in line_project.items() if value},
                 }
             ],
         }
@@ -780,6 +810,7 @@ def build_meter_usage_entries(
                 "unit_price": unit_price,
                 "tax_rate_id": tax_rate_id,
                 "ledger_account_id": ledger_account_id,
+                **{key: value for key, value in line_project.items() if value},
                 "action": "schedule" if should_schedule else "draft",
                 "merge_intent": action if action in {"merge", "separate"} else "unspecified",
                 "schedule_send_on": row_send_on if should_schedule else "",
@@ -1220,9 +1251,21 @@ def find_potential_invoice_duplicates(
 
 
 
+def entries_name_a_project(entries: list[dict[str, Any]]) -> bool:
+    """Whether any invoice line in these batch entries names a project."""
+    return any(
+        names_project(raw_detail)
+        for entry in entries
+        for raw_detail in entry.get("details") or []
+        if isinstance(raw_detail, dict)
+    )
+
+
 def build_batch_invoice_payload(
     client: MoneybirdClient,
     entry: dict[str, Any],
+    *,
+    projects: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     contact = resolve_contact_reference(
         client,
@@ -1249,10 +1292,26 @@ def build_batch_invoice_payload(
     details_attributes = []
     descriptions: list[str] = []
     preview_rows: list[dict[str, Any]] = []
+    # Reading projects needs the settings scope, so only a line that names a
+    # project triggers the read. A batch passes the list it read once.
+    if projects is None:
+        projects = (
+            fetch_all_projects(client) if entries_name_a_project([entry]) else []
+        )
     for raw_detail in entry.get("details", []):
         description = str(raw_detail.get("description", "")).strip()
         if not description:
             raise MoneybirdError("Each invoice line needs a description.")
+        project: dict[str, Any] | None = None
+        if names_project(raw_detail):
+            try:
+                project = resolve_project_reference(
+                    projects,
+                    project_id=str(raw_detail.get("project_id") or ""),
+                    project_name=str(raw_detail.get("project_name") or ""),
+                )
+            except MoneybirdError as exc:
+                raise MoneybirdError(f"Invoice line '{description}': {exc}") from exc
 
         amount = str(raw_detail.get("amount", "1")).strip()
         price = str(raw_detail.get("price", "")).strip()
@@ -1312,6 +1371,11 @@ def build_batch_invoice_payload(
                 "currency": str(entry.get("currency") or defaults.get("currency") or "EUR"),
             }
         )
+        if project is not None:
+            preview_row["project"] = {
+                "id": str(project.get("id")),
+                "name": project.get("name"),
+            }
         preview_rows.append(preview_row)
         descriptions.append(description)
         details_attributes.append(
@@ -1326,6 +1390,7 @@ def build_batch_invoice_payload(
                     or defaults.get("ledger_account_id"),
                     "product_id": product_id,
                     "period": raw_detail.get("period", ""),
+                    "project_id": str(project.get("id")) if project else "",
                 }
             )
         )
@@ -1592,11 +1657,7 @@ def prepare_reclassification_batch(
     # asks for them.
     projects = (
         fetch_all_projects(client)
-        if any(
-            entry.get(field) not in (None, "")
-            for entry in entries
-            for field in ("project_id", "project_name")
-        )
+        if any(names_project(entry) for entry in entries)
         else []
     )
     project_names = {str(item.get("id")): item.get("name") for item in projects}
@@ -1619,8 +1680,7 @@ def prepare_reclassification_batch(
             document = client.get_document(kind, document_id)
             document_cache[cache_key] = document
             if locked_until is None:
-                administration = client.require_current_administration_access()
-                locked_until = str(administration.get("period_locked_until") or "")
+                locked_until = administration_locked_until(client)
             assert_document_date_unlocked(
                 locked_until,
                 str(document.get("date") or ""),
@@ -1631,14 +1691,13 @@ def prepare_reclassification_batch(
             entry.get(field) not in (None, "")
             for field in ("ledger_account_id", "ledger_account_name")
         )
-        project_requested = any(
-            entry.get(field) not in (None, "")
-            for field in ("project_id", "project_name")
-        )
-        if not ledger_requested and not project_requested:
+        # None keeps the line's project, "" clears it, an id sets it.
+        target_project_id = requested_project_id(entry, projects)
+        if not ledger_requested and target_project_id is None:
             raise MoneybirdError(
                 "Each line update needs a target ledger_account_id or "
-                "ledger_account_name, a project_id or project_name, or both."
+                "ledger_account_name, a project_id or project_name (or "
+                "clear_project), or both."
             )
         target_account: dict[str, Any] | None = None
         if ledger_requested:
@@ -1648,13 +1707,6 @@ def prepare_reclassification_batch(
                 ledger_account_name=str(entry.get("ledger_account_name", "")),
             )
             validate_document_ledger_target(kind, target_account)
-        target_project: dict[str, Any] | None = None
-        if project_requested:
-            target_project = resolve_project_reference(
-                projects,
-                project_id=str(entry.get("project_id", "")),
-                project_name=str(entry.get("project_name", "")),
-            )
         row_order_raw = entry.get("row_order")
         row_order = int(row_order_raw) if row_order_raw not in (None, "") else None
         detail = resolve_document_detail(
@@ -1681,14 +1733,16 @@ def prepare_reclassification_batch(
         detail_patch: dict[str, Any] = {"id": str(detail.get("id"))}
         if target_account is not None:
             detail_patch["ledger_account_id"] = str(target_account.get("id"))
-        if target_project is not None:
-            detail_patch["project_id"] = str(target_project.get("id"))
+        if target_project_id is not None:
+            detail_patch["project_id"] = target_project_id or None
         prepared_update["details_attributes"].append(detail_patch)
 
         before_ledger_id = str(detail.get("ledger_account_id") or "")
         before_project_id = str(detail.get("project_id") or "")
         after_ledger_id = detail_patch.get("ledger_account_id", before_ledger_id)
-        after_project_id = detail_patch.get("project_id", before_project_id)
+        after_project_id = (
+            before_project_id if target_project_id is None else target_project_id
+        )
         ledger_change = {
             "before": _named_reference(ledger_names, before_ledger_id),
             "after": _named_reference(ledger_names, after_ledger_id),
@@ -1744,7 +1798,7 @@ def prepare_reclassification_batch(
             raise MoneybirdError(
                 "A balancing journal needs a target ledger_account_id or ledger_account_name."
             )
-        if target_project is not None:
+        if target_project_id is not None:
             raise MoneybirdError(
                 "A balancing journal cannot be combined with a project change. "
                 "Set the project in a separate batch."
