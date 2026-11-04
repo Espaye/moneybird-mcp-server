@@ -26,7 +26,7 @@ from moneybird_mcp.document_lines import (
     ExplicitDocumentLines,
     booking_line_snapshot,
     details_attributes_for_lines,
-    line_signature,
+    line_project_signatures,
     line_signatures,
     line_total_incl_tax,
     line_view,
@@ -137,7 +137,9 @@ class OneImplementationTests(unittest.TestCase):
     def test_the_reconciler_uses_the_shared_objects(self) -> None:
         self.assertIs(purchase_reconcile.CENT, CENT)
         self.assertIs(purchase_reconcile.line_view, line_view)
-        self.assertIs(purchase_reconcile.line_signature, line_signature)
+        self.assertIs(
+            purchase_reconcile.line_project_signatures, line_project_signatures
+        )
         self.assertIs(purchase_reconcile.line_total_incl_tax, line_total_incl_tax)
         self.assertIs(
             purchase_reconcile.details_attributes_for_lines,

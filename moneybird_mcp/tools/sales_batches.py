@@ -27,6 +27,7 @@ from ..invoicing import (
     list_scheduled_merge_candidates,
     summarize_batch_preview,
 )
+from ..projects import fetch_all_projects, resolve_project_reference
 from ..safety import (
     approval_execution_state,
     classify_failed_write,
@@ -318,7 +319,7 @@ def batch_create_sales_invoices_from_approval(approval_id: ApprovalId) -> dict[s
 def prepare_batch_update_sales_invoices(
     entries: Annotated[
         list[dict[str, Any]],
-        Field(description="One dict per update: an explicit invoice id plus a reference replacement, date changes, and/or detail_updates; or a customer id plus filters to locate one invoice. Unknown keys and empty patches are rejected, and an invalid reference field names the supported replacement key."),
+        Field(description="One dict per update: an explicit invoice id plus a reference replacement, date changes, and/or detail_updates; or a customer id plus filters to locate one invoice. Each detail_updates dict picks a line by row_order and sets description, period, price, amount, tax_rate_id, ledger_account_id and/or project_id (an active project). Unknown keys and empty patches are rejected, and an invalid reference field names the supported replacement key."),
     ],
 ) -> dict[str, Any]:
     """Use this before updating one or more existing sales invoices, either by explicit invoice id or by customer lookup plus filters."""
@@ -351,7 +352,10 @@ def prepare_batch_update_sales_invoices(
         "amount",
         "tax_rate_id",
         "ledger_account_id",
+        "project_id",
     }
+    projects: list[dict[str, Any]] | None = None
+    line_changes: list[dict[str, Any]] = []
 
     for entry_index, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -440,12 +444,41 @@ def prepare_batch_update_sales_invoices(
                     "amount": detail_update.get("amount", ""),
                     "tax_rate_id": detail_update.get("tax_rate_id"),
                     "ledger_account_id": detail_update.get("ledger_account_id"),
+                    "project_id": detail_update.get("project_id"),
                 }
             )
             if not (set(detail_patch) - {"id"}):
                 raise MoneybirdError(
                     f"entries[{entry_index}].detail_updates[{detail_index}] produces "
                     "an empty line patch. Provide at least one supported line field."
+                )
+            if "project_id" in detail_patch:
+                if projects is None:
+                    projects = fetch_all_projects(client)
+                project = resolve_project_reference(
+                    projects,
+                    project_id=str(detail_patch["project_id"]),
+                )
+                detail_patch["project_id"] = str(project["id"])
+            if {"ledger_account_id", "project_id"} & set(detail_patch):
+                line_changes.append(
+                    {
+                        "sales_invoice_id": resolved_invoice_id,
+                        "row_order": row_order,
+                        "description": matching.get("description"),
+                        "ledger_account_id": {
+                            "before": matching.get("ledger_account_id"),
+                            "after": detail_patch.get(
+                                "ledger_account_id", matching.get("ledger_account_id")
+                            ),
+                        },
+                        "project_id": {
+                            "before": matching.get("project_id"),
+                            "after": detail_patch.get(
+                                "project_id", matching.get("project_id")
+                            ),
+                        },
+                    }
                 )
             details_patch.append(detail_patch)
 
@@ -504,6 +537,17 @@ def prepare_batch_update_sales_invoices(
         "preview_table": render_preview_table(preview_rows),
         "item_count": len(prepared_items),
     }
+    if line_changes:
+        project_names = {
+            str(item.get("id")): item.get("name") for item in projects or []
+        }
+        for change in line_changes:
+            for side in ("before", "after"):
+                project_id = change["project_id"][side]
+                change["project_id"][f"{side}_name"] = (
+                    project_names.get(str(project_id)) if project_id else None
+                )
+        approval["preview"]["line_changes"] = line_changes
     approval["payload"] = {"items": prepared_items, "fingerprint": fingerprint}
     return approval
 

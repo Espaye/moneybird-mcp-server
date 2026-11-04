@@ -140,13 +140,15 @@ _CORE_WRITE_SPECS: dict[str, WriteSpec] = {
     ),
     "reclassify_document_lines": _spec(
         "complete-batch document versions or targeted-line snapshots",
-        "independent GET compares every target ledger plus exact journal lines",
+        "independent GET compares every target ledger and project, both document "
+        "totals, plus exact journal lines",
         "canonical updates/journals plus source snapshots",
         "retain each document/journal child result",
     ),
     "reconcile_purchase_invoice": _spec(
         "document version/updated_at and total",
-        "independent GET proves total, tax mode, and complete line signature",
+        "independent GET proves total, tax mode, complete line signature, and each "
+        "line's resulting project",
         "document occurrence plus exact desired lines",
         "inspect the target document id and exact desired signature",
     ),
@@ -445,6 +447,7 @@ SALES_INVOICE_LINE_FIELDS = (
     "tax_rate_id",
     "ledger_account_id",
     "product_id",
+    "project_id",
 )
 SALES_INVOICE_LINE_DECIMALS = ("price", "amount")
 
@@ -652,14 +655,23 @@ def verify_sales_invoice_patch(
 def verify_document_reclassification(
     expected_details: Any,
     record: dict[str, Any],
+    *,
+    expected_totals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    field_mismatches = compare_controlled_fields(
+        expected_totals or {},
+        record,
+        fields=("total_price_excl_tax", "total_price_incl_tax"),
+        decimal_fields=("total_price_excl_tax", "total_price_incl_tax"),
+    )
     line_mismatches = compare_controlled_rows(
         expected_details,
         _actual_rows(record, "details"),
-        fields=("id", "ledger_account_id"),
+        fields=("id", "ledger_account_id", "project_id"),
         match_by_id=True,
     )
     return {
+        "field_mismatches": field_mismatches,
         "line_mismatches": line_mismatches,
-        "fully_verified": not line_mismatches,
+        "fully_verified": not field_mismatches and not line_mismatches,
     }

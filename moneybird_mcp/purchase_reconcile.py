@@ -33,11 +33,14 @@ from .config import MoneybirdError
 from .document_lines import (
     CENT,
     details_attributes_for_lines,
+    dropped_line_projects,
     line_ledger_account_id,
-    line_signature,
+    line_project_id,
+    line_project_signatures,
     line_tax_rate_id,
     line_total_incl_tax,
     line_view,
+    resulting_line_projects,
     validate_explicit_document_lines,
 )
 from .formatting import money_decimal, normalize_document_kind
@@ -74,7 +77,26 @@ def _document_signature(document: dict[str, Any]) -> tuple:
     details = document.get("details") or []
     return (
         bool(document.get("prices_are_incl_tax")),
-        tuple(sorted(line_signature(d) for d in details)),
+        tuple(line_project_signatures(details)),
+    )
+
+
+def _lines_with_projects(
+    lines: list[dict[str, Any]],
+    projects: list[str],
+) -> list[dict[str, str]]:
+    """The all-strings line view with the project each line ends up with."""
+    return [
+        {**view, "project_id": project}
+        for view, project in zip(line_view(lines), projects)
+    ]
+
+
+def _project_drop_warning(dropped: list[str]) -> str:
+    return (
+        f"Project(s) {', '.join(dropped)} are only on lines this rewrite removes, "
+        "so they would be dropped. State project_id on the replacing lines "
+        "(desired_lines) to keep them."
     )
 
 
@@ -319,20 +341,17 @@ def build_reconcile_purchase_invoice(
         prices_are_incl_tax=prices_are_incl_tax,
         tax_rates=tax_rates,
     )
-    details_attributes = details_attributes_for_lines(target.get("details") or [], desired)
+    target_details = target.get("details") or []
+    details_attributes = details_attributes_for_lines(target_details, desired)
+    after_lines = _lines_with_projects(
+        desired, resulting_line_projects(target_details, desired)
+    )
+    dropped_projects = dropped_line_projects(target_details, desired)
 
     # Did anything actually change? Compare the resulting line set + tax flag.
     desired_document = {
         "prices_are_incl_tax": prices_are_incl_tax,
-        "details": [
-            {
-                "ledger_account_id": line["ledger_account_id"],
-                "tax_rate_id": line["tax_rate_id"],
-                "price": line["price"],
-                "description": line["description"],
-            }
-            for line in desired
-        ],
+        "details": after_lines,
     }
     already_consistent = _document_signature(target) == _document_signature(desired_document)
     scaled = factor != 1
@@ -344,20 +363,14 @@ def build_reconcile_purchase_invoice(
             "price": f'{money_decimal(detail.get("price")):.2f}',
             "ledger_account_id": line_ledger_account_id(detail),
             "tax_rate_id": line_tax_rate_id(detail),
+            "project_id": line_project_id(detail),
         }
-        for detail in (target.get("details") or [])
-    ]
-    after_lines = [
-        {
-            "description": line["description"],
-            "price": f'{line["price"]:.2f}',
-            "ledger_account_id": line["ledger_account_id"],
-            "tax_rate_id": line["tax_rate_id"],
-        }
-        for line in desired
+        for detail in target_details
     ]
 
     warnings: list[str] = []
+    if dropped_projects:
+        warnings.append(_project_drop_warning(dropped_projects))
     if scaled:
         warnings.append(
             "Reference and target totals differ, so line prices were scaled "
@@ -382,6 +395,7 @@ def build_reconcile_purchase_invoice(
         "expected_total_before": f"{current_total:.2f}",
         "expected_total_incl_tax": f"{calculated_total:.2f}",
         "expected_lines": line_view(desired),
+        "expected_line_projects": after_lines,
         **_version_snapshot(target),
     }
     preview = {
@@ -405,6 +419,7 @@ def build_reconcile_purchase_invoice(
         "line_count_after": len(after_lines),
         "before_lines": before_lines,
         "after_lines": after_lines,
+        "projects_dropped": dropped_projects,
         "scaled": scaled,
         "already_consistent": already_consistent,
         "warnings": warnings,
@@ -464,10 +479,15 @@ def build_explicit_purchase_invoice_reconcile(
             "Correct the PDF amounts or prices_are_incl_tax before preparing the write."
         )
 
-    details_attributes = details_attributes_for_lines(target.get("details") or [], desired)
+    target_details = target.get("details") or []
+    details_attributes = details_attributes_for_lines(target_details, desired)
+    after_lines = _lines_with_projects(
+        list(desired), resulting_line_projects(target_details, desired)
+    )
+    dropped_projects = dropped_line_projects(target_details, desired)
     desired_document = {
         "prices_are_incl_tax": resolved_incl_flag,
-        "details": desired,
+        "details": after_lines,
     }
     already_consistent = _document_signature(target) == _document_signature(desired_document)
     before_lines = [
@@ -477,14 +497,16 @@ def build_explicit_purchase_invoice_reconcile(
             "price": f'{money_decimal(detail.get("price")):.2f}',
             "ledger_account_id": line_ledger_account_id(detail),
             "tax_rate_id": line_tax_rate_id(detail),
+            "project_id": line_project_id(detail),
         }
-        for detail in (target.get("details") or [])
+        for detail in target_details
     ]
-    after_lines = line_view(desired)
 
     warnings = [
         "Exact line amounts were supplied explicitly; confirm them against the invoice attachment."
     ]
+    if dropped_projects:
+        warnings.append(_project_drop_warning(dropped_projects))
     if bool(target.get("prices_are_incl_tax")) != resolved_incl_flag:
         warnings.append(
             f"prices_are_incl_tax will change from {bool(target.get('prices_are_incl_tax'))} "
@@ -500,7 +522,8 @@ def build_explicit_purchase_invoice_reconcile(
         "prices_are_incl_tax": resolved_incl_flag,
         "expected_total_before": f"{current_total:.2f}",
         "expected_total_incl_tax": f"{current_total:.2f}",
-        "expected_lines": after_lines,
+        "expected_lines": line_view(desired),
+        "expected_line_projects": after_lines,
         **_version_snapshot(target),
     }
     preview = {
@@ -523,6 +546,7 @@ def build_explicit_purchase_invoice_reconcile(
         "line_count_after": len(after_lines),
         "before_lines": before_lines,
         "after_lines": after_lines,
+        "projects_dropped": dropped_projects,
         "already_consistent": already_consistent,
         "warnings": warnings,
     }

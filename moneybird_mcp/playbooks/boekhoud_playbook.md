@@ -287,8 +287,11 @@ Twee technische randvoorwaarden:
    }
    ```
 
-   Optioneel per regel: `tax_rate_id`, `description`. Toon de preview, wacht op akkoord, en
-   rond af met `execute_approved_action`.
+   Optioneel per regel: een project (kostenplaats) met `project_id` of `project_name`; dat
+   moet een actief project zijn. Alleen een project zetten mag ook, zonder grootboek. De
+   preview toont per regel het oude en nieuwe grootboek en project. Btw-tarief en
+   omschrijving wijzigt deze tool niet; gebruik daarvoor `prepare_reconcile_purchase_invoice`.
+   Toon de preview, wacht op akkoord, en rond af met `execute_approved_action`.
 
 ---
 

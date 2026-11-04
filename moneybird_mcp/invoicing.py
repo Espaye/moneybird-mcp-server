@@ -30,6 +30,7 @@ from .formatting import (
     render_preview_table,
     year_period_for_date,
 )
+from .projects import fetch_all_projects, resolve_project_reference
 from .write_contracts import build_patch_precondition
 
 
@@ -119,6 +120,31 @@ def resolve_ledger_account_reference(
             )
         return matches[0]
     raise MoneybirdError("Provide ledger_account_id or ledger_account_name.")
+
+
+def _named_reference(names: dict[str, Any], reference_id: str) -> dict[str, Any] | None:
+    if not reference_id:
+        return None
+    return {"id": reference_id, "name": names.get(reference_id)}
+
+
+def _reference_label(reference: dict[str, Any] | None) -> str:
+    if reference is None:
+        return "(none)"
+    return str(reference.get("name") or reference["id"])
+
+
+def assert_document_date_unlocked(
+    locked_until: str,
+    document_date: str,
+    *,
+    record_label: str,
+) -> None:
+    if locked_until and document_date and document_date <= locked_until:
+        raise MoneybirdError(
+            f"{record_label} is dated {document_date}, inside the period locked "
+            f"through {locked_until}. Unlock the period in Moneybird first."
+        )
 
 
 
@@ -1555,8 +1581,25 @@ def prepare_reclassification_batch(
     preview_rows: list[dict[str, Any]] = []
     journal_previews: list[dict[str, Any]] = []
     journal_payloads: list[dict[str, Any]] = []
+    line_changes: list[dict[str, Any]] = []
     seen_detail_keys: set[tuple[str, str, str]] = set()
     seen_journal_references: set[str] = set()
+    locked_until: str | None = None
+    ledger_names = {
+        str(item.get("id")): item.get("name") for item in client.list_ledger_accounts()
+    }
+    # Reading projects needs the settings scope, so a ledger-only batch never
+    # asks for them.
+    projects = (
+        fetch_all_projects(client)
+        if any(
+            entry.get(field) not in (None, "")
+            for entry in entries
+            for field in ("project_id", "project_name")
+        )
+        else []
+    )
+    project_names = {str(item.get("id")): item.get("name") for item in projects}
 
     for entry in entries:
         kind = normalize_document_kind(
@@ -1575,13 +1618,43 @@ def prepare_reclassification_batch(
         if document is None:
             document = client.get_document(kind, document_id)
             document_cache[cache_key] = document
+            if locked_until is None:
+                administration = client.require_current_administration_access()
+                locked_until = str(administration.get("period_locked_until") or "")
+            assert_document_date_unlocked(
+                locked_until,
+                str(document.get("date") or ""),
+                record_label=f"{kind} document {document_id}",
+            )
 
-        target_account = resolve_ledger_account_reference(
-            client,
-            ledger_account_id=str(entry.get("ledger_account_id", "")),
-            ledger_account_name=str(entry.get("ledger_account_name", "")),
+        ledger_requested = any(
+            entry.get(field) not in (None, "")
+            for field in ("ledger_account_id", "ledger_account_name")
         )
-        validate_document_ledger_target(kind, target_account)
+        project_requested = any(
+            entry.get(field) not in (None, "")
+            for field in ("project_id", "project_name")
+        )
+        if not ledger_requested and not project_requested:
+            raise MoneybirdError(
+                "Each line update needs a target ledger_account_id or "
+                "ledger_account_name, a project_id or project_name, or both."
+            )
+        target_account: dict[str, Any] | None = None
+        if ledger_requested:
+            target_account = resolve_ledger_account_reference(
+                client,
+                ledger_account_id=str(entry.get("ledger_account_id", "")),
+                ledger_account_name=str(entry.get("ledger_account_name", "")),
+            )
+            validate_document_ledger_target(kind, target_account)
+        target_project: dict[str, Any] | None = None
+        if project_requested:
+            target_project = resolve_project_reference(
+                projects,
+                project_id=str(entry.get("project_id", "")),
+                project_name=str(entry.get("project_name", "")),
+            )
         row_order_raw = entry.get("row_order")
         row_order = int(row_order_raw) if row_order_raw not in (None, "") else None
         detail = resolve_document_detail(
@@ -1605,10 +1678,44 @@ def prepare_reclassification_batch(
                 "details_attributes": [],
             },
         )
-        prepared_update["details_attributes"].append(
+        detail_patch: dict[str, Any] = {"id": str(detail.get("id"))}
+        if target_account is not None:
+            detail_patch["ledger_account_id"] = str(target_account.get("id"))
+        if target_project is not None:
+            detail_patch["project_id"] = str(target_project.get("id"))
+        prepared_update["details_attributes"].append(detail_patch)
+
+        before_ledger_id = str(detail.get("ledger_account_id") or "")
+        before_project_id = str(detail.get("project_id") or "")
+        after_ledger_id = detail_patch.get("ledger_account_id", before_ledger_id)
+        after_project_id = detail_patch.get("project_id", before_project_id)
+        ledger_change = {
+            "before": _named_reference(ledger_names, before_ledger_id),
+            "after": _named_reference(ledger_names, after_ledger_id),
+        }
+        project_change = {
+            "before": _named_reference(project_names, before_project_id),
+            "after": _named_reference(project_names, after_project_id),
+        }
+        changes: list[str] = []
+        if after_ledger_id != before_ledger_id:
+            changes.append(
+                f"{_reference_label(ledger_change['before'])} -> "
+                f"{_reference_label(ledger_change['after'])}"
+            )
+        if after_project_id != before_project_id:
+            changes.append(
+                f"project {_reference_label(project_change['before'])} -> "
+                f"{_reference_label(project_change['after'])}"
+            )
+        line_changes.append(
             {
-                "id": str(detail.get("id")),
-                "ledger_account_id": str(target_account.get("id")),
+                "document_kind": kind,
+                "document_id": document_id,
+                "detail_id": str(detail.get("id")),
+                "description": detail.get("description"),
+                "ledger_account": ledger_change,
+                "project": project_change,
             }
         )
 
@@ -1617,12 +1724,13 @@ def prepare_reclassification_batch(
             {
                 "customer_id": str(document.get("reference") or document.get("entry_number") or document_id),
                 "description": (
-                    f"{detail.get('description') or 'document line'} -> {target_account.get('name')}"
+                    f"{detail.get('description') or 'document line'}: "
+                    f"{'; '.join(changes) or 'no change'}"
                 ),
                 "amount_excl_tax": f"{amount_excl_tax:.2f}",
                 "amount_tax": "",
                 "amount_incl_tax": "",
-                "status": "ready",
+                "status": "ready" if changes else "unchanged",
             }
         )
 
@@ -1632,6 +1740,15 @@ def prepare_reclassification_batch(
         )
         if not balancing_requested:
             continue
+        if target_account is None:
+            raise MoneybirdError(
+                "A balancing journal needs a target ledger_account_id or ledger_account_name."
+            )
+        if target_project is not None:
+            raise MoneybirdError(
+                "A balancing journal cannot be combined with a project change. "
+                "Set the project in a separate batch."
+            )
 
         balancing_account = resolve_ledger_account_reference(
             client,
@@ -1729,6 +1846,13 @@ def prepare_reclassification_batch(
             document,
             {"details_attributes": update["details_attributes"]},
         )
+        # A line move never changes what the document costs, so the verifier
+        # holds the totals to the values read here.
+        update["expected_totals"] = {
+            field: str(document.get(field))
+            for field in ("total_price_excl_tax", "total_price_incl_tax")
+            if document.get(field) not in (None, "")
+        }
     payload = {
         "document_updates": document_updates,
         "general_journal_documents": journal_payloads,
@@ -1739,6 +1863,7 @@ def prepare_reclassification_batch(
         "preview": {
             "preview_table": render_preview_table(preview_rows),
             "rows": preview_rows,
+            "line_changes": line_changes,
             "document_count": len(document_updates),
             "line_count": len(entries),
             "general_journal_count": len(journal_payloads),

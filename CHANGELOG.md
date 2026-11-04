@@ -30,6 +30,21 @@ versioning while allowing pre-1.0 breaking changes.
 - **Negative payments on credit documents.** Money returned on a credit purchase
   invoice or receipt is registered as a negative price, plain or as a balance
   settlement.
+- **Projects on invoice and receipt lines** ([#102](https://github.com/Espaye/moneybird-mcp-server/issues/102)).
+  Moneybird books a line on a project (cost centre) next to its ledger account; the
+  write tools can now set it. The project must exist and be active, and naming one
+  needs the `settings` scope.
+  - `prepare_reclassify_document_lines` takes `project_id` or `project_name` per
+    line, with or without a new ledger account. The preview lists the old and new
+    ledger and project of every line, and the verifier checks each line's project.
+    A project change cannot share a line with a balancing journal.
+  - `prepare_batch_update_sales_invoices` accepts `project_id` in `detail_updates`,
+    shows the change in `line_changes` and verifies it.
+  - `prepare_reconcile_purchase_invoice` takes an optional `project_id` per
+    `desired_lines` entry. A reused line keeps its project; the preview shows the
+    project of every line before and after, and `projects_dropped` plus a warning
+    name any project that only removed lines carried. Execution verifies the
+    resulting projects as `verified_line_projects_match`.
 
 ### Changed
 
@@ -49,6 +64,11 @@ versioning while allowing pre-1.0 breaking changes.
   now includes `ledger_account_id`, and the new payment must carry every field the
   request set. Fields the request left empty are no longer compared: Moneybird fills
   in the creditor or debtor ledger account on a plain payment by itself.
+- **Document-line reclassification checks the period lock and the totals.**
+  `prepare_reclassify_document_lines` refuses a document dated inside the locked
+  period before staging, and the verifier now also requires the document's totals
+  excluding and including tax to be unchanged. Approvals staged before this change
+  still verify on their lines alone.
 
 ## 0.8.3 — 2026-09-27
 
