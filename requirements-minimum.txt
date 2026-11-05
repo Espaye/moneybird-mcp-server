@@ -16,4 +16,4 @@ pydantic==2.13.4
 httpx==0.28.1
 uvicorn==0.52.4
 # Security floor: GHSA-gmh7-3g9r-mjh5 and GHSA-jr96-gvgh-j3r4 (xref parsing).
-pypdf==6.21.2
+pypdf==6.21.4
