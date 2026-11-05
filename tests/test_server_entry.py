@@ -352,6 +352,7 @@ class MissingCredentialAnnouncementTests(unittest.TestCase):
 
 class ServerStatusCredentialTests(unittest.TestCase):
     def test_status_reports_missing_credentials_without_resolving_a_client(self) -> None:
+        from moneybird_mcp import __version__
         from moneybird_mcp.tools import core
 
         with (
@@ -369,7 +370,7 @@ class ServerStatusCredentialTests(unittest.TestCase):
             status = core.get_server_status()
 
         get_client.assert_not_called()
-        self.assertEqual(status["version"], "0.8.3")
+        self.assertEqual(status["version"], __version__)
         self.assertEqual(status["capability_mode"], "write_enabled")
         self.assertEqual(
             status["credential_state"],
