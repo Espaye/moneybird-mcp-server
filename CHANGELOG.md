@@ -9,6 +9,10 @@ versioning while allowing pre-1.0 breaking changes.
 
 ### Security
 
+- Require patched FastMCP releases: 3.4.10 or newer, excluding 4.0.x, 4.1.0
+  and 4.1.1. The minimum-dependency lane now tests 3.4.10. This excludes the
+  post-transform component authorization bypass
+  ([GHSA-7xgj-8392-5q4r](https://github.com/PrefectHQ/fastmcp/security/advisories/GHSA-7xgj-8392-5q4r)).
 - Require pypdf 6.21.2 or newer for PDF attachment extraction in the `[pdf]`
   extra, git-clone installs, and minimum-dependency tests. This includes fixes
   for excessive cross-reference parsing work
