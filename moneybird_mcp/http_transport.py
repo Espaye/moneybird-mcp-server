@@ -9,6 +9,7 @@ from __future__ import annotations
 import atexit
 import logging
 import threading
+from typing import Any, Protocol
 
 import httpx
 
@@ -18,6 +19,19 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 _client: httpx.Client | None = None
 _client_lock = threading.Lock()
+
+
+class HTTPClient(Protocol):
+    """What a client passed to ``MoneybirdClient(http_client=...)`` must provide.
+
+    ``MoneybirdClient`` calls ``request(method, url, headers=..., content=...,
+    timeout=...)`` and reads ``status_code``, ``text`` and ``headers`` from the
+    result, as on ``httpx.Client``. A wrapper around the shared client is
+    enough. Attachment downloads don't use it: they follow redirects without
+    the bearer token on a separate path.
+    """
+
+    def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response: ...
 
 
 def get_shared_http_client() -> httpx.Client:

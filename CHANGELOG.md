@@ -5,6 +5,23 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+### Added
+
+- **A supported surface for applications that embed the client.**
+  `moneybird_mcp.embed` exports the client, OAuth, configuration and formatting
+  names a service may use when it calls Moneybird through this package without
+  serving its MCP tools. Importing it loads no tools, so no extension's write
+  executors register in that process. `EMBED_API_VERSION` starts at 1; the name
+  list is pinned by a test.
+- **`MoneybirdClient(http_client=..., retry_attempts=...)`.** A client can send its
+  JSON API requests through an HTTP client the caller provides (for example a
+  wrapper around the shared pool that observes or restricts each request) and use
+  its own retry count, including 0. Without them nothing changes: the shared pool
+  and `DEFAULT_RETRY_ATTEMPTS`, read at request time.
+- **`MoneybirdClient.request()`**, the public form of the internal `_request`: one
+  request confined to the client's administration, with the same retry and
+  ambiguous-write rules.
+
 ## 0.9.0 — 2026-11-05
 
 ### Security
