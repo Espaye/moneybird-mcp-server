@@ -11,7 +11,7 @@ experimental writes. This queue covers public-package improvements and publicati
 |---|---|
 | OAuth logout guidance / revocation follow-up | Documentation now acknowledges Moneybird's [revocation API](https://developer.moneybird.com/authentication/). `auth logout` still only deletes local credentials. Its runtime message and `REVOCATION_SUPPORTED=False` tests encode the old claim. Any automatic revoke-before-delete/failed-revoke lifecycle is a separate behavior change requiring owner direction and deterministic failure/idempotency/privacy tests. Do not flip the flag alone. |
 | Compatibility regressions | Verify `general_document` attachment support and journal_entries/assets monthly report series against current dispatch; add failing-safe regressions before changing behavior. These are review leads, not proven fixes. |
-| Payment follow-up | Current source includes the replacement `/payments` endpoint and balance/credit-settlement changes under **Unreleased**; do not describe them as present in the published 0.8.3 wheel. A release needs the existing release gates and explicit dispatch. |
+| Payment follow-up | Version 0.9.0 includes the replacement `/payments` endpoint and balance/credit-settlement changes; the older 0.8.3 wheel does not include them. Publication requires the existing release gates and explicit dispatch. |
 
 No release, merge or live test is authorized by this queue. For a task, load its relevant
 [architecture boundary](architecture.md), affected implementation and tests. General improvements

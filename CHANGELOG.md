@@ -5,6 +5,8 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+## 0.9.0 — 2026-11-05
+
 ### Security
 
 - Require pypdf 6.21.2 or newer for PDF attachment extraction in the `[pdf]`
