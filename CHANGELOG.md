@@ -5,6 +5,8 @@ versioning while allowing pre-1.0 breaking changes.
 
 ## Unreleased
 
+## 0.10.0 — 2026-11-06
+
 ### Added
 
 - **A supported surface for applications that embed the client.**
