@@ -12,7 +12,7 @@
 # then move it in pyproject.toml, requirements.txt and this file together as
 # one deliberate dependency-contract change.
 fastmcp==3.4.7
-pydantic==2.13.4
+pydantic==2.14.2
 httpx==0.28.1
 uvicorn==0.52.4
 # Security floor: GHSA-gmh7-3g9r-mjh5 and GHSA-jr96-gvgh-j3r4 (xref parsing).
