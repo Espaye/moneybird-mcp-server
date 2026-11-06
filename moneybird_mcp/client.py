@@ -47,7 +47,7 @@ from .formatting import (
     report_period_months,
     symbolic_period_months,
 )
-from .http_transport import get_shared_http_client
+from .http_transport import HTTPClient, get_shared_http_client
 from .safety import record_applied_write
 from .telemetry import (
     current_tool_name,
@@ -665,24 +665,48 @@ def _validated_attachment_redirect(base_url: str, location: str) -> str:
 
 
 class MoneybirdClient:
+    # Class defaults keep instances built without __init__ on the shared pool.
+    _http_client: HTTPClient | None = None
+    _retry_attempts: int | None = None
+
     def __init__(
         self,
         token: str,
         administration_id: str | None,
         *,
         require_administration: bool = True,
+        http_client: HTTPClient | None = None,
+        retry_attempts: int | None = None,
     ) -> None:
+        """Build a client for one token and administration.
+
+        ``http_client`` and ``retry_attempts`` are for embedders. Leaving them
+        unset keeps the local server's behaviour: the process-wide pooled
+        client and ``DEFAULT_RETRY_ATTEMPTS``, both read at request time. An
+        embedder that must observe or restrict every JSON API request passes
+        its own client here instead of replacing module globals, and one that
+        owns its retry policy passes ``retry_attempts=0``.
+        """
         if not token:
             raise MoneybirdError(
                 "MONEYBIRD_ACCESS_TOKEN is missing. Supply it in the parent "
                 "environment or select a file explicitly with --env-file PATH."
             )
+        if retry_attempts is not None and (
+            isinstance(retry_attempts, bool)
+            or not isinstance(retry_attempts, int)
+            or retry_attempts < 0
+        ):
+            raise MoneybirdError("retry_attempts must be a non-negative integer.")
 
         self.token = token
         self.telemetry_tenant_scope = tenant_scope_for_token(token)
         set_current_tenant_scope(self.telemetry_tenant_scope)
         self.base_url = BASE_URL.rstrip("/")
         self.timeout = DEFAULT_TIMEOUT_SECONDS
+        # Set before administration auto-selection, which already sends a request.
+        self._http_client = http_client
+        self._retry_attempts = retry_attempts
         if administration_id:
             self.administration_id = validate_moneybird_id(
                 administration_id,
@@ -753,6 +777,46 @@ class MoneybirdClient:
                 )
         return path
 
+    def _transport(self) -> HTTPClient:
+        if self._http_client is not None:
+            return self._http_client
+        return get_shared_http_client()
+
+    def _retry_limit(self) -> int:
+        if self._retry_attempts is not None:
+            return self._retry_attempts
+        return DEFAULT_RETRY_ATTEMPTS
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        query: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+        *,
+        retry_safe: bool | None = None,
+        operation: str | None = None,
+    ) -> Any:
+        """Send one JSON API request and return the decoded response.
+
+        This is the supported entry point for code outside this package. The
+        path must be absolute and inside this client's administration (only
+        ``/administrations.json`` is exempt); anything else is refused before
+        a request is sent. ``retry_safe`` defaults to true for GET and HEAD
+        only: set it for a read sent as POST, never for a write. A write that
+        fails ambiguously is not retried and raises, so the caller has to
+        reconcile it. ``operation`` replaces the normalized path as the label
+        in metrics, logs and errors.
+        """
+        return self._request(
+            method,
+            path,
+            query,
+            body,
+            retry_safe=retry_safe,
+            operation=operation,
+        )
+
     def _request(
         self,
         method: str,
@@ -790,10 +854,11 @@ class MoneybirdClient:
         if serialized_body is not None:
             headers["Content-Type"] = "application/json"
 
-        for attempt in range(DEFAULT_RETRY_ATTEMPTS + 1):
+        retry_limit = self._retry_limit()
+        for attempt in range(retry_limit + 1):
             attempt_started = time.perf_counter()
             try:
-                response = get_shared_http_client().request(
+                response = self._transport().request(
                     method,
                     url,
                     headers=headers,
@@ -845,7 +910,7 @@ class MoneybirdClient:
                         )
                 if (
                     retry_safe
-                    and attempt < DEFAULT_RETRY_ATTEMPTS
+                    and attempt < retry_limit
                     and is_retryable_http_status(response_status)
                 ):
                     delay = retry_delay_seconds(
@@ -859,7 +924,7 @@ class MoneybirdClient:
                         response_status,
                         delay,
                         attempt + 1,
-                        DEFAULT_RETRY_ATTEMPTS,
+                        retry_limit,
                     )
                     time.sleep(delay)
                     continue
@@ -887,7 +952,7 @@ class MoneybirdClient:
                     tool_name=tool_name,
                     tenant_scope=self.telemetry_tenant_scope,
                 )
-                if retry_safe and attempt < DEFAULT_RETRY_ATTEMPTS:
+                if retry_safe and attempt < retry_limit:
                     delay = retry_delay_seconds(attempt=attempt)
                     logger.warning(
                         "Retrying Moneybird %s %s after network error in %.1fs (attempt %s/%s)",
@@ -895,7 +960,7 @@ class MoneybirdClient:
                         operation,
                         delay,
                         attempt + 1,
-                        DEFAULT_RETRY_ATTEMPTS,
+                        retry_limit,
                     )
                     time.sleep(delay)
                     continue
@@ -1599,7 +1664,8 @@ class MoneybirdClient:
         path = self._confine_api_path(path)
         url = f"{self.base_url}{path}"
         opener = urllib.request.build_opener(_StopRedirects)
-        for attempt in range(DEFAULT_RETRY_ATTEMPTS + 1):
+        retry_limit = self._retry_limit()
+        for attempt in range(retry_limit + 1):
             request = urllib.request.Request(url=url, method=method)
             request.add_header("Authorization", f"Bearer {self.token}")
             try:
@@ -1645,7 +1711,7 @@ class MoneybirdClient:
                         raise MoneybirdError(
                             f"Attachment storage returned HTTP {signed_exc.code}."
                         ) from None
-                if attempt < DEFAULT_RETRY_ATTEMPTS and is_retryable_http_status(exc.code):
+                if attempt < retry_limit and is_retryable_http_status(exc.code):
                     time.sleep(
                         retry_delay_seconds(
                             attempt=attempt,
@@ -1657,7 +1723,7 @@ class MoneybirdClient:
                     f"Moneybird returned HTTP {exc.code} for an attachment request."
                 ) from None
             except urllib.error.URLError:
-                if attempt < DEFAULT_RETRY_ATTEMPTS:
+                if attempt < retry_limit:
                     time.sleep(retry_delay_seconds(attempt=attempt))
                     continue
                 raise MoneybirdError(
