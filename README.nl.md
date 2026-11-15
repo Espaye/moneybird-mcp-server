@@ -12,32 +12,14 @@ Laat een AI-assistent (Claude, ChatGPT, Cursor of een andere MCP-client) je
 > **Bèta 0.10.0.** Onofficieel: niet gemaakt, goedgekeurd of ondersteund door Moneybird B.V.
 > De server start **alleen-lezen**: er verandert niets in Moneybird tenzij je schrijven zelf aanzet.
 
-## Installeren in 3 stappen
+## Installeren
 
-1. Maak een [Moneybird API-token](https://developer.moneybird.com/authentication) en installeer
-   [uv](https://docs.astral.sh/uv/) (vereist Python 3.11 of nieuwer).
-2. Zet dit in de configuratie van je MCP-client:
-
-   ```json
-   {
-     "mcpServers": {
-       "moneybird": {
-         "command": "uvx",
-         "args": ["moneybird-mcp"],
-         "env": { "MONEYBIRD_ACCESS_TOKEN": "your-token-here" }
-       }
-     }
-   }
-   ```
-
+1. Maak een [Moneybird API-token](https://developer.moneybird.com/authentication).
+2. Vraag je coding agent (Claude Code, Codex, Cursor, …):
+   *"Installeer de Moneybird MCP-server `moneybird-mcp` met mijn Moneybird API-token."*
 3. Herstart de client en vraag: *"Toon mijn Moneybird-administraties."*
 
-Kan het token bij meer dan één administratie, stel dan ook `MONEYBIRD_ADMINISTRATION_ID` in.
-Behandel het token als een wachtwoord: plak het nooit in een chat, issue, log of gecommit bestand.
-Registreer de server in Claude Code met `--scope user`, zodat hij in elk project werkt; gebruik
-nooit project-scope, want die schrijft het token in een gedeeld `.mcp.json`.
-
-Meer opties (pip, pdf-ondersteuning, env-bestanden, OAuth, problemen oplossen):
+Handmatig installeren, pdf-ondersteuning, OAuth en problemen oplossen:
 [Aan de slag](docs/getting-started.nl.md).
 
 ## Wat de server kan
@@ -59,8 +41,7 @@ Alle tools: [toolreferentie](docs/tool-reference.md) (Engels).
   `execute_approved_action` voert het uit, waarna het resultaat in Moneybird wordt gecontroleerd.
   De AI kan beide aanroepen, dus laat de bevestigingsvragen van je client aan en lees elk voorstel.
 - **Lokale gegevens blijven op je computer** in `~/.moneybird-mcp`: goedkeuringen, auditlog,
-  zoekindex en OAuth-tokens. Ze zijn niet versleuteld, dus houd de map privé. Verwijderen van het
-  pakket wist de map niet.
+  zoekindex en OAuth-tokens. Ze zijn niet versleuteld, en verwijderen van het pakket wist de map niet.
 - **Netwerkmodus (HTTP) is experimenteel**, bedoeld voor één vertrouwde gebruiker, en vereist
   `MCP_AUTH_TOKEN`.
 
@@ -83,6 +64,11 @@ Details: [inzet en veiligheid](docs/deployment-and-safety.md) (Engels).
 
 ## Voor AI-agents
 
+- **Installeren:** start hem als stdio-server met `uvx moneybird-mcp` (vereist [uv](https://docs.astral.sh/uv/)
+  en Python 3.11+) en geef het token mee als `MONEYBIRD_ACCESS_TOKEN`. Voeg `MONEYBIRD_ADMINISTRATION_ID`
+  toe als het token bij meer dan één administratie kan. In Claude Code:
+  `claude mcp add moneybird --scope user -e MONEYBIRD_ACCESS_TOKEN=<token> -- uvx moneybird-mcp`.
+  Gebruik nooit project-scope: die schrijft het token in een gedeeld `.mcp.json`.
 - **De server gebruiken:** begin met `get_server_status` en `list_administrations`. Roep voor
   hoe-vragen `get_bookkeeping_guide(topic)` aan. Bij schrijven altijd: `prepare_*` → voorstel tonen
   → wachten op een expliciet "ja" van de gebruiker → `execute_approved_action` → de controle melden.
@@ -102,8 +88,8 @@ Details: [inzet en veiligheid](docs/deployment-and-safety.md) (Engels).
 ## Ondersteuning
 
 Een communityproject vóór 1.0: geen gegarandeerde reactietijd, beschikbaarheid of juiste
-boekhouding, en geen belastingadvies. Meld bugs via [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues)
-zonder tokens of klantgegevens; meld kwetsbaarheden privé volgens [SECURITY.md](SECURITY.md).
+boekhouding, en geen belastingadvies. Meld bugs via [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues);
+meld kwetsbaarheden privé volgens [SECURITY.md](SECURITY.md).
 
 ## Licentie
 

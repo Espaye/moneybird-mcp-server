@@ -12,32 +12,14 @@ Let an AI assistant (Claude, ChatGPT, Cursor or any other MCP client) read and h
 > **Beta 0.10.0.** Unofficial: not made, endorsed or supported by Moneybird B.V.
 > It starts **read-only**: nothing in Moneybird changes unless you switch writes on yourself.
 
-## Set up in 3 steps
+## Set up
 
-1. Create a [Moneybird API token](https://developer.moneybird.com/authentication) and install
-   [uv](https://docs.astral.sh/uv/) (needs Python 3.11 or newer).
-2. Add this to your MCP client's configuration:
-
-   ```json
-   {
-     "mcpServers": {
-       "moneybird": {
-         "command": "uvx",
-         "args": ["moneybird-mcp"],
-         "env": { "MONEYBIRD_ACCESS_TOKEN": "your-token-here" }
-       }
-     }
-   }
-   ```
-
+1. Create a [Moneybird API token](https://developer.moneybird.com/authentication).
+2. Ask your coding agent (Claude Code, Codex, Cursor, …):
+   *"Install the Moneybird MCP server `moneybird-mcp` with my Moneybird API token."*
 3. Restart the client and ask: *"List my Moneybird administrations."*
 
-If the token can reach more than one administration, also set `MONEYBIRD_ADMINISTRATION_ID`.
-Treat the token like a password: never paste it into a chat, issue, log or committed file.
-In Claude Code, register the server with `--scope user` so it works in every project; never use
-project scope, which writes the token into a shared `.mcp.json`.
-
-More options (pip, PDF support, env files, OAuth, troubleshooting):
+Installing by hand, PDF support, OAuth and troubleshooting:
 [Getting started](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/getting-started.md).
 
 ## What it can do
@@ -59,7 +41,7 @@ Every tool: [tool reference](https://github.com/Espaye/moneybird-mcp-server/blob
   `execute_approved_action` applies it, after which the result is checked against Moneybird.
   The AI can call both, so keep your client's confirmation prompts on and read every preview.
 - **Local data stays on your machine** in `~/.moneybird-mcp`: approvals, audit log, search index
-  and OAuth tokens. It is not encrypted, so keep the folder private. Uninstalling does not delete it.
+  and OAuth tokens. It is not encrypted, and uninstalling does not delete it.
 - **Network (HTTP) mode is experimental** and meant for one trusted user; it requires
   `MCP_AUTH_TOKEN`.
 
@@ -81,6 +63,11 @@ OAuth with your own registered app is also possible: [OAuth](https://github.com/
 
 ## For AI agents
 
+- **Installing:** run it as a stdio server with `uvx moneybird-mcp` (needs [uv](https://docs.astral.sh/uv/)
+  and Python 3.11+) and pass the token as `MONEYBIRD_ACCESS_TOKEN`. Add `MONEYBIRD_ADMINISTRATION_ID`
+  when the token reaches more than one administration. In Claude Code:
+  `claude mcp add moneybird --scope user -e MONEYBIRD_ACCESS_TOKEN=<token> -- uvx moneybird-mcp`.
+  Never use project scope: it writes the token into a shared `.mcp.json`.
 - **Using the server:** start with `get_server_status` and `list_administrations`. For how-to
   questions call `get_bookkeeping_guide(topic)`. For writes, always: `prepare_*` → show the
   preview → wait for the user's explicit "yes" → `execute_approved_action` → report the verification.
@@ -100,8 +87,8 @@ OAuth with your own registered app is also possible: [OAuth](https://github.com/
 ## Support
 
 A pre-1.0 community project: no guaranteed response time, uptime or bookkeeping correctness,
-and no tax advice. Report bugs in [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues)
-without tokens or customer data; report vulnerabilities privately as described in
+and no tax advice. Report bugs in [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues);
+report vulnerabilities privately as described in
 [SECURITY.md](https://github.com/Espaye/moneybird-mcp-server/blob/main/SECURITY.md).
 
 ## Licence
