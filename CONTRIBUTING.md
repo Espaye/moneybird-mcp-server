@@ -26,11 +26,13 @@ commercial licence go to the repository owner via an issue.
 
 Use Python 3.11 or newer in a fresh virtual environment:
 
-Install the development dependencies needed for the change in an isolated virtual environment.
-Choose [targeted checks](AGENTS.md) by risk: prose uses the offline checker; behavior uses affected
-positive/adversarial tests and Ruff; shared safety/client/lifecycle changes may require the full suite.
-Minimum-dependency checks are required when dependency bounds or used APIs change, and releases
-retain the [full publication gates](docs/releasing.md).
+```bash
+python -m pip install -r requirements.txt pytest ruff
+python -m pytest -q
+```
+
+Pick the checks that match your change from the table in [AGENTS.md](AGENTS.md#checks-to-run).
+Releases keep the [full publication gates](docs/releasing.md).
 
 No real Moneybird credential is needed for the test suite. Keep `.env`, OAuth stores,
 approvals, audit logs, sync indexes, FTS databases, and downloaded attachments out of commits

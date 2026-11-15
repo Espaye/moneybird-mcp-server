@@ -6,199 +6,109 @@
 [![Python](https://img.shields.io/pypi/pyversions/moneybird-mcp.svg)](https://pypi.org/project/moneybird-mcp/)
 [![CI](https://github.com/Espaye/moneybird-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/Espaye/moneybird-mcp-server/actions/workflows/ci.yml)
 
-> **Unofficial community integration.** This project is not developed, endorsed, supported, or audited by Moneybird B.V.
->
-> **Beta 0.10.0.** The supported setup is a local MCP server over stdio. It starts mechanically read-only. Experimental writes require an explicit local opt-in and supervised approval.
+Let an AI assistant (Claude, ChatGPT, Cursor or any other MCP client) read and help with your
+[Moneybird](https://www.moneybird.nl/) bookkeeping.
 
-Use Claude, ChatGPT, Cursor, or another MCP client to search and work with a Moneybird administration. The server can read contacts, invoices, documents, bank mutations, reports, and locally indexed bookkeeping data.
+> **Beta 0.10.0.** Unofficial: not made, endorsed or supported by Moneybird B.V.
+> It starts **read-only**: nothing in Moneybird changes unless you switch writes on yourself.
 
-## Get started
+## Set up in 3 steps
 
-You need Python 3.11 or newer, an MCP client, and a fresh [Moneybird API token](https://developer.moneybird.com/authentication).
+1. Create a [Moneybird API token](https://developer.moneybird.com/authentication) and install
+   [uv](https://docs.astral.sh/uv/) (needs Python 3.11 or newer).
+2. Add this to your MCP client's configuration:
 
-### Recommended: run with `uvx`
+   ```json
+   {
+     "mcpServers": {
+       "moneybird": {
+         "command": "uvx",
+         "args": ["moneybird-mcp"],
+         "env": { "MONEYBIRD_ACCESS_TOKEN": "your-token-here" }
+       }
+     }
+   }
+   ```
 
-Add this server configuration to your MCP client:
+3. Restart the client and ask: *"List my Moneybird administrations."*
 
-```json
-{
-  "mcpServers": {
-    "moneybird": {
-      "command": "uvx",
-      "args": ["moneybird-mcp"],
-      "env": {
-        "MONEYBIRD_ACCESS_TOKEN": "your-token-here",
-        "MONEYBIRD_ADMINISTRATION_ID": "optional"
-      }
-    }
-  }
-}
-```
+If the token can reach more than one administration, also set `MONEYBIRD_ADMINISTRATION_ID`.
+Treat the token like a password: never paste it into a chat, issue, log or committed file.
+In Claude Code, register the server with `--scope user` so it works in every project; never use
+project scope, which writes the token into a shared `.mcp.json`.
 
-Restart the client and ask it to list your Moneybird administrations.
-
-`MONEYBIRD_ADMINISTRATION_ID` is optional when the token can access only one administration. Never paste a real Moneybird token into a chat, issue, log, or committed file.
-
-A personal API token is the simple, supported way to run this locally: it is one credential you already control, with no application registration involved.
-
-### Optional: OAuth with your own registered application
-
-For development, or for self-hosters who want refresh tokens and scoped access, the server can connect through Moneybird's OAuth flow using **an OAuth application you register yourself**:
-
-```bash
-moneybird-mcp auth login --env-file /absolute/path/moneybird-mcp.env
-moneybird-mcp auth status
-moneybird-mcp auth logout
-```
-
-This is not the default public setup, and there is no shared application credential in the package. An OAuth Client Secret authenticates the application rather than the user, so it cannot be shipped inside an installable package — anything distributed to every user is not a secret. Running OAuth locally therefore means bringing your own Client ID and Client Secret.
-
-When both a personal token and an OAuth connection exist, the personal token wins; `moneybird-mcp auth status` says which one is active. Full detail: [Moneybird OAuth](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/oauth.md).
-
-Claude Code registrations are scoped. Its default `local` scope is available only in the current project; use `--scope user` when Moneybird should be available from every project. If `claude mcp list` says connected but a different project shows no tools, check `claude mcp get moneybird` and re-add the configuration at user scope. Do not use project scope for a configuration containing a personal token, because project scope writes a shared `.mcp.json` file.
-
-### Install with `pip`
-
-```bash
-python -m pip install --upgrade moneybird-mcp
-moneybird-mcp
-```
-
-For PDF attachment reading:
-
-```bash
-python -m pip install --upgrade "moneybird-mcp[pdf]"
-```
-
-Package page: [moneybird-mcp on PyPI](https://pypi.org/project/moneybird-mcp/)
-
-On Windows, quit every MCP client that is running `moneybird-mcp` before installing or upgrading with `pip`; Windows cannot replace the locked console executable. If `pip` reports `WinError 32`, keep the client closed and run the install command again to repair the partial installation. The recommended `uvx` setup avoids upgrading that in-use console script.
-
-## Upgrade
-
-With `pip`:
-
-```bash
-python -m pip install --upgrade moneybird-mcp
-```
-
-On Windows, close the MCP client first. If an earlier attempt failed with `WinError 32`, rerun the same command while the client remains closed.
-
-To force `uvx` to refresh its cached package metadata:
-
-```bash
-uvx --refresh-package moneybird-mcp moneybird-mcp
-```
-
-Check the installed command and available options:
-
-```bash
-moneybird-mcp --help
-```
+More options (pip, PDF support, env files, OAuth, troubleshooting):
+[Getting started](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/getting-started.md).
 
 ## What it can do
 
-- Search contacts, sales invoices, purchase invoices, receipts, general journals, and bank mutations.
-- Match unprocessed bank transactions to the open invoices they settle, with the evidence for each candidate, and say so plainly when two candidates fit equally well.
-- Read Moneybird reports, including profit and loss, balance sheet, general ledger, VAT, debtor, and creditor reports.
-- Review purchase invoices, invoice-delivery settings, bank mutations, and bookkeeping inconsistencies.
-- Settle one purchase invoice from an exact group of bank mutations with one preview and approval, including final invoice processing and verification.
-- Audit product data and calculate guarded bulk price changes with exact decimal previews.
-- Read PDF attachments locally when the optional PDF dependency is installed.
-- Build a local search index for faster ranked search.
-- Read the Dutch bookkeeping playbook per topic (VAT, VAT settlement, bank matching, categorisation, consistency) as a tool, not only as an MCP resource.
-- Prepare guarded write previews when writes have been explicitly enabled.
+- Search and read contacts, sales and purchase invoices, receipts, journals and bank transactions.
+- Read reports: profit and loss, balance sheet, general ledger, VAT, debtors and creditors.
+- Match unprocessed bank transactions to the open invoices they pay, with the evidence.
+- Review purchase invoices and find bookkeeping inconsistencies.
+- Audit products and preview bulk price changes.
+- Read PDF attachments (install `moneybird-mcp[pdf]`).
+- Make changes in Moneybird, only after you switch writes on and approve each preview.
 
-The server advertises its full tool catalogue by default: tool schemas live in the client's cached prompt prefix, so listing them is cheap, while discovering them on demand costs an extra model round trip on every task. Clients that cannot take the full list can run `--tool-discovery search` for compact Tool Search. See the [tool reference](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/tool-reference.md) and [Moneybird API coverage](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/moneybird_api_coverage.md).
+Every tool: [tool reference](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/tool-reference.md).
 
-Use `list_supported_workflows` to discover the small set of outcomes that are integrated and tested end to end. The generated [workflow catalogue](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/workflow-catalogue.md) records their risk, mode, version, prerequisites, verification, and limitations. Product tools perform their concrete administration and record preflight themselves.
+## How changes stay safe
 
-## Read-only and write modes
+- **Read-only by default.** Writes need `MONEYBIRD_CAPABILITY_MODE=write_enabled`.
+- **Every change has two steps.** A `prepare_*` tool shows a preview; only
+  `execute_approved_action` applies it, after which the result is checked against Moneybird.
+  The AI can call both, so keep your client's confirmation prompts on and read every preview.
+- **Local data stays on your machine** in `~/.moneybird-mcp`: approvals, audit log, search index
+  and OAuth tokens. It is not encrypted, so keep the folder private. Uninstalling does not delete it.
+- **Network (HTTP) mode is experimental** and meant for one trusted user; it requires
+  `MCP_AUTH_TOKEN`.
 
-The server starts mechanically read-only. This is the default and needs no flag:
+Details: [deployment and safety](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/deployment-and-safety.md).
 
-```text
-MONEYBIRD_CAPABILITY_MODE=read_only
-```
+## Settings
 
-Experimental writes are available only in local or authenticated single-user deployments:
-
-```text
-MONEYBIRD_CAPABILITY_MODE=write_enabled
-```
-
-Writes use durable prepare/execute approvals and action-specific verification. This is safety machinery, not independent proof that a human approved the action. Keep destructive-tool confirmation enabled in the MCP client and review every preview.
-
-## Configuration
-
-The most useful settings are:
-
-| Setting | Default | Purpose |
+| Setting | Default | What it does |
 |---|---|---|
-| `MONEYBIRD_ACCESS_TOKEN` | none | Moneybird personal API token; takes precedence over an OAuth connection |
-| `MONEYBIRD_ADMINISTRATION_ID` | the one chosen at OAuth login, else automatic when unambiguous | Administration to use |
-| `MONEYBIRD_OAUTH_CLIENT_ID` / `_SECRET` | none | Your own registered OAuth application, for `auth login` |
-| `MONEYBIRD_OAUTH_SCOPES` | `full` | Scope profile or explicit list requested at login |
-| `MONEYBIRD_OAUTH_PROFILE` | `default` | Which stored OAuth connection this server uses; `auth login --profile` writes it |
-| `MONEYBIRD_CAPABILITY_MODE` | `read_only` | `read_only` or `write_enabled` |
-| `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` for the installed command | Local approvals, audit, OAuth, and search state |
-| `MCP_TOOL_DISCOVERY` | `full` | Full tool list; use `search` for compact discovery |
-| `MCP_TRANSPORT` | `stdio` | `stdio`, `http`, or legacy `sse` |
+| `MONEYBIRD_ACCESS_TOKEN` | none | Your Moneybird API token |
+| `MONEYBIRD_ADMINISTRATION_ID` | automatic if there is only one | Which administration to use |
+| `MONEYBIRD_CAPABILITY_MODE` | `read_only` | Set `write_enabled` to allow changes |
+| `MONEYBIRD_MCP_DATA_DIR` | `~/.moneybird-mcp` | Where local data is stored |
+| `MCP_TOOL_DISCOVERY` | `full` | `search` shows a small tool set for clients that cannot take the full list |
+| `MCP_TRANSPORT` | `stdio` | `http` for network mode |
 
-The package never discovers `.env` files automatically. Use an MCP-client environment block or an explicitly selected file:
+`.env` files are never loaded automatically; pass one with `moneybird-mcp --env-file /absolute/path`.
+OAuth with your own registered app is also possible: [OAuth](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/oauth.md).
 
-```bash
-moneybird-mcp --env-file /absolute/path/moneybird-mcp.env
-```
+## For AI agents
 
-See [Getting started](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/getting-started.md) for complete setup examples.
-
-## Deployment boundary
-
-| Mode | Intended use | Status |
-|---|---|---|
-| Local stdio | One user on one machine | Supported default |
-| Authenticated HTTP/SSE | One trusted user behind authentication and TLS | Experimental |
-
-Every HTTP/SSE listener requires `MCP_AUTH_TOKEN`, including loopback. Non-loopback listeners are refused unless a trusted TLS proxy is explicitly configured. The network transport is intended for one trusted user and does not provide multi-user identity or tenant isolation.
-
-See [Deployment and safety](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/deployment-and-safety.md), [Security policy](https://github.com/Espaye/moneybird-mcp-server/blob/main/SECURITY.md), and the [threat model](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/threat_model.md).
-
-## Local data
-
-Installed stdio runs store local state in `~/.moneybird-mcp` unless `MONEYBIRD_MCP_DATA_DIR` is set. This can include:
-
-- OAuth access and refresh tokens;
-- the approvals SQLite database;
-- per-administration audit logs;
-- search indexes and caches;
-- privacy-safe local telemetry.
-
-These files are not encrypted by this project. Restrict access to the directory and read [Local data lifecycle](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/data-lifecycle.md) before backing up or deleting it.
+- **Using the server:** start with `get_server_status` and `list_administrations`. For how-to
+  questions call `get_bookkeeping_guide(topic)`. For writes, always: `prepare_*` → show the
+  preview → wait for the user's explicit "yes" → `execute_approved_action` → report the verification.
+- **Changing this repository:** read [AGENTS.md](https://github.com/Espaye/moneybird-mcp-server/blob/main/AGENTS.md) first.
 
 ## Documentation
 
-- [Getting started](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/getting-started.md)
-- [Connecting through Moneybird OAuth](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/oauth.md)
-- [Tool reference](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/tool-reference.md)
-- [Deployment and safety](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/deployment-and-safety.md)
-- [Local data lifecycle](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/data-lifecycle.md)
-- [Security policy](https://github.com/Espaye/moneybird-mcp-server/blob/main/SECURITY.md)
-- [Support](https://github.com/Espaye/moneybird-mcp-server/blob/main/SUPPORT.md)
-- [Contributing](https://github.com/Espaye/moneybird-mcp-server/blob/main/CONTRIBUTING.md)
-- [Changelog](https://github.com/Espaye/moneybird-mcp-server/blob/main/CHANGELOG.md)
-- [Moneybird API coverage](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/moneybird_api_coverage.md)
-- [Release process](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/releasing.md)
-- [Roadmap](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/roadmap.md)
+| I want to… | Read |
+|---|---|
+| Install, upgrade or troubleshoot | [Getting started](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/getting-started.md) |
+| See every tool | [Tool reference](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/tool-reference.md) |
+| Understand writes, network mode and security | [Deployment and safety](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/deployment-and-safety.md), [threat model](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/threat_model.md) |
+| Back up or delete local data | [Local data lifecycle](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/data-lifecycle.md) |
+| Browse all documentation | [Documentation map](https://github.com/Espaye/moneybird-mcp-server/blob/main/docs/README.md) |
+| Contribute | [Contributing](https://github.com/Espaye/moneybird-mcp-server/blob/main/CONTRIBUTING.md), [changelog](https://github.com/Espaye/moneybird-mcp-server/blob/main/CHANGELOG.md) |
 
-## Support and status
+## Support
 
-This is a pre-1.0 community project. There is no guaranteed response time, uptime, data recovery, bookkeeping correctness, or tax advice.
-
-Use [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues) for reproducible bugs and feature requests without secrets or customer data. Report vulnerabilities privately as described in [SECURITY.md](https://github.com/Espaye/moneybird-mcp-server/blob/main/SECURITY.md).
+A pre-1.0 community project: no guaranteed response time, uptime or bookkeeping correctness,
+and no tax advice. Report bugs in [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues)
+without tokens or customer data; report vulnerabilities privately as described in
+[SECURITY.md](https://github.com/Espaye/moneybird-mcp-server/blob/main/SECURITY.md).
 
 ## Licence
 
-This project is **source-available, not OSI-approved open source**. It is distributed under the MIT License with the **Commons Clause License Condition v1.0**.
-
-Personal use, internal organisational use, inspection, and modification are permitted. Selling the software, commercially providing its functionality as a service, or commercially repackaging it requires a separate commercial licence. For commercial licensing, contact the repository owner through [GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues). The complete terms in [LICENSE](https://github.com/Espaye/moneybird-mcp-server/blob/main/LICENSE) govern.
+This project is **source-available, not OSI-approved open source**: the MIT License with the
+**Commons Clause License Condition v1.0**. Personal and internal use, inspection and modification
+are free. Selling it, offering it commercially as a service or repackaging it commercially needs a
+separate commercial licence; for commercial licensing, contact the owner through
+[GitHub Issues](https://github.com/Espaye/moneybird-mcp-server/issues). The full terms in
+[LICENSE](https://github.com/Espaye/moneybird-mcp-server/blob/main/LICENSE) govern.
